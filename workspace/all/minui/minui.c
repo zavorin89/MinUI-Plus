@@ -1657,7 +1657,10 @@ int main (int argc, char *argv[]) {
 				}
 			}
 		
-			if (PAD_justRepeated(BTN_L1) && !PAD_isPressed(BTN_R1) && !PWR_ignoreSettingInput(BTN_L1, show_setting)) { // previous alpha
+			if (total==0) {
+				// nothing to jump between (and no entry to read alpha from)
+			}
+			else if (PAD_justRepeated(BTN_L1) && !PAD_isPressed(BTN_R1) && !PWR_ignoreSettingInput(BTN_L1, show_setting)) { // previous alpha
 				Entry* entry = top->entries->items[selected];
 				int i = entry->alpha-1;
 				if (i>=0) {
