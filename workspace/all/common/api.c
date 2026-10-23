@@ -233,7 +233,10 @@ int GFX_truncateText(TTF_Font* font, const char* in_name, char* out_name, int ma
 	
 	while (text_width>max_width) {
 		int len = strlen(out_name);
-		strcpy(&out_name[len-4], "...\0");
+		if (len<=4) break; // nothing left to trim, avoids writing before out_name
+		int cut = len-4;
+		while (cut>0 && (out_name[cut] & 0xC0)==0x80) cut--; // don't split a multibyte UTF-8 character
+		strcpy(&out_name[cut], "...\0");
 		TTF_SizeUTF8(font, out_name, &text_width, NULL);
 		text_width += padding;
 	}
