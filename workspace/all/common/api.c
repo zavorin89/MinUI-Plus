@@ -84,6 +84,7 @@ static struct PWR_Context {
 	int should_warn;
 
 	int timers[PWR_TIMER_COUNT]; // index into each timer's choices
+	int timers_loaded;
 
 	SDL_Surface* overlay;
 } pwr = {0};
@@ -1494,10 +1495,13 @@ static const struct {
 		{ "1 min", "2 min", "5 min", "10 min", "15 min", "30 min", "60 min", "Never" },
 	},
 };
+static void PWR_loadTimers(void);
 static uint32_t PWR_getTimerMs(int timer) {
+	if (!pwr.timers_loaded) PWR_loadTimers();
 	return pwr_timers[timer].seconds[pwr.timers[timer]] * 1000;
 }
 static void PWR_loadTimers(void) {
+	pwr.timers_loaded = 1;
 	for (int i=0; i<PWR_TIMER_COUNT; i++) pwr.timers[i] = pwr_timers[i].default_index;
 
 	FILE* file = fopen(POWER_PATH, "r");
@@ -1530,9 +1534,11 @@ int PWR_getTimerCount(int timer) {
 	return pwr_timers[timer].count;
 }
 int PWR_getTimer(int timer) {
+	if (!pwr.timers_loaded) PWR_loadTimers();
 	return pwr.timers[timer];
 }
 void PWR_setTimer(int timer, int index) {
+	if (!pwr.timers_loaded) PWR_loadTimers();
 	pwr.timers[timer] = index;
 	PWR_saveTimers();
 }

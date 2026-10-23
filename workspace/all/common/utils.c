@@ -203,3 +203,101 @@ uint64_t getMicroseconds(void) {
 
     return ret;
 }
+///////////////////////////////////////
+
+// play time, one line per game with paths relative to SDCARD_PATH:
+// "<path>\t<seconds>\t<sessions>\t<last played>\t<last session seconds>"
+// (older lines without the last two fields read as 0)
+
+int parsePlayTimeLine(char* line, char** path, PlayTime* out) {
+	normalizeNewline(line);
+	trimTrailingNewlines(line);
+	char* tab = strchr(line, '\t');
+	if (!tab) return 0;
+	*tab = '\0';
+	*path = line;
+	memset(out, 0, sizeof(PlayTime));
+	sscanf(tab+1, "%d\t%d\t%d\t%d", &out->seconds, &out->sessions, &out->last_played, &out->last_session);
+	return 1;
+}
+int getPlayTime(char* path, PlayTime* out) {
+	memset(out, 0, sizeof(PlayTime));
+	FILE* file = fopen(PLAYTIME_PATH, "r");
+	if (!file) return 0;
+	
+	int found = 0;
+	char line[MAX_PATH];
+	while (fgets(line, sizeof(line), file)) {
+		char* line_path;
+		PlayTime line_time;
+		if (!parsePlayTimeLine(line, &line_path, &line_time)) continue;
+		if (!exactMatch(line_path, path)) continue;
+		*out = line_time;
+		found = 1;
+		break;
+	}
+	fclose(file);
+	return found;
+}
+static void writePlayTimeLine(FILE* file, char* path, PlayTime* time) {
+	fprintf(file, "%s\t%i\t%i\t%i\t%i\n", path, time->seconds, time->sessions, time->last_played, time->last_session);
+}
+void setPlayTime(char* path, PlayTime* time) {
+	// written to a temp file then renamed so losing power mid-write can't wipe every game's stats
+	char tmp_path[MAX_PATH];
+	sprintf(tmp_path, "%s.tmp", PLAYTIME_PATH);
+	FILE* out = fopen(tmp_path, "w");
+	if (!out) return;
+	
+	FILE* in = fopen(PLAYTIME_PATH, "r");
+	if (in) {
+		char line[MAX_PATH];
+		while (fgets(line, sizeof(line), in)) {
+			char* line_path;
+			PlayTime line_time;
+			if (!parsePlayTimeLine(line, &line_path, &line_time)) continue;
+			if (exactMatch(line_path, path)) continue; // replaced below
+			writePlayTimeLine(out, line_path, &line_time);
+		}
+		fclose(in);
+	}
+	writePlayTimeLine(out, path, time);
+	fclose(out);
+	
+	rename(tmp_path, PLAYTIME_PATH);
+	sync();
+}
+int getPlayTimeTotals(int* total_seconds, char* top_path, int* top_seconds) {
+	*total_seconds = 0;
+	*top_seconds = 0;
+	top_path[0] = '\0';
+	FILE* file = fopen(PLAYTIME_PATH, "r");
+	if (!file) return 0;
+	
+	int count = 0;
+	char line[MAX_PATH];
+	while (fgets(line, sizeof(line), file)) {
+		char* line_path;
+		PlayTime line_time;
+		if (!parsePlayTimeLine(line, &line_path, &line_time)) continue;
+		*total_seconds += line_time.seconds;
+		if (line_time.seconds>*top_seconds) {
+			*top_seconds = line_time.seconds;
+			strcpy(top_path, line_path);
+		}
+		count += 1;
+	}
+	fclose(file);
+	return count;
+}
+int getAveragePlayTime(PlayTime* time) {
+	return time->sessions>0 ? time->seconds / time->sessions : time->seconds;
+}
+void formatPlayTime(int seconds, char* out) {
+	int minutes = seconds / 60;
+	int hours = minutes / 60;
+	minutes %= 60;
+	if (hours) sprintf(out, "%ih %im", hours, minutes);
+	else if (seconds>=60) sprintf(out, "%im", minutes);
+	else strcpy(out, "<1m");
+}

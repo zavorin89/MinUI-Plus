@@ -3139,8 +3139,66 @@ void Menu_init(void) {
 void Menu_quit(void) {
 	SDL_FreeSurface(menu.overlay);
 }
+///////////////////////////////
+
+// play time: only counts while the game is running (not menus, sleep, or loading)
+static struct {
+	char path[MAX_PATH]; // without SDCARD_PATH, m3u for multi-disc games (matches recents)
+	PlayTime saved; // as of launch, with this launch's session already counted
+	int session_base; // seconds already in this session from an earlier launch within the hour
+	uint32_t session_ms;
+	uint32_t unsaved_ms;
+	uint32_t last_tick;
+} play;
+
+static void Play_init(void) {
+	char* path = game.m3u_path[0] ? game.m3u_path : game.path;
+	strcpy(play.path, path + strlen(SDCARD_PATH));
+	getPlayTime(play.path, &play.saved);
+	
+	// relaunching within an hour of the last play continues that session instead of starting a new one
+	int now = time(NULL);
+	int since = now - play.saved.last_played;
+	int continuing = play.saved.sessions>0 && play.saved.last_played>0 && since>=0 && since<PLAYTIME_SESSION_GAP;
+	if (continuing) play.session_base = play.saved.last_session;
+	else {
+		play.saved.sessions += 1;
+		play.session_base = 0;
+	}
+	
+	play.session_ms = 0;
+	play.unsaved_ms = 0;
+	play.last_tick = SDL_GetTicks();
+}
+static int Play_getTotal(void) {
+	return play.saved.seconds + play.session_ms / 1000;
+}
+static int Play_getSession(void) {
+	return play.session_base + play.session_ms / 1000;
+}
+static void Play_save(void) {
+	if (!play.path[0]) return;
+	PlayTime current = play.saved;
+	current.seconds = Play_getTotal();
+	current.last_played = time(NULL);
+	current.last_session = Play_getSession();
+	setPlayTime(play.path, &current);
+	play.unsaved_ms = 0;
+}
+static void Play_tick(void) { // once per main loop iteration
+	uint32_t now = SDL_GetTicks();
+	uint32_t delta = now - play.last_tick;
+	play.last_tick = now;
+	if (delta<500) { // longer gaps were menus, sleep, or loading
+		play.session_ms += delta;
+		play.unsaved_ms += delta;
+	}
+	if (play.unsaved_ms>=60000) Play_save(); // so a dead battery loses at most a minute
+}
+
 void Menu_beforeSleep(void) {
 	// LOG_info("beforeSleep\n");
+	Play_save();
 	SRAM_write();
 	RTC_write();
 	State_autosave();
@@ -4267,6 +4325,7 @@ static void Menu_loop(void) {
 	
 	SRAM_write();
 	RTC_write();
+	Play_save();
 	PWR_warn(0);
 	if (!HAS_POWER_BUTTON) PWR_enableSleep();
 	PWR_setCPUSpeed(CPU_SPEED_MENU); // set Hz directly
@@ -4558,6 +4617,35 @@ static void Menu_loop(void) {
 					else GFX_blitAsset(ASSET_DOT, NULL, screen, &(SDL_Rect){ox+SCALE1(i*15)+4,oy+SCALE1(2)});
 				}
 			}
+			// play stats use the same spot when there's no slot preview (or disc picker) to show
+			else if (!(menu.total_discs>1 && selected==ITEM_CONT)) {
+				PlayTime current = play.saved;
+				current.seconds = Play_getTotal();
+				char total[32], session[32], sessions[16], average[32];
+				formatPlayTime(current.seconds, total);
+				formatPlayTime(Play_getSession(), session);
+				sprintf(sessions, "%i", current.sessions);
+				formatPlayTime(getAveragePlayTime(&current), average);
+				char* labels[] = { "Play time", "This session", "Sessions", "Average" };
+				char* values[] = { total, session, sessions, average };
+				#define STATS_ROWS 4
+
+				int pw = DEVICE_WIDTH / 2 + SCALE1(WINDOW_RADIUS*2);
+				int ph = SCALE1(PILL_SIZE * STATS_ROWS + BUTTON_PADDING*2);
+				ox = DEVICE_WIDTH - pw - SCALE1(PADDING);
+				oy = (DEVICE_HEIGHT - ph) / 2;
+				GFX_blitRect(ASSET_BLACK_PILL, screen, &(SDL_Rect){ox,oy,pw,ph}); // matches the title pill
+
+				for (int i=0; i<STATS_ROWS; i++) {
+					int ty = oy + SCALE1(BUTTON_PADDING + i * PILL_SIZE + 4);
+					text = TTF_RenderUTF8_Blended(font.large, labels[i], COLOR_DARK_TEXT);
+					SDL_BlitSurface(text, NULL, screen, &(SDL_Rect){ox + SCALE1(BUTTON_PADDING), ty});
+					SDL_FreeSurface(text);
+					text = TTF_RenderUTF8_Blended(font.large, values[i], COLOR_WHITE);
+					SDL_BlitSurface(text, NULL, screen, &(SDL_Rect){ox + pw - SCALE1(BUTTON_PADDING) - text->w, ty});
+					SDL_FreeSurface(text);
+				}
+			}
 	
 			GFX_flip(screen);
 			dirty = 0;
@@ -4599,6 +4687,7 @@ static void Menu_loop(void) {
 	menu.bitmap = NULL;
 	SDL_FreeSurface(backing);
 	PWR_disableAutosleep();
+	play.last_tick = SDL_GetTicks(); // don't count time spent in the menu
 }
 
 // TODO: move to PWR_*?
@@ -4730,7 +4819,8 @@ int main(int argc , char* argv[]) {
 	Core_open(core_path, tag_name);
 	Game_open(rom_path); // nes tries to load gamegenie setting before this returns ffs
 	if (!game.is_open) goto finish;
-	
+	Play_init();
+
 	simple_mode = exists(SIMPLE_MODE_PATH);
 	
 	// restore options
@@ -4797,7 +4887,8 @@ int main(int argc , char* argv[]) {
 			core_rq = (pthread_cond_t)PTHREAD_COND_INITIALIZER;
 			pthread_mutex_unlock(&core_mx);
 		}
-		
+
+		Play_tick();
 		if (show_menu) Menu_loop();
 		
 		if (toggle_thread) {
@@ -4831,7 +4922,8 @@ int main(int argc , char* argv[]) {
 		
 		hdmimon();
 	}
-	
+
+	Play_save();
 	Menu_quit();
 	QuitSettings();
 	

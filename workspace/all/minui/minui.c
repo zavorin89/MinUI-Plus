@@ -129,6 +129,7 @@ typedef struct Entry {
 	int type;
 	int alpha; // index in parent Directory's alphas Array, which points to the index of an Entry in its entries Array :sweat_smile:
 	int favorite;
+	PlayTime play; // only filled in for Most Played
 } Entry;
 
 static Entry* Entry_new(char* path, int type) {
@@ -141,6 +142,7 @@ static Entry* Entry_new(char* path, int type) {
 	self->type = type;
 	self->alpha = 0;
 	self->favorite = 0;
+	memset(&self->play, 0, sizeof(PlayTime));
 	return self;
 }
 static void Entry_free(Entry* self) {
@@ -228,9 +230,20 @@ static void getUniqueName(Entry* entry, char* out_name) {
 	strcpy(tmp, ")");
 }
 
+enum {
+	FAVORITES_SORT_NAME,
+	FAVORITES_SORT_SYSTEM,
+	FAVORITES_SORT_RECENT, // most recently added first
+	FAVORITES_SORT_COUNT,
+};
+static char* favorites_sort_labels[FAVORITES_SORT_COUNT] = { "Sorted A-Z", "Sorted by system", "Recently added first" };
+#define FAVORITES_SORT_PATH SHARED_USERDATA_PATH "/.minui/favorites_sort.txt"
+static int favorites_sort = FAVORITES_SORT_NAME;
+
 static void Directory_index(Directory* self) {
 	int is_collection = prefixMatch(COLLECTIONS_PATH, self->path);
-	int skip_index = exactMatch(FAUX_RECENT_PATH, self->path) || is_collection; // not alphabetized
+	int is_unsorted_favorites = exactMatch(FAUX_FAVORITES_PATH, self->path) && favorites_sort!=FAVORITES_SORT_NAME;
+	int skip_index = exactMatch(FAUX_RECENT_PATH, self->path) || exactMatch(FAUX_MOSTPLAYED_PATH, self->path) || is_collection || is_unsorted_favorites; // not alphabetized
 	
 	Hash* map = NULL;
 	char map_path[256];
@@ -341,6 +354,7 @@ static void Directory_index(Directory* self) {
 static Array* getRoot(void);
 static Array* getRecents(void);
 static Array* getFavorites(void);
+static Array* getMostPlayed(void);
 static void Directory_markFavorites(Directory* self);
 static Array* getCollection(char* path);
 static Array* getDiscs(char* path);
@@ -362,6 +376,9 @@ static Directory* Directory_new(char* path, int selected) {
 	else if (exactMatch(path, FAUX_FAVORITES_PATH)) {
 		self->entries = getFavorites();
 	}
+	else if (exactMatch(path, FAUX_MOSTPLAYED_PATH)) {
+		self->entries = getMostPlayed();
+	}
 	else if (!exactMatch(path, COLLECTIONS_PATH) && prefixMatch(COLLECTIONS_PATH, path) && suffixMatch(".txt", path)) {
 		self->entries = getCollection(path);
 	}
@@ -377,8 +394,12 @@ static Directory* Directory_new(char* path, int selected) {
 	Directory_markFavorites(self);
 	return self;
 }
-static void Directory_reindex(Directory* self) { // after adding or removing entries
+static void Directory_reindex(Directory* self) { // after adding, removing, or re-sorting entries
 	self->alphas->count = 0;
+	for (int i=0; i<self->entries->count; i++) {
+		Entry* entry = self->entries->items[i];
+		entry->alpha = 0;
+	}
 	Directory_index(self);
 
 	// keep the selection in range and on screen
@@ -657,6 +678,24 @@ static int hasCollections(void) {
 
 #define FAVORITE_DOT " \xE2\x80\xA2" // U+2022, the menu font has no star
 
+static void getSystemName(char* path, char* out_name) { // eg. "Game Boy Advance" for anything in "Roms/Game Boy Advance (MGBA)/"
+	char folder[256];
+	strcpy(folder, path + strlen(ROMS_PATH "/"));
+	char* tmp = strchr(folder, '/');
+	if (tmp) tmp[0] = '\0';
+	getDisplayName(folder, out_name);
+}
+static int EntryArray_sortBySystem(const void* a, const void* b) {
+	Entry* item1 = *(Entry**)a;
+	Entry* item2 = *(Entry**)b;
+	char system1[256];
+	char system2[256];
+	getSystemName(item1->path, system1);
+	getSystemName(item2->path, system2);
+	int order = strcasecmp(system1, system2);
+	return order ? order : strcasecmp(item1->name, item2->name);
+}
+
 static void loadFavorites(void) {
 	FILE* file = fopen(FAVORITES_PATH, "r");
 	if (file) {
@@ -685,21 +724,33 @@ static void saveFavorites(void) {
 	RecentArray_save(favorites, FAVORITES_PATH);
 }
 static int hasM3uCached(char* rom_path, char* m3u_path) { // hasM3u() only depends on the parent folder
-	static char last_dir[256] = "";
-	static char last_m3u[256];
-	static int last_has = 0;
+	// several slots because a collated list (eg. GBA + MGBA) alternates between folders
+	#define M3U_CACHE_SIZE 8
+	static struct {
+		char dir[256];
+		char m3u[256];
+		int has;
+	} cache[M3U_CACHE_SIZE];
+	static int next_slot = 0;
 
 	char dir_path[256];
 	strcpy(dir_path, rom_path);
 	char* tmp = strrchr(dir_path, '/');
 	if (tmp) tmp[0] = '\0';
 
-	if (!exactMatch(dir_path, last_dir)) {
-		strcpy(last_dir, dir_path);
-		last_has = hasM3u(rom_path, last_m3u);
+	for (int i=0; i<M3U_CACHE_SIZE; i++) {
+		if (cache[i].dir[0] && exactMatch(cache[i].dir, dir_path)) {
+			strcpy(m3u_path, cache[i].m3u);
+			return cache[i].has;
+		}
 	}
-	strcpy(m3u_path, last_m3u);
-	return last_has;
+
+	int i = next_slot;
+	next_slot = (next_slot + 1) % M3U_CACHE_SIZE;
+	strcpy(cache[i].dir, dir_path);
+	cache[i].has = hasM3u(rom_path, cache[i].m3u);
+	strcpy(m3u_path, cache[i].m3u);
+	return cache[i].has;
 }
 static int getFavoritePath(Entry* entry, char* out_path) {
 	// stores the same path addRecent() would so recents,
@@ -739,7 +790,9 @@ static int hasFavorites(void) {
 }
 static Array* getFavorites(void) {
 	Array* entries = Array_new();
-	for (int i=0; i<favorites->count; i++) {
+	for (int n=0; n<favorites->count; n++) {
+		// favorites.txt is in the order games were added
+		int i = favorites_sort==FAVORITES_SORT_RECENT ? favorites->count-1-n : n;
 		Recent* favorite = favorites->items[i];
 		if (!isFavoriteAvailable(favorite)) continue;
 
@@ -753,7 +806,8 @@ static Array* getFavorites(void) {
 		}
 		Array_push(entries, entry);
 	}
-	EntryArray_sort(entries);
+	if (favorites_sort==FAVORITES_SORT_NAME) EntryArray_sort(entries);
+	else if (favorites_sort==FAVORITES_SORT_SYSTEM) qsort(entries->items, entries->count, sizeof(void*), EntryArray_sortBySystem);
 	return entries;
 }
 static void Directory_markFavorites(Directory* self) {
@@ -803,6 +857,72 @@ static void toggleFavorite(void) {
 	else Directory_markFavorites(top); // also catches other discs of the same game
 
 	updateRootFavorites();
+}
+
+///////////////////////////////////////
+
+#define MOST_PLAYED_COUNT 10
+static char info_top_name[256] = ""; // shown on the info screen's Most played row
+static int most_played_from_info = 0; // B in Most Played returns to the info screen
+
+static void formatShortPlayTime(int seconds, char* out) { // minutes stop mattering past 10 hours and would crowd the hint bar
+	if (seconds>=10*3600) sprintf(out, "%ih", seconds/3600);
+	else if (seconds>=3600) sprintf(out, "%ih%im", seconds/3600, (seconds/60)%60); // no space, same reason
+	else formatPlayTime(seconds, out);
+}
+static int EntryArray_sortByPlayTime(const void* a, const void* b) {
+	Entry* item1 = *(Entry**)a;
+	Entry* item2 = *(Entry**)b;
+	return item2->play.seconds - item1->play.seconds;
+}
+static Array* getMostPlayed(void) {
+	Array* entries = Array_new();
+	FILE* file = fopen(PLAYTIME_PATH, "r");
+	if (!file) return entries;
+	
+	char line[MAX_PATH];
+	while (fgets(line, sizeof(line), file)) {
+		char* path;
+		PlayTime time;
+		if (!parsePlayTimeLine(line, &path, &time) || time.seconds<=0) continue;
+		
+		char sd_path[MAX_PATH];
+		sprintf(sd_path, "%s%s", SDCARD_PATH, path);
+		if (!exists(sd_path)) continue;
+		char emu_name[256];
+		getEmuName(sd_path, emu_name);
+		if (!hasEmu(emu_name)) continue;
+		
+		Entry* entry = Entry_new(sd_path, suffixMatch(".pak", sd_path) ? ENTRY_PAK : ENTRY_ROM);
+		entry->play = time;
+		
+		// use the name it was launched or favorited under (map.txt aliases) when there is one
+		Recent* named = NULL;
+		int i = RecentArray_indexOf(recents, path);
+		if (i!=-1) named = recents->items[i];
+		if (!named || !named->alias) {
+			i = RecentArray_indexOf(favorites, path);
+			if (i!=-1) named = favorites->items[i];
+		}
+		if (named && named->alias) {
+			free(entry->name);
+			entry->name = strdup(named->alias);
+		}
+		Array_push(entries, entry);
+	}
+	fclose(file);
+	
+	qsort(entries->items, entries->count, sizeof(void*), EntryArray_sortByPlayTime);
+	while (entries->count>MOST_PLAYED_COUNT) Entry_free(Array_pop(entries));
+	
+	for (int i=0; i<entries->count; i++) {
+		Entry* entry = entries->items[i];
+		char ranked[256];
+		snprintf(ranked, sizeof(ranked), "%i. %s", i+1, entry->name);
+		free(entry->name);
+		entry->name = strdup(ranked);
+	}
+	return entries;
 }
 
 static int hasRoms(char* dir_name) {
@@ -1381,7 +1501,7 @@ static void Entry_open(Entry* self) {
 	recent_alias = self->name;  // yiiikes
 	if (self->type==ENTRY_ROM) {
 		char *last = NULL;
-		if (prefixMatch(COLLECTIONS_PATH, top->path) || exactMatch(FAUX_FAVORITES_PATH, top->path)) {
+		if (prefixMatch(COLLECTIONS_PATH, top->path) || exactMatch(FAUX_FAVORITES_PATH, top->path) || exactMatch(FAUX_MOSTPLAYED_PATH, top->path)) {
 			char* tmp;
 			char filename[256];
 			
@@ -1419,6 +1539,21 @@ static void loadLast(void) { // call after loading root directory
 
 	char last_path[256];
 	getFile(LAST_PATH, last_path, 256);
+	
+	if (prefixMatch(FAUX_MOSTPLAYED_PATH "/", last_path)) { // not in the root, so reopen it directly
+		openDirectory(FAUX_MOSTPLAYED_PATH, 0);
+		most_played_from_info = 1;
+		char* filename = strrchr(last_path, '/');
+		for (int i=0; i<top->entries->count; i++) {
+			Entry* entry = top->entries->items[i];
+			if (suffixMatch(filename, entry->path)) {
+				top->selected = i; // rankings may have changed after playing
+				break;
+			}
+		}
+		Directory_reindex(top);
+		return;
+	}
 	
 	char full_path[256];
 	strcpy(full_path, last_path);
@@ -1483,6 +1618,8 @@ static void Menu_init(void) {
 	recents = Array_new();
 	favorites = Array_new();
 	loadFavorites();
+	favorites_sort = getInt(FAVORITES_SORT_PATH);
+	if (favorites_sort<0 || favorites_sort>=FAVORITES_SORT_COUNT) favorites_sort = FAVORITES_SORT_NAME;
 
 	openDirectory(SDCARD_PATH, 0);
 	loadLast(); // restore state when available
@@ -1525,6 +1662,43 @@ static SDL_Surface* getThumb(Entry* entry, SDL_Surface* screen) {
 	return thumb;
 }
 
+// a short message centered over the list: the current letter while jumping with L1/R1, or the favorites sort
+#define FLASH_LETTER_MS 600
+#define FLASH_TEXT_MS 1000
+static char flash_text[64];
+static int flash_big = 0;
+static uint32_t flash_until = 0;
+static TTF_Font* flash_font = NULL; // opened on first use
+static void showFlash(char* text, int big) {
+	strcpy(flash_text, text);
+	flash_big = big;
+	flash_until = SDL_GetTicks() + (big ? FLASH_LETTER_MS : FLASH_TEXT_MS);
+}
+static void blitFlash(SDL_Surface* screen) {
+	if (!flash_until) return;
+	if (flash_big && !flash_font) flash_font = TTF_OpenFont(FONT_PATH, SCALE1(FONT_LARGE*3));
+	TTF_Font* f = flash_big && flash_font ? flash_font : font.large;
+	
+	SDL_Surface* text = TTF_RenderUTF8_Blended(f, flash_text, COLOR_WHITE);
+	int pad = SCALE1(flash_big ? PADDING*2 : BUTTON_PADDING*2);
+	int w = text->w + pad*2;
+	int h = text->h + pad*(flash_big ? 2 : 1);
+	if (flash_big && w<h) w = h; // square for single letters
+	SDL_Rect rect = { (screen->w-w)/2, (screen->h-h)/2, w, h };
+	GFX_blitRect(ASSET_DARK_GRAY_PILL, screen, &rect);
+	SDL_BlitSurface(text, NULL, screen, &(SDL_Rect){ rect.x + (w-text->w)/2, rect.y + (h-text->h)/2 });
+	SDL_FreeSurface(text);
+}
+static void showLetter(Entry* entry) {
+	int i = getIndexChar(entry->name);
+	char letter[2] = { i ? 'A'+i-1 : '#', '\0' };
+	showFlash(letter, 1);
+}
+
+// select and start double as volume/brightness modifiers on some devices
+#define CAN_RANDOM (BTN_MOD_VOLUME!=BTN_SELECT && BTN_MOD_BRIGHTNESS!=BTN_SELECT)
+#define CAN_SORT (BTN_MOD_VOLUME!=BTN_START && BTN_MOD_BRIGHTNESS!=BTN_START)
+
 int main (int argc, char *argv[]) {
 	// LOG_info("time from launch to:\n");
 	// unsigned long main_begin = SDL_GetTicks();
@@ -1533,6 +1707,7 @@ int main (int argc, char *argv[]) {
 	if (autoResume()) return 0; // nothing to do
 	
 	simple_mode = exists(SIMPLE_MODE_PATH);
+	srand((unsigned)getMicroseconds());
 
 	LOG_info("MinUI\n");
 	InitSettings();
@@ -1560,7 +1735,9 @@ int main (int argc, char *argv[]) {
 	int dirty = 1;
 	int scrolling = 0;
 	int show_version = 0;
-	int timer_row = 0; // selected power timer on the version screen
+	#define INFO_ROW_MOST_PLAYED 0 // then one row per power timer
+	#define INFO_ROW_COUNT (1 + PWR_TIMER_COUNT)
+	int info_row = 0; // selected row on the version screen
 	int show_setting = 0; // 1=brightness,2=volume
 	int was_online = PLAT_isOnline();
 	
@@ -1586,19 +1763,28 @@ int main (int argc, char *argv[]) {
 				dirty = 1;
 				if (!HAS_POWER_BUTTON && !simple_mode) PWR_disableSleep();
 			}
-			else if (PAD_justRepeated(BTN_UP) && timer_row>0) {
-				timer_row -= 1;
+			else if (PAD_justRepeated(BTN_UP) && info_row>0) {
+				info_row -= 1;
 				dirty = 1;
 			}
-			else if (PAD_justRepeated(BTN_DOWN) && timer_row<PWR_TIMER_COUNT-1) {
-				timer_row += 1;
+			else if (PAD_justRepeated(BTN_DOWN) && info_row<INFO_ROW_COUNT-1) {
+				info_row += 1;
 				dirty = 1;
 			}
-			else if (PAD_justRepeated(BTN_LEFT) || PAD_justRepeated(BTN_RIGHT)) {
+			else if (info_row==INFO_ROW_MOST_PLAYED && PAD_justPressed(BTN_A) && info_top_name[0]) {
+				show_version = 0;
+				if (!HAS_POWER_BUTTON && !simple_mode) PWR_disableSleep();
+				most_played_from_info = 1;
+				openDirectory(FAUX_MOSTPLAYED_PATH, 0);
+				if (top->entries->count>0) readyResume(top->entries->items[top->selected]);
+				dirty = 1;
+			}
+			else if (info_row>INFO_ROW_MOST_PLAYED && (PAD_justRepeated(BTN_LEFT) || PAD_justRepeated(BTN_RIGHT))) {
 				// clamped rather than wrapped so holding left/right can't jump to Never by accident
-				int index = PWR_getTimer(timer_row) + (PAD_justRepeated(BTN_RIGHT) ? 1 : -1);
-				if (index>=0 && index<PWR_getTimerCount(timer_row)) {
-					PWR_setTimer(timer_row, index);
+				int timer = info_row - 1;
+				int index = PWR_getTimer(timer) + (PAD_justRepeated(BTN_RIGHT) ? 1 : -1);
+				if (index>=0 && index<PWR_getTimerCount(timer)) {
+					PWR_setTimer(timer, index);
 					dirty = 1;
 				}
 			}
@@ -1682,6 +1868,7 @@ int main (int argc, char *argv[]) {
 				int i = entry->alpha-1;
 				if (i>=0) {
 					selected = top->alphas->items[i];
+					showLetter(top->entries->items[selected]);
 					if (total>MAIN_ROW_COUNT) {
 						top->start = selected;
 						top->end = top->start + MAIN_ROW_COUNT;
@@ -1695,6 +1882,7 @@ int main (int argc, char *argv[]) {
 				int i = entry->alpha+1;
 				if (i<top->alphas->count) {
 					selected = top->alphas->items[i];
+					showLetter(top->entries->items[selected]);
 					if (total>MAIN_ROW_COUNT) {
 						top->start = selected;
 						top->end = top->start + MAIN_ROW_COUNT;
@@ -1704,6 +1892,16 @@ int main (int argc, char *argv[]) {
 				}
 			}
 	
+			if (CAN_RANDOM && PAD_justPressed(BTN_SELECT) && stack->count>1 && total>1) {
+				int i = rand() % (total-1);
+				selected = i>=selected ? i+1 : i; // never the game you're already on
+				// center it when possible
+				top->start = selected - MAIN_ROW_COUNT/2;
+				if (top->start>total-MAIN_ROW_COUNT) top->start = total-MAIN_ROW_COUNT;
+				if (top->start<0) top->start = 0;
+				top->end = MIN(total, top->start + MAIN_ROW_COUNT);
+			}
+
 			if (selected!=top->selected) {
 				top->selected = selected;
 				dirty = 1;
@@ -1732,11 +1930,34 @@ int main (int argc, char *argv[]) {
 				if (total>0) readyResume(top->entries->items[top->selected]);
 			}
 			else if (PAD_justPressed(BTN_B) && stack->count>1) {
+				int from_most_played = exactMatch(top->path, FAUX_MOSTPLAYED_PATH);
 				closeDirectory();
+				if (from_most_played && most_played_from_info) {
+					most_played_from_info = 0;
+					show_version = 1;
+					if (!HAS_POWER_BUTTON && !simple_mode) PWR_enableSleep();
+				}
 				total = top->entries->count;
 				dirty = 1;
 				// can_resume = 0;
 				if (total>0) readyResume(top->entries->items[top->selected]);
+			}
+			else if (CAN_SORT && total>0 && PAD_justPressed(BTN_START) && exactMatch(top->path, FAUX_FAVORITES_PATH)) {
+				char selected_path[MAX_PATH];
+				strcpy(selected_path, ((Entry*)top->entries->items[top->selected])->path);
+				
+				favorites_sort = (favorites_sort + 1) % FAVORITES_SORT_COUNT;
+				putInt(FAVORITES_SORT_PATH, favorites_sort);
+				
+				EntryArray_free(top->entries);
+				top->entries = getFavorites();
+				int i = EntryArray_indexOf(top->entries, selected_path);
+				top->selected = i>=0 ? i : 0;
+				Directory_reindex(top);
+				
+				showFlash(favorites_sort_labels[favorites_sort], 0);
+				total = top->entries->count;
+				dirty = 1;
 			}
 			else if (total>0 && PAD_justPressed(BTN_Y)) {
 				toggleFavorite();
@@ -1745,6 +1966,11 @@ int main (int argc, char *argv[]) {
 				can_resume = 0;
 				if (total>0) readyResume(top->entries->items[top->selected]);
 			}
+		}
+		
+		if (flash_until && SDL_GetTicks()>=flash_until) {
+			flash_until = 0;
+			dirty = 1;
 		}
 		
 		if (dirty) {
@@ -1780,72 +2006,87 @@ int main (int argc, char *argv[]) {
 					tmp = strchr(release, '\n');
 					tmp[0] = '\0';
 					
+					
+					// minui restarts after every game so reading play time once here stays current
+					char played[32] = "None yet";
+					char top_path[MAX_PATH];
+					int total_seconds, top_seconds;
+					if (getPlayTimeTotals(&total_seconds, top_path, &top_seconds)) {
+						formatPlayTime(total_seconds, played);
+						if (top_path[0]) getDisplayName(top_path, info_top_name);
+					}
+					
 					// TODO: not sure if I want bare PLAT_* calls here
-					char* extra_key = "Model";
-					char* extra_val = PLAT_getModel(); 
-					
-					SDL_Surface* release_txt = TTF_RenderUTF8_Blended(font.large, "Release", COLOR_DARK_TEXT);
-					SDL_Surface* version_txt = TTF_RenderUTF8_Blended(font.large, release, COLOR_WHITE);
-					SDL_Surface* commit_txt = TTF_RenderUTF8_Blended(font.large, "Commit", COLOR_DARK_TEXT);
-					SDL_Surface* hash_txt = TTF_RenderUTF8_Blended(font.large, commit, COLOR_WHITE);
-					
-					SDL_Surface* key_txt = TTF_RenderUTF8_Blended(font.large, extra_key, COLOR_DARK_TEXT);
-					SDL_Surface* val_txt = TTF_RenderUTF8_Blended(font.large, extra_val, COLOR_WHITE);
+					// the commit in version.txt is the stock release's, not this build's, so it's left out
+					char* keys[] = { "Release", "Model", "Play time" };
+					char* values[] = { release, PLAT_getModel(), played };
+					int line_count = 3;
 					
 					int l_width = 0;
-					int r_width = 0;
-					
-					if (release_txt->w>l_width) l_width = release_txt->w;
-					if (commit_txt->w>l_width) l_width = commit_txt->w;
-					if (key_txt->w>l_width) l_width = key_txt->w;
-
-					if (version_txt->w>r_width) r_width = version_txt->w;
-					if (hash_txt->w>r_width) r_width = hash_txt->w;
-					if (val_txt->w>r_width) r_width = val_txt->w;
-					
-					#define VERSION_LINE_HEIGHT 24
+					for (int i=0; i<line_count; i++) {
+						int w;
+						TTF_SizeUTF8(font.large, keys[i], &w, NULL);
+						if (w>l_width) l_width = w;
+					}
 					int x = l_width + SCALE1(8);
+					int max_r_width = screen->w - SCALE1(PADDING*2 + BUTTON_PADDING*2) - x;
+					
+					SDL_Surface* key_txts[4];
+					SDL_Surface* val_txts[4];
+					int r_width = 0;
+					for (int i=0; i<line_count; i++) {
+						char value[256];
+						GFX_truncateText(font.large, values[i], value, max_r_width, 0);
+						key_txts[i] = TTF_RenderUTF8_Blended(font.large, keys[i], COLOR_DARK_TEXT);
+						val_txts[i] = TTF_RenderUTF8_Blended(font.large, value, COLOR_WHITE);
+						if (val_txts[i]->w>r_width) r_width = val_txts[i]->w;
+					}
+					
+					#define VERSION_LINE_HEIGHT 20
 					int w = x + r_width;
-					int h = SCALE1(VERSION_LINE_HEIGHT*3);
+					int h = SCALE1(VERSION_LINE_HEIGHT*line_count);
 					version = SDL_CreateRGBSurface(0,w,h,16,0,0,0,0);
-					
-					SDL_BlitSurface(release_txt, NULL, version, &(SDL_Rect){0, 0});
-					SDL_BlitSurface(version_txt, NULL, version, &(SDL_Rect){x,0});
-					SDL_BlitSurface(commit_txt, NULL, version, &(SDL_Rect){0,SCALE1(VERSION_LINE_HEIGHT)});
-					SDL_BlitSurface(hash_txt, NULL, version, &(SDL_Rect){x,SCALE1(VERSION_LINE_HEIGHT)});
-					
-					SDL_BlitSurface(key_txt, NULL, version, &(SDL_Rect){0,SCALE1(VERSION_LINE_HEIGHT*2)});
-					SDL_BlitSurface(val_txt, NULL, version, &(SDL_Rect){x,SCALE1(VERSION_LINE_HEIGHT*2)});
-					
-					SDL_FreeSurface(release_txt);
-					SDL_FreeSurface(version_txt);
-					SDL_FreeSurface(commit_txt);
-					SDL_FreeSurface(hash_txt);
-					SDL_FreeSurface(key_txt);
-					SDL_FreeSurface(val_txt);
+					for (int i=0; i<line_count; i++) {
+						SDL_BlitSurface(key_txts[i], NULL, version, &(SDL_Rect){0,SCALE1(VERSION_LINE_HEIGHT*i)});
+						SDL_BlitSurface(val_txts[i], NULL, version, &(SDL_Rect){x,SCALE1(VERSION_LINE_HEIGHT*i)});
+						SDL_FreeSurface(key_txts[i]);
+						SDL_FreeSurface(val_txts[i]);
+					}
 				}
-				// power timers sit under the version info, the whole block centered
-				char* timer_names[PWR_TIMER_COUNT] = { "Sleep after", "Power off after" };
+				// most played and the power timers sit under the version info, the whole block centered
 				int rows_w = MAX(version->w, SCALE1(260));
 				int rows_gap = SCALE1(VERSION_LINE_HEIGHT/2);
-				int rows_h = rows_gap + SCALE1(PILL_SIZE) * PWR_TIMER_COUNT;
+				int rows_h = rows_gap + SCALE1(PILL_SIZE) * INFO_ROW_COUNT;
 				int top = SCALE1(PADDING + PILL_SIZE); // below the hardware group
 				int bottom = screen->h - SCALE1(PADDING + PILL_SIZE); // above the button hints
 				int block_y = top + (bottom - top - version->h - rows_h) / 2;
 				int block_x = (screen->w - rows_w) / 2;
 				SDL_BlitSurface(version, NULL, screen, &(SDL_Rect){block_x, block_y});
 
-				for (int i=0; i<PWR_TIMER_COUNT; i++) {
+				for (int i=0; i<INFO_ROW_COUNT; i++) {
 					int y = block_y + version->h + rows_gap + SCALE1(PILL_SIZE) * i;
-					int selected = i==timer_row;
+					int selected = i==info_row;
 					if (selected) {
 						GFX_blitPill(ASSET_WHITE_PILL, screen, &(SDL_Rect){
 							block_x - SCALE1(BUTTON_PADDING), y,
 							rows_w + SCALE1(BUTTON_PADDING*2), SCALE1(PILL_SIZE)
 						});
 					}
-					SDL_Surface* name_txt = TTF_RenderUTF8_Blended(font.large, timer_names[i], selected ? COLOR_BLACK : COLOR_DARK_TEXT);
-					SDL_Surface* value_txt = TTF_RenderUTF8_Blended(font.large, PWR_getTimerLabel(i, PWR_getTimer(i)), selected ? COLOR_BLACK : COLOR_WHITE);
+					char* name;
+					char value[256];
+					if (i==INFO_ROW_MOST_PLAYED) {
+						name = "Most played";
+						int name_w;
+						TTF_SizeUTF8(font.large, name, &name_w, NULL);
+						GFX_truncateText(font.large, info_top_name[0] ? info_top_name : "None yet", value, rows_w - name_w - SCALE1(BUTTON_PADDING*2), 0);
+					}
+					else {
+						char* timer_names[PWR_TIMER_COUNT] = { "Sleep after", "Power off after" };
+						name = timer_names[i-1];
+						strcpy(value, PWR_getTimerLabel(i-1, PWR_getTimer(i-1)));
+					}
+					SDL_Surface* name_txt = TTF_RenderUTF8_Blended(font.large, name, selected ? COLOR_BLACK : COLOR_DARK_TEXT);
+					SDL_Surface* value_txt = TTF_RenderUTF8_Blended(font.large, value, selected ? COLOR_BLACK : COLOR_WHITE);
 					int ty = y + (SCALE1(PILL_SIZE) - name_txt->h) / 2;
 					SDL_BlitSurface(name_txt, NULL, screen, &(SDL_Rect){block_x, ty});
 					SDL_BlitSurface(value_txt, NULL, screen, &(SDL_Rect){block_x + rows_w - value_txt->w, ty});
@@ -1857,7 +2098,8 @@ int main (int argc, char *argv[]) {
 				if (show_setting && !GetHDMI()) GFX_blitHardwareHints(screen, show_setting);
 				else GFX_blitButtonGroup((char*[]){ BTN_SLEEP==BTN_POWER?"POWER":"MENU","SLEEP",  NULL }, 0, screen, 0);
 				
-				GFX_blitButtonGroup((char*[]){ "B","BACK",  NULL }, 0, screen, 1);
+				if (info_row==INFO_ROW_MOST_PLAYED && info_top_name[0]) GFX_blitButtonGroup((char*[]){ "B","BACK", "A","VIEW", NULL }, 1, screen, 1);
+				else GFX_blitButtonGroup((char*[]){ "B","BACK",  NULL }, 0, screen, 1);
 			}
 			else {
 				// list
@@ -1932,11 +2174,21 @@ int main (int argc, char *argv[]) {
 					GFX_blitMessage(font.large, "Empty folder", screen, &(SDL_Rect){0,0,screen->w,screen->h}); //, NULL);
 				}
 			
+				blitFlash(screen);
+				
 				// buttons
 				char fav_path[256];
 				char* fav_button = (total>0 && getFavoritePath(top->entries->items[top->selected], fav_path)) ? "Y" : NULL; // NULL ends the group early
 				if (show_setting && !GetHDMI()) GFX_blitHardwareHints(screen, show_setting);
+				else if (total>0 && exactMatch(top->path, FAUX_MOSTPLAYED_PATH)) { // stats matter more than resume/fav hints here
+					Entry* entry = top->entries->items[top->selected];
+					char total_str[32], average_str[32];
+					formatShortPlayTime(entry->play.seconds, total_str);
+					formatShortPlayTime(getAveragePlayTime(&entry->play), average_str);
+					GFX_blitButtonGroup((char*[]){ total_str,"ALL", average_str,"AVG", NULL }, 0, screen, 0);
+				}
 				else if (can_resume) GFX_blitButtonGroup((char*[]){ "X","RESUME", fav_button,"FAV", NULL }, 0, screen, 0);
+				else if (CAN_SORT && total>0 && exactMatch(top->path, FAUX_FAVORITES_PATH)) GFX_blitButtonGroup((char*[]){ "START","SORT", fav_button,"FAV", NULL }, 0, screen, 0);
 				else GFX_blitButtonGroup((char*[]){
 					BTN_SLEEP==BTN_POWER?"POWER":"MENU",
 					BTN_SLEEP==BTN_POWER||simple_mode?"SLEEP":"INFO",
@@ -1985,6 +2237,7 @@ int main (int argc, char *argv[]) {
 	
 	if (version) SDL_FreeSurface(version);
 	if (thumb) SDL_FreeSurface(thumb);
+	if (flash_font) TTF_CloseFont(flash_font);
 
 	Menu_quit();
 	PWR_quit();

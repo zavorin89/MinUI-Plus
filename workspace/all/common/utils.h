@@ -27,4 +27,18 @@ int getInt(char* path);
 
 uint64_t getMicroseconds(void);
 
+#define PLAYTIME_SESSION_GAP 3600 // launches closer together than this continue the same session
+typedef struct PlayTime {
+	int seconds; // total
+	int sessions;
+	int last_played; // unix time the most recent session was last saved, 0 if unknown
+	int last_session; // seconds played in the most recent session
+} PlayTime;
+int parsePlayTimeLine(char* line, char** path, PlayTime* out); // modifies line, returns 0 if malformed
+int getPlayTime(char* path, PlayTime* out); // path relative to SDCARD_PATH, returns 1 if found
+void setPlayTime(char* path, PlayTime* time);
+int getPlayTimeTotals(int* total_seconds, char* top_path, int* top_seconds); // returns number of games
+int getAveragePlayTime(PlayTime* time); // seconds per session
+void formatPlayTime(int seconds, char* out); // eg. "12h 34m"
+
 #endif

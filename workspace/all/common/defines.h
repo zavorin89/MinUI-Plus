@@ -21,12 +21,14 @@
 #define RECENT_PATH SHARED_USERDATA_PATH "/.minui/recent.txt"
 #define FAVORITES_PATH SHARED_USERDATA_PATH "/.minui/favorites.txt"
 #define POWER_PATH SHARED_USERDATA_PATH "/.minui/power.txt"
+#define PLAYTIME_PATH SHARED_USERDATA_PATH "/.minui/playtime.txt"
 #define SIMPLE_MODE_PATH SHARED_USERDATA_PATH "/enable-simple-mode"
 #define AUTO_RESUME_PATH SHARED_USERDATA_PATH "/.minui/auto_resume.txt"
 #define AUTO_RESUME_SLOT 9
 
 #define FAUX_RECENT_PATH SDCARD_PATH "/Recently Played"
 #define FAUX_FAVORITES_PATH SDCARD_PATH "/Favorites"
+#define FAUX_MOSTPLAYED_PATH SDCARD_PATH "/Most Played" // opened from the info screen, not listed in the root
 #define COLLECTIONS_PATH SDCARD_PATH "/Collections"
 #define BORDERS_PATH SDCARD_PATH "/Borders"
 
