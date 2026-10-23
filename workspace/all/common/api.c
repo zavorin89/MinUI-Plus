@@ -223,6 +223,8 @@ void GFX_sync(void) {
 }
 
 FALLBACK_IMPLEMENTATION int PLAT_supportsOverscan(void) { return 0; }
+FALLBACK_IMPLEMENTATION int PLAT_supportsBorder(void) { return 0; }
+FALLBACK_IMPLEMENTATION void PLAT_setBorder(const char* path) { }
 FALLBACK_IMPLEMENTATION void PLAT_setEffectColor(int next_color) { }
 
 int GFX_truncateText(TTF_Font* font, const char* in_name, char* out_name, int max_width, int padding) {

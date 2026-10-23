@@ -27,6 +27,7 @@
 #define FAUX_RECENT_PATH SDCARD_PATH "/Recently Played"
 #define FAUX_FAVORITES_PATH SDCARD_PATH "/Favorites"
 #define COLLECTIONS_PATH SDCARD_PATH "/Collections"
+#define BORDERS_PATH SDCARD_PATH "/Borders"
 
 #define LAST_PATH "/tmp/last.txt" // transient
 #define CHANGE_DISC_PATH "/tmp/change_disc.txt"

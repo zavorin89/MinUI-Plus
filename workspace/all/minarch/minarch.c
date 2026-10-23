@@ -47,6 +47,7 @@ enum {
 static int screen_scaling = SCALE_ASPECT;
 static int screen_sharpness = SHARPNESS_SOFT;
 static int screen_effect = EFFECT_NONE;
+static int screen_border = 0;
 static int prevent_tearing = 1; // lenient
 static int show_debug = 0;
 static int max_ff_speed = 3; // 4x
@@ -654,6 +655,7 @@ static char* max_ff_labels[] = {
 enum {
 	FE_OPT_SCALING,
 	FE_OPT_EFFECT,
+	FE_OPT_BORDER,
 	FE_OPT_SHARPNESS,
 	FE_OPT_TEARING,
 	FE_OPT_OVERCLOCK,
@@ -858,6 +860,16 @@ static struct Config {
 				.values = effect_labels,
 				.labels = effect_labels,
 			},
+			[FE_OPT_BORDER] = {
+				.key	= "minarch_screen_border",
+				.name	= "Screen Border",
+				.desc	= "Fills the black bars around the game\nwith an image from /Borders.\nThe game itself is never resized.",
+				.default_value = 0,
+				.value = 0,
+				.count = 2,
+				.values = onoff_labels,
+				.labels = onoff_labels,
+			},
 			[FE_OPT_SHARPNESS] = {
 				.key	= "minarch_screen_sharpness",
 				.name	= "Screen Sharpness",
@@ -968,6 +980,16 @@ static void setOverclock(int i) {
 		case 2: PWR_setCPUSpeed(CPU_SPEED_PERFORMANCE); break;
 	}
 }
+static void setBorder(int enabled) {
+	// a per-game border (Borders/<TAG>/<rom>.png) wins over the system one (Borders/<TAG>.png)
+	char path[MAX_PATH] = {0};
+	if (enabled) {
+		sprintf(path, "%s/%s/%s.png", BORDERS_PATH, core.tag, game.name);
+		if (!exists(path)) sprintf(path, "%s/%s.png", BORDERS_PATH, core.tag);
+		if (!exists(path)) path[0] = '\0';
+	}
+	GFX_setBorder(path[0] ? path : NULL);
+}
 static int toggle_thread = 0;
 static void Config_syncFrontend(char* key, int value) {
 	int i = -1;
@@ -985,6 +1007,11 @@ static void Config_syncFrontend(char* key, int value) {
 		GFX_setEffect(value);
 		renderer.dst_p = 0;
 		i = FE_OPT_EFFECT;
+	}
+	else if (exactMatch(key,config.frontend.options[FE_OPT_BORDER].key)) {
+		screen_border = value;
+		setBorder(value);
+		i = FE_OPT_BORDER;
 	}
 	else if (exactMatch(key,config.frontend.options[FE_OPT_SHARPNESS].key)) {
 		screen_sharpness = value;
@@ -1202,6 +1229,9 @@ static void Config_load(void) {
 	scaling_option->count = getScreenScalingCount();
 	if (!GFX_supportsOverscan()) {
 		scaling_labels[3] = NULL;
+	}
+	if (!GFX_supportsBorder()) {
+		config.frontend.options[FE_OPT_BORDER].lock = 1; // hidden
 	}
 	
 	char* system_path = SYSTEM_PATH "/system.cfg";

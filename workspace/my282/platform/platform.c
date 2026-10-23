@@ -167,6 +167,8 @@ static struct VID_Context {
 	SDL_Texture* texture;
 	SDL_Texture* target;
 	SDL_Texture* effect;
+	SDL_Texture* border;
+	char border_path[MAX_PATH];
 
 	SDL_Surface* buffer;
 	SDL_Surface* screen;
@@ -313,6 +315,7 @@ void PLAT_quitVideo(void) {
 	SDL_FreeSurface(vid.buffer);
 	if (vid.target) SDL_DestroyTexture(vid.target);
 	if (vid.effect) SDL_DestroyTexture(vid.effect);
+	if (vid.border) SDL_DestroyTexture(vid.border);
 	SDL_DestroyTexture(vid.texture);
 	SDL_DestroyRenderer(vid.renderer);
 	SDL_DestroyWindow(vid.window);
@@ -530,6 +533,25 @@ scaler_t PLAT_getScaler(GFX_Renderer* renderer) {
 	return scale1x1_c16;
 }
 
+int PLAT_supportsBorder(void) { return 1; }
+void PLAT_setBorder(const char* path) {
+	if (path && exactMatch((char*)path, vid.border_path)) return; // already loaded
+
+	if (vid.border) SDL_DestroyTexture(vid.border);
+	vid.border = NULL;
+	vid.border_path[0] = '\0';
+	if (!path) return;
+
+	SDL_Surface* image = IMG_Load(path);
+	if (!image) {
+		LOG_warn("couldn't load border: %s\n", path);
+		return;
+	}
+	vid.border = SDL_CreateTextureFromSurface(vid.renderer, image);
+	SDL_FreeSurface(image);
+	if (vid.border) strcpy(vid.border_path, path);
+}
+
 void PLAT_blitRenderer(GFX_Renderer* renderer) {
 	vid.blit = renderer;
 	SDL_RenderClear(vid.renderer);
@@ -602,6 +624,13 @@ void PLAT_flip(SDL_Surface* IGNORED, int ignored) {
 	int ox,oy;
 	oy = (device_width-device_height)/2;
 	ox = -oy;
+
+	// border first so the game always draws over it
+	if (vid.border) {
+		if (rotate) SDL_RenderCopyEx(vid.renderer,vid.border,NULL,&(SDL_Rect){ox,oy,device_width,device_height},rotate*90,NULL,SDL_FLIP_NONE);
+		else SDL_RenderCopy(vid.renderer, vid.border, NULL, NULL);
+	}
+
 	if (rotate) SDL_RenderCopyEx(vid.renderer,target,src_rect,&(SDL_Rect){ox+dst_rect->x,oy+dst_rect->y,dst_rect->w,dst_rect->h},rotate*90,NULL,SDL_FLIP_NONE);
 	else SDL_RenderCopy(vid.renderer, target, src_rect, dst_rect);
 	

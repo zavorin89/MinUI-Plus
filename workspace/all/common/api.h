@@ -161,6 +161,8 @@ int GFX_hdmiChanged(void);
 void GFX_startFrame(void);
 void GFX_flip(SDL_Surface* screen);
 #define GFX_supportsOverscan PLAT_supportsOverscan // (void)
+#define GFX_supportsBorder PLAT_supportsBorder // (void)
+#define GFX_setBorder PLAT_setBorder // (const char* path) NULL clears it
 void GFX_sync(void); // call this to maintain 60fps when not calling GFX_flip() this frame
 void GFX_quit(void);
 
@@ -325,6 +327,8 @@ scaler_t PLAT_getScaler(GFX_Renderer* renderer);
 void PLAT_blitRenderer(GFX_Renderer* renderer);
 void PLAT_flip(SDL_Surface* screen, int sync);
 int PLAT_supportsOverscan(void);
+int PLAT_supportsBorder(void);
+void PLAT_setBorder(const char* path); // image drawn behind the game, filling the screen
 
 SDL_Surface* PLAT_initOverlay(void);
 void PLAT_quitOverlay(void);
