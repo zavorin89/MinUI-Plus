@@ -83,6 +83,8 @@ static struct PWR_Context {
 	int charge;
 	int should_warn;
 
+	int timers[PWR_TIMER_COUNT]; // index into each timer's choices
+
 	SDL_Surface* overlay;
 } pwr = {0};
 
@@ -1473,7 +1475,74 @@ static void* PWR_monitorBattery(void *arg) {
 	return NULL;
 }
 
+///////////////////////////////
+
+// seconds, 0 means never
+static const struct {
+	const char* key;
+	int default_index;
+	int count;
+	int seconds[8];
+	const char* labels[8];
+} pwr_timers[PWR_TIMER_COUNT] = {
+	[PWR_TIMER_SLEEP] = { "sleep", 0, 6,
+		{ 30, 60, 120, 300, 600, 0 },
+		{ "30 sec", "1 min", "2 min", "5 min", "10 min", "Never" },
+	},
+	[PWR_TIMER_POWEROFF] = { "poweroff", 1, 8,
+		{ 60, 120, 300, 600, 900, 1800, 3600, 0 },
+		{ "1 min", "2 min", "5 min", "10 min", "15 min", "30 min", "60 min", "Never" },
+	},
+};
+static uint32_t PWR_getTimerMs(int timer) {
+	return pwr_timers[timer].seconds[pwr.timers[timer]] * 1000;
+}
+static void PWR_loadTimers(void) {
+	for (int i=0; i<PWR_TIMER_COUNT; i++) pwr.timers[i] = pwr_timers[i].default_index;
+
+	FILE* file = fopen(POWER_PATH, "r");
+	if (!file) return;
+	char line[64];
+	while (fgets(line, sizeof(line), file)) {
+		char* value = strchr(line, '=');
+		if (!value) continue;
+		*value++ = '\0';
+		int seconds = atoi(value);
+		for (int i=0; i<PWR_TIMER_COUNT; i++) {
+			if (!exactMatch(line, (char*)pwr_timers[i].key)) continue;
+			for (int j=0; j<pwr_timers[i].count; j++) {
+				if (pwr_timers[i].seconds[j]==seconds) pwr.timers[i] = j; // unknown values keep the default
+			}
+		}
+	}
+	fclose(file);
+}
+static void PWR_saveTimers(void) {
+	FILE* file = fopen(POWER_PATH, "w");
+	if (!file) return;
+	for (int i=0; i<PWR_TIMER_COUNT; i++) {
+		fprintf(file, "%s=%i\n", pwr_timers[i].key, pwr_timers[i].seconds[pwr.timers[i]]);
+	}
+	fclose(file);
+	sync();
+}
+int PWR_getTimerCount(int timer) {
+	return pwr_timers[timer].count;
+}
+int PWR_getTimer(int timer) {
+	return pwr.timers[timer];
+}
+void PWR_setTimer(int timer, int index) {
+	pwr.timers[timer] = index;
+	PWR_saveTimers();
+}
+const char* PWR_getTimerLabel(int timer, int index) {
+	return pwr_timers[timer].labels[index];
+}
+
 void PWR_init(void) {
+	PWR_loadTimers();
+
 	pwr.can_sleep = 1;
 	pwr.can_poweroff = 1;
 	pwr.can_autosleep = 1;
@@ -1545,12 +1614,16 @@ void PWR_update(int* _dirty, int* _show_setting, PWR_callback_t before_sleep, PW
 		power_pressed_at = now;
 	}
 	
-	#define SLEEP_DELAY 30000 // 30 seconds
-	if (now-last_input_at>=SLEEP_DELAY && PWR_preventAutosleep()) last_input_at = now;
-	
+	uint32_t sleep_delay = PWR_getTimerMs(PWR_TIMER_SLEEP); // 0 means never
+	int autosleep_due = sleep_delay && now-last_input_at>=sleep_delay;
+	if (autosleep_due && PWR_preventAutosleep()) {
+		last_input_at = now;
+		autosleep_due = 0;
+	}
+
 	if (
 		pwr.requested_sleep || // hardware requested sleep
-		now-last_input_at>=SLEEP_DELAY || // autosleep
+		autosleep_due || // autosleep
 		(pwr.can_sleep && PAD_justReleased(BTN_SLEEP)) // manual sleep
 	) {
 		pwr.requested_sleep = 0;
@@ -1675,13 +1748,14 @@ static void PWR_exitSleep(void) {
 
 static void PWR_waitForWake(void) {
 	uint32_t sleep_ticks = SDL_GetTicks();
+	uint32_t poweroff_delay = PWR_getTimerMs(PWR_TIMER_POWEROFF); // 0 means never
 	while (!PAD_wake()) {
 		if (pwr.requested_wake) {
 			pwr.requested_wake = 0;
 			break;
 		}
 		SDL_Delay(200);
-		if (pwr.can_poweroff && SDL_GetTicks()-sleep_ticks>=120000) { // increased to two minutes
+		if (pwr.can_poweroff && poweroff_delay && SDL_GetTicks()-sleep_ticks>=poweroff_delay) {
 			if (pwr.is_charging) sleep_ticks += 60000; // check again in a minute
 			else PWR_powerOff();
 		}

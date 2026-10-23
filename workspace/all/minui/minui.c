@@ -1560,6 +1560,7 @@ int main (int argc, char *argv[]) {
 	int dirty = 1;
 	int scrolling = 0;
 	int show_version = 0;
+	int timer_row = 0; // selected power timer on the version screen
 	int show_setting = 0; // 1=brightness,2=volume
 	int was_online = PLAT_isOnline();
 	
@@ -1584,6 +1585,22 @@ int main (int argc, char *argv[]) {
 				show_version = 0;
 				dirty = 1;
 				if (!HAS_POWER_BUTTON && !simple_mode) PWR_disableSleep();
+			}
+			else if (PAD_justRepeated(BTN_UP) && timer_row>0) {
+				timer_row -= 1;
+				dirty = 1;
+			}
+			else if (PAD_justRepeated(BTN_DOWN) && timer_row<PWR_TIMER_COUNT-1) {
+				timer_row += 1;
+				dirty = 1;
+			}
+			else if (PAD_justRepeated(BTN_LEFT) || PAD_justRepeated(BTN_RIGHT)) {
+				// clamped rather than wrapped so holding left/right can't jump to Never by accident
+				int index = PWR_getTimer(timer_row) + (PAD_justRepeated(BTN_RIGHT) ? 1 : -1);
+				if (index>=0 && index<PWR_getTimerCount(timer_row)) {
+					PWR_setTimer(timer_row, index);
+					dirty = 1;
+				}
 			}
 		}
 		else {
@@ -1780,7 +1797,7 @@ int main (int argc, char *argv[]) {
 					
 					if (release_txt->w>l_width) l_width = release_txt->w;
 					if (commit_txt->w>l_width) l_width = commit_txt->w;
-					if (key_txt->w>l_width) l_width = commit_txt->w;
+					if (key_txt->w>l_width) l_width = key_txt->w;
 
 					if (version_txt->w>r_width) r_width = version_txt->w;
 					if (hash_txt->w>r_width) r_width = hash_txt->w;
@@ -1789,7 +1806,7 @@ int main (int argc, char *argv[]) {
 					#define VERSION_LINE_HEIGHT 24
 					int x = l_width + SCALE1(8);
 					int w = x + r_width;
-					int h = SCALE1(VERSION_LINE_HEIGHT*4);
+					int h = SCALE1(VERSION_LINE_HEIGHT*3);
 					version = SDL_CreateRGBSurface(0,w,h,16,0,0,0,0);
 					
 					SDL_BlitSurface(release_txt, NULL, version, &(SDL_Rect){0, 0});
@@ -1797,8 +1814,8 @@ int main (int argc, char *argv[]) {
 					SDL_BlitSurface(commit_txt, NULL, version, &(SDL_Rect){0,SCALE1(VERSION_LINE_HEIGHT)});
 					SDL_BlitSurface(hash_txt, NULL, version, &(SDL_Rect){x,SCALE1(VERSION_LINE_HEIGHT)});
 					
-					SDL_BlitSurface(key_txt, NULL, version, &(SDL_Rect){0,SCALE1(VERSION_LINE_HEIGHT*3)});
-					SDL_BlitSurface(val_txt, NULL, version, &(SDL_Rect){x,SCALE1(VERSION_LINE_HEIGHT*3)});
+					SDL_BlitSurface(key_txt, NULL, version, &(SDL_Rect){0,SCALE1(VERSION_LINE_HEIGHT*2)});
+					SDL_BlitSurface(val_txt, NULL, version, &(SDL_Rect){x,SCALE1(VERSION_LINE_HEIGHT*2)});
 					
 					SDL_FreeSurface(release_txt);
 					SDL_FreeSurface(version_txt);
@@ -1807,8 +1824,35 @@ int main (int argc, char *argv[]) {
 					SDL_FreeSurface(key_txt);
 					SDL_FreeSurface(val_txt);
 				}
-				SDL_BlitSurface(version, NULL, screen, &(SDL_Rect){(screen->w-version->w)/2,(screen->h-version->h)/2});
-				
+				// power timers sit under the version info, the whole block centered
+				char* timer_names[PWR_TIMER_COUNT] = { "Sleep after", "Power off after" };
+				int rows_w = MAX(version->w, SCALE1(260));
+				int rows_gap = SCALE1(VERSION_LINE_HEIGHT/2);
+				int rows_h = rows_gap + SCALE1(PILL_SIZE) * PWR_TIMER_COUNT;
+				int top = SCALE1(PADDING + PILL_SIZE); // below the hardware group
+				int bottom = screen->h - SCALE1(PADDING + PILL_SIZE); // above the button hints
+				int block_y = top + (bottom - top - version->h - rows_h) / 2;
+				int block_x = (screen->w - rows_w) / 2;
+				SDL_BlitSurface(version, NULL, screen, &(SDL_Rect){block_x, block_y});
+
+				for (int i=0; i<PWR_TIMER_COUNT; i++) {
+					int y = block_y + version->h + rows_gap + SCALE1(PILL_SIZE) * i;
+					int selected = i==timer_row;
+					if (selected) {
+						GFX_blitPill(ASSET_WHITE_PILL, screen, &(SDL_Rect){
+							block_x - SCALE1(BUTTON_PADDING), y,
+							rows_w + SCALE1(BUTTON_PADDING*2), SCALE1(PILL_SIZE)
+						});
+					}
+					SDL_Surface* name_txt = TTF_RenderUTF8_Blended(font.large, timer_names[i], selected ? COLOR_BLACK : COLOR_DARK_TEXT);
+					SDL_Surface* value_txt = TTF_RenderUTF8_Blended(font.large, PWR_getTimerLabel(i, PWR_getTimer(i)), selected ? COLOR_BLACK : COLOR_WHITE);
+					int ty = y + (SCALE1(PILL_SIZE) - name_txt->h) / 2;
+					SDL_BlitSurface(name_txt, NULL, screen, &(SDL_Rect){block_x, ty});
+					SDL_BlitSurface(value_txt, NULL, screen, &(SDL_Rect){block_x + rows_w - value_txt->w, ty});
+					SDL_FreeSurface(name_txt);
+					SDL_FreeSurface(value_txt);
+				}
+
 				// buttons (duped and trimmed from below)
 				if (show_setting && !GetHDMI()) GFX_blitHardwareHints(screen, show_setting);
 				else GFX_blitButtonGroup((char*[]){ BTN_SLEEP==BTN_POWER?"POWER":"MENU","SLEEP",  NULL }, 0, screen, 0);

@@ -293,6 +293,16 @@ void PWR_disableAutosleep(void);
 void PWR_enableAutosleep(void);
 int PWR_preventAutosleep(void);
 
+enum {
+	PWR_TIMER_SLEEP, // idle time before autosleep (menus only)
+	PWR_TIMER_POWEROFF, // time asleep before powering off
+	PWR_TIMER_COUNT,
+};
+int PWR_getTimerCount(int timer); // number of choices
+int PWR_getTimer(int timer); // index of the current choice
+void PWR_setTimer(int timer, int index); // also saves to POWER_PATH
+const char* PWR_getTimerLabel(int timer, int index);
+
 int PWR_isCharging(void);
 int PWR_getBattery(void);
 
