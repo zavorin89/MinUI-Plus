@@ -45,6 +45,21 @@ static void* Array_pop(Array* self) {
 	if (self->count==0) return NULL;
 	return self->items[--self->count];
 }
+static void Array_insert(Array* self, int index, void* item) {
+	Array_push(self, NULL); // ensures we have enough capacity
+	for (int i=self->count-1; i>index; i--) {
+		self->items[i] = self->items[i-1];
+	}
+	self->items[index] = item;
+}
+static void* Array_remove(Array* self, int index) {
+	void* item = self->items[index];
+	for (int i=index; i<self->count-1; i++) {
+		self->items[i] = self->items[i+1];
+	}
+	self->count -= 1;
+	return item;
+}
 static void Array_reverse(Array* self) {
 	int end = self->count-1;
 	int mid = self->count/2;
@@ -113,6 +128,7 @@ typedef struct Entry {
 	char* unique;
 	int type;
 	int alpha; // index in parent Directory's alphas Array, which points to the index of an Entry in its entries Array :sweat_smile:
+	int favorite;
 } Entry;
 
 static Entry* Entry_new(char* path, int type) {
@@ -124,6 +140,7 @@ static Entry* Entry_new(char* path, int type) {
 	self->unique = NULL;
 	self->type = type;
 	self->alpha = 0;
+	self->favorite = 0;
 	return self;
 }
 static void Entry_free(Entry* self) {
@@ -323,6 +340,8 @@ static void Directory_index(Directory* self) {
 
 static Array* getRoot(void);
 static Array* getRecents(void);
+static Array* getFavorites(void);
+static void Directory_markFavorites(Directory* self);
 static Array* getCollection(char* path);
 static Array* getDiscs(char* path);
 static Array* getEntries(char* path);
@@ -340,6 +359,9 @@ static Directory* Directory_new(char* path, int selected) {
 	else if (exactMatch(path, FAUX_RECENT_PATH)) {
 		self->entries = getRecents();
 	}
+	else if (exactMatch(path, FAUX_FAVORITES_PATH)) {
+		self->entries = getFavorites();
+	}
 	else if (!exactMatch(path, COLLECTIONS_PATH) && prefixMatch(COLLECTIONS_PATH, path) && suffixMatch(".txt", path)) {
 		self->entries = getCollection(path);
 	}
@@ -352,7 +374,22 @@ static Directory* Directory_new(char* path, int selected) {
 	self->alphas = IntArray_new();
 	self->selected = selected;
 	Directory_index(self);
+	Directory_markFavorites(self);
 	return self;
+}
+static void Directory_reindex(Directory* self) { // after adding or removing entries
+	self->alphas->count = 0;
+	Directory_index(self);
+
+	// keep the selection in range and on screen
+	int total = self->entries->count;
+	if (self->selected>=total) self->selected = total>0 ? total-1 : 0;
+	int rows = MIN(total, MAIN_ROW_COUNT);
+	if (self->selected<self->start) self->start = self->selected;
+	if (self->selected>=self->start+rows) self->start = self->selected-rows+1;
+	if (self->start+rows>total) self->start = total-rows;
+	if (self->start<0) self->start = 0;
+	self->end = self->start + rows;
 }
 static void Directory_free(Directory* self) {
 	free(self->path);
@@ -422,6 +459,7 @@ static void RecentArray_free(Array* self) {
 static Directory* top;
 static Array* stack; // DirectoryArray
 static Array* recents; // RecentArray
+static Array* favorites; // RecentArray
 
 static int quit = 0;
 static int can_resume = 0;
@@ -438,11 +476,11 @@ static int restore_end = 0;
 ///////////////////////////////////////
 
 #define MAX_RECENTS 24 // a multiple of all menu rows
-static void saveRecents(void) {
-	FILE* file = fopen(RECENT_PATH, "w");
+static void RecentArray_save(Array* self, char* path) {
+	FILE* file = fopen(path, "w");
 	if (file) {
-		for (int i=0; i<recents->count; i++) {
-			Recent* recent = recents->items[i];
+		for (int i=0; i<self->count; i++) {
+			Recent* recent = self->items[i];
 			fputs(recent->path, file);
 			if (recent->alias) {
 				fputs("\t", file);
@@ -452,6 +490,9 @@ static void saveRecents(void) {
 		}
 		fclose(file);
 	}
+}
+static void saveRecents(void) {
+	RecentArray_save(recents, RECENT_PATH);
 }
 static void addRecent(char* path, char* alias) {
 	path += strlen(SDCARD_PATH); // makes paths platform agnostic
@@ -611,6 +652,159 @@ static int hasCollections(void) {
 	closedir(dh);
 	return has;
 }
+
+///////////////////////////////////////
+
+#define FAVORITE_DOT " \xE2\x80\xA2" // U+2022, the menu font has no star
+
+static void loadFavorites(void) {
+	FILE* file = fopen(FAVORITES_PATH, "r");
+	if (file) {
+		char line[256];
+		while (fgets(line,256,file)!=NULL) {
+			normalizeNewline(line);
+			trimTrailingNewlines(line);
+			if (strlen(line)==0) continue; // skip empty lines
+
+			char* path = line;
+			char* alias = NULL;
+			char* tmp = strchr(line,'\t');
+			if (tmp) {
+				tmp[0] = '\0';
+				alias = tmp+1;
+			}
+
+			// NOTE: missing roms are kept (but hidden) so swapping cards doesn't lose them
+			if (RecentArray_indexOf(favorites, path)!=-1) continue;
+			Array_push(favorites, Recent_new(path, alias));
+		}
+		fclose(file);
+	}
+}
+static void saveFavorites(void) {
+	RecentArray_save(favorites, FAVORITES_PATH);
+}
+static int hasM3uCached(char* rom_path, char* m3u_path) { // hasM3u() only depends on the parent folder
+	static char last_dir[256] = "";
+	static char last_m3u[256];
+	static int last_has = 0;
+
+	char dir_path[256];
+	strcpy(dir_path, rom_path);
+	char* tmp = strrchr(dir_path, '/');
+	if (tmp) tmp[0] = '\0';
+
+	if (!exactMatch(dir_path, last_dir)) {
+		strcpy(last_dir, dir_path);
+		last_has = hasM3u(rom_path, last_m3u);
+	}
+	strcpy(m3u_path, last_m3u);
+	return last_has;
+}
+static int getFavoritePath(Entry* entry, char* out_path) {
+	// stores the same path addRecent() would so recents,
+	// resume states, and thumbnails all line up
+	if (!prefixMatch(ROMS_PATH "/", entry->path)) return 0;
+
+	char path[256];
+	if (entry->type==ENTRY_DIR) {
+		// only folders that launch a game directly
+		if (!hasCue(entry->path, path)) {
+			char* tmp = strrchr(path, '.') + 1; // extension
+			strcpy(tmp, "m3u"); // replace with m3u
+			if (!exists(path)) return 0;
+		}
+	}
+	else strcpy(path, entry->path);
+
+	if (entry->type!=ENTRY_PAK) {
+		char m3u_path[256];
+		if (hasM3uCached(path, m3u_path)) strcpy(path, m3u_path);
+	}
+
+	strcpy(out_path, path + strlen(SDCARD_PATH)); // makes paths platform agnostic
+	return 1;
+}
+static int isFavoriteAvailable(Recent* favorite) {
+	if (!favorite->available) return 0;
+	char sd_path[256];
+	sprintf(sd_path, "%s%s", SDCARD_PATH, favorite->path);
+	return exists(sd_path);
+}
+static int hasFavorites(void) {
+	for (int i=0; i<favorites->count; i++) {
+		if (isFavoriteAvailable(favorites->items[i])) return 1;
+	}
+	return 0;
+}
+static Array* getFavorites(void) {
+	Array* entries = Array_new();
+	for (int i=0; i<favorites->count; i++) {
+		Recent* favorite = favorites->items[i];
+		if (!isFavoriteAvailable(favorite)) continue;
+
+		char sd_path[256];
+		sprintf(sd_path, "%s%s", SDCARD_PATH, favorite->path);
+		int type = suffixMatch(".pak", sd_path) ? ENTRY_PAK : ENTRY_ROM;
+		Entry* entry = Entry_new(sd_path, type);
+		if (favorite->alias) {
+			free(entry->name);
+			entry->name = strdup(favorite->alias);
+		}
+		Array_push(entries, entry);
+	}
+	EntryArray_sort(entries);
+	return entries;
+}
+static void Directory_markFavorites(Directory* self) {
+	if (exactMatch(self->path, SDCARD_PATH) || exactMatch(self->path, FAUX_FAVORITES_PATH)) return;
+
+	char path[256];
+	for (int i=0; i<self->entries->count; i++) {
+		Entry* entry = self->entries->items[i];
+		entry->favorite = favorites->count && getFavoritePath(entry, path) && RecentArray_indexOf(favorites, path)!=-1;
+	}
+}
+static void updateRootFavorites(void) { // show or hide Favorites in the root without rebuilding it
+	Directory* root = stack->items[0];
+	int i = EntryArray_indexOf(root->entries, FAUX_FAVORITES_PATH);
+	int has = hasFavorites();
+	if (has && i==-1) {
+		int at = EntryArray_indexOf(root->entries, FAUX_RECENT_PATH) + 1; // after Recently Played (or first)
+		Array_insert(root->entries, at, Entry_new(FAUX_FAVORITES_PATH, ENTRY_DIR));
+		if (root->selected>=at) root->selected += 1;
+	}
+	else if (!has && i!=-1) {
+		Entry_free(Array_remove(root->entries, i));
+		if (root->selected>i) root->selected -= 1;
+	}
+	else return;
+	Directory_reindex(root);
+}
+static void toggleFavorite(void) {
+	Entry* entry = top->entries->items[top->selected];
+
+	char path[256];
+	if (!getFavoritePath(entry, path)) return;
+
+	int i = RecentArray_indexOf(favorites, path);
+	if (i==-1) {
+		// disc names ("Disc 1") make bad aliases, fall back to the m3u name
+		char* alias = suffixMatch(".m3u", top->path) ? NULL : entry->name;
+		Array_push(favorites, Recent_new(path, alias));
+	}
+	else Recent_free(Array_remove(favorites, i));
+	saveFavorites();
+
+	if (exactMatch(top->path, FAUX_FAVORITES_PATH)) {
+		Entry_free(Array_remove(top->entries, top->selected));
+		Directory_reindex(top);
+	}
+	else Directory_markFavorites(top); // also catches other discs of the same game
+
+	updateRootFavorites();
+}
+
 static int hasRoms(char* dir_name) {
 	int has = 0;
 	char emu_name[256];
@@ -640,7 +834,8 @@ static Array* getRoot(void) {
 	Array* root = Array_new();
 	
 	if (hasRecents()) Array_push(root, Entry_new(FAUX_RECENT_PATH, ENTRY_DIR));
-	
+	if (hasFavorites()) Array_push(root, Entry_new(FAUX_FAVORITES_PATH, ENTRY_DIR));
+
 	Array* entries = Array_new();
 	DIR* dh = opendir(ROMS_PATH);
 	if (dh!=NULL) {
@@ -1186,7 +1381,7 @@ static void Entry_open(Entry* self) {
 	recent_alias = self->name;  // yiiikes
 	if (self->type==ENTRY_ROM) {
 		char *last = NULL;
-		if (prefixMatch(COLLECTIONS_PATH, top->path)) {
+		if (prefixMatch(COLLECTIONS_PATH, top->path) || exactMatch(FAUX_FAVORITES_PATH, top->path)) {
 			char* tmp;
 			char filename[256];
 			
@@ -1256,7 +1451,7 @@ static void loadLast(void) { // call after loading root directory
 				Entry* entry = top->entries->items[i];
 			
 				// NOTE: strlen() is required for collated_path, '\0' wasn't reading as NULL for some reason
-				if (exactMatch(entry->path, path) || (strlen(collated_path) && prefixMatch(collated_path, entry->path)) || (prefixMatch(COLLECTIONS_PATH, full_path) && suffixMatch(filename, entry->path))) {
+				if (exactMatch(entry->path, path) || (strlen(collated_path) && prefixMatch(collated_path, entry->path)) || ((prefixMatch(COLLECTIONS_PATH, full_path) || prefixMatch(FAUX_FAVORITES_PATH "/", full_path)) && suffixMatch(filename, entry->path))) {
 					top->selected = i;
 					if (i>=top->end) {
 						top->start = i;
@@ -1286,16 +1481,49 @@ static void loadLast(void) { // call after loading root directory
 static void Menu_init(void) {
 	stack = Array_new(); // array of open Directories
 	recents = Array_new();
+	favorites = Array_new();
+	loadFavorites();
 
 	openDirectory(SDCARD_PATH, 0);
 	loadLast(); // restore state when available
 }
 static void Menu_quit(void) {
 	RecentArray_free(recents);
+	RecentArray_free(favorites);
 	DirectoryArray_free(stack);
 }
 
 ///////////////////////////////////////
+
+// the selected entry's art, decoded once and pre-flattened onto black in
+// the screen's format so redraws are a straight copy instead of a PNG decode
+static char thumb_path[MAX_PATH];
+static SDL_Surface* thumb = NULL;
+static SDL_Surface* getThumb(Entry* entry, SDL_Surface* screen) {
+	char res_path[MAX_PATH];
+	char res_root[MAX_PATH];
+	strcpy(res_root, entry->path);
+	char* res_name = strrchr(entry->path, '/') + 1;
+	char* tmp = strrchr(res_root, '/');
+	tmp[0] = '\0';
+	sprintf(res_path, "%s/.res/%s.png", res_root, res_name);
+
+	if (exactMatch(res_path, thumb_path)) return thumb; // also caches missing art
+	strcpy(thumb_path, res_path);
+
+	if (thumb) SDL_FreeSurface(thumb);
+	thumb = NULL;
+
+	SDL_Surface* image = exists(res_path) ? IMG_Load(res_path) : NULL;
+	if (image) {
+		// screen is cleared to black before art is drawn so this matches blending at draw time
+		thumb = SDL_CreateRGBSurface(0, image->w, image->h, screen->format->BitsPerPixel, screen->format->Rmask, screen->format->Gmask, screen->format->Bmask, screen->format->Amask);
+		SDL_FillRect(thumb, NULL, 0);
+		SDL_BlitSurface(image, NULL, thumb, NULL);
+		SDL_FreeSurface(image);
+	}
+	return thumb;
+}
 
 int main (int argc, char *argv[]) {
 	// LOG_info("time from launch to:\n");
@@ -1330,6 +1558,7 @@ int main (int argc, char *argv[]) {
 
 	PAD_reset();
 	int dirty = 1;
+	int scrolling = 0;
 	int show_version = 0;
 	int show_setting = 0; // 1=brightness,2=volume
 	int was_online = PLAT_isOnline();
@@ -1459,8 +1688,16 @@ int main (int argc, char *argv[]) {
 				top->selected = selected;
 				dirty = 1;
 			}
-	
-			if (dirty && total>0) readyResume(top->entries->items[top->selected]);
+
+			// holding a direction: skip art and resume lookups until it's released
+			int nav_buttons = BTN_UP|BTN_DOWN|BTN_LEFT|BTN_RIGHT|BTN_L1|BTN_R1;
+			scrolling = PAD_isPressed(nav_buttons) && !PAD_justPressed(nav_buttons);
+			if (PAD_justReleased(nav_buttons)) dirty = 1;
+
+			if (dirty && total>0) {
+				if (scrolling) can_resume = 0;
+				else readyResume(top->entries->items[top->selected]);
+			}
 
 			if (total>0 && can_resume && PAD_justReleased(BTN_RESUME)) {
 				should_resume = 1;
@@ -1481,6 +1718,13 @@ int main (int argc, char *argv[]) {
 				// can_resume = 0;
 				if (total>0) readyResume(top->entries->items[top->selected]);
 			}
+			else if (total>0 && PAD_justPressed(BTN_Y)) {
+				toggleFavorite();
+				total = top->entries->count;
+				dirty = 1;
+				can_resume = 0;
+				if (total>0) readyResume(top->entries->items[top->selected]);
+			}
 		}
 		
 		if (dirty) {
@@ -1489,32 +1733,16 @@ int main (int argc, char *argv[]) {
 			int ox;
 			int oy;
 			
-			// simple thumbnail support a thumbnail for a file or folder named NAME.EXT needs a corresponding /.res/NAME.EXT.png 
+			// simple thumbnail support a thumbnail for a file or folder named NAME.EXT needs a corresponding /.res/NAME.EXT.png
 			// that is no bigger than platform FIXED_HEIGHT x FIXED_HEIGHT
 			int had_thumb = 0;
-			if (!show_version && total>0) {
-				Entry* entry = top->entries->items[top->selected];
-				char res_path[MAX_PATH];
-				
-				char res_root[MAX_PATH];
-				strcpy(res_root, entry->path);
-				
-				char tmp_path[MAX_PATH];
-				strcpy(tmp_path, entry->path);
-				char* res_name = strrchr(tmp_path, '/') + 1;
-
-				char* tmp = strrchr(res_root, '/');
-				tmp[0] = '\0';
-				
-				sprintf(res_path, "%s/.res/%s.png", res_root, res_name);
-				LOG_info("res_path: %s\n", res_path);
-				if (exists(res_path)) {
+			if (!show_version && total>0 && !scrolling) { // skip decoding art for rows we're just passing through
+				SDL_Surface* art = getThumb(top->entries->items[top->selected], screen);
+				if (art) {
 					had_thumb = 1;
-					SDL_Surface* thumb = IMG_Load(res_path);
-					ox = MAX(FIXED_WIDTH - FIXED_HEIGHT, (FIXED_WIDTH - thumb->w));
-					oy = (FIXED_HEIGHT - thumb->h) / 2;
-					SDL_BlitSurface(thumb, NULL, screen, &(SDL_Rect){ox,oy});
-					SDL_FreeSurface(thumb);
+					ox = MAX(FIXED_WIDTH - FIXED_HEIGHT, (FIXED_WIDTH - art->w));
+					oy = (FIXED_HEIGHT - art->h) / 2;
+					SDL_BlitSurface(art, NULL, screen, &(SDL_Rect){ox,oy});
 				}
 			}
 			
@@ -1598,9 +1826,17 @@ int main (int argc, char *argv[]) {
 						SDL_Color text_color = COLOR_WHITE;
 					
 						trimSortingMeta(&entry_name);
-					
+
+						// reserve room so truncation never hides the dot
+						int dot_width = 0;
+						if (entry->favorite) TTF_SizeUTF8(font.large, FAVORITE_DOT, &dot_width, NULL);
+
 						char display_name[256];
-						int text_width = GFX_truncateText(font.large, entry_unique ? entry_unique : entry_name, display_name, available_width, SCALE1(BUTTON_PADDING*2));
+						int text_width = GFX_truncateText(font.large, entry_unique ? entry_unique : entry_name, display_name, available_width-dot_width, SCALE1(BUTTON_PADDING*2));
+						if (entry->favorite) {
+							strcat(display_name, FAVORITE_DOT);
+							text_width += dot_width;
+						}
 						int max_width = MIN(available_width, text_width);
 						if (j==selected_row) {
 							GFX_blitPill(ASSET_WHITE_PILL, screen, &(SDL_Rect){
@@ -1626,8 +1862,10 @@ int main (int argc, char *argv[]) {
 								SCALE1(PADDING+BUTTON_PADDING),
 								SCALE1(PADDING+(j*PILL_SIZE)+4)
 							});
-						
-							GFX_truncateText(font.large, entry_name, display_name, available_width, SCALE1(BUTTON_PADDING*2));
+							SDL_FreeSurface(text);
+
+							GFX_truncateText(font.large, entry_name, display_name, available_width-dot_width, SCALE1(BUTTON_PADDING*2));
+							if (entry->favorite) strcat(display_name, FAVORITE_DOT);
 						}
 						SDL_Surface* text = TTF_RenderUTF8_Blended(font.large, display_name, text_color);
 						SDL_BlitSurface(text, &(SDL_Rect){
@@ -1648,11 +1886,14 @@ int main (int argc, char *argv[]) {
 				}
 			
 				// buttons
+				char fav_path[256];
+				char* fav_button = (total>0 && getFavoritePath(top->entries->items[top->selected], fav_path)) ? "Y" : NULL; // NULL ends the group early
 				if (show_setting && !GetHDMI()) GFX_blitHardwareHints(screen, show_setting);
-				else if (can_resume) GFX_blitButtonGroup((char*[]){ "X","RESUME",  NULL }, 0, screen, 0);
-				else GFX_blitButtonGroup((char*[]){ 
+				else if (can_resume) GFX_blitButtonGroup((char*[]){ "X","RESUME", fav_button,"FAV", NULL }, 0, screen, 0);
+				else GFX_blitButtonGroup((char*[]){
 					BTN_SLEEP==BTN_POWER?"POWER":"MENU",
-					BTN_SLEEP==BTN_POWER||simple_mode?"SLEEP":"INFO",  
+					BTN_SLEEP==BTN_POWER||simple_mode?"SLEEP":"INFO",
+					fav_button,"FAV",
 					NULL }, 0, screen, 0);
 			
 				if (total==0) {
@@ -1696,6 +1937,7 @@ int main (int argc, char *argv[]) {
 	}
 	
 	if (version) SDL_FreeSurface(version);
+	if (thumb) SDL_FreeSurface(thumb);
 
 	Menu_quit();
 	PWR_quit();
