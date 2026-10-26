@@ -388,6 +388,16 @@ static void Game_changeDisc(char* path) {
 static void SRAM_getPath(char* filename) {
 	sprintf(filename, "%s/%s.sav", core.saves_dir, game.name);
 }
+// the save RAM as last read from or written to its file, so pausing doesn't rewrite (and sync) an unchanged save
+static uint8_t* sram_last = NULL;
+static size_t sram_last_size = 0;
+static void SRAM_remember(void* sram, size_t size) {
+	uint8_t* copy = realloc(sram_last, size);
+	if (!copy) return;
+	memcpy(copy, sram, size);
+	sram_last = copy;
+	sram_last_size = size;
+}
 static void SRAM_read(void) {
 	size_t sram_size = core.get_memory_size(RETRO_MEMORY_SAVE_RAM);
 	if (!sram_size) return;
@@ -404,6 +414,7 @@ static void SRAM_read(void) {
 	if (!sram || !fread(sram, 1, sram_size, sram_file)) {
 		LOG_error("Error reading SRAM data\n");
 	}
+	else SRAM_remember(sram, sram_size);
 
 	fclose(sram_file);
 }
@@ -411,6 +422,9 @@ static void SRAM_write(void) {
 	size_t sram_size = core.get_memory_size(RETRO_MEMORY_SAVE_RAM);
 	if (!sram_size) return;
 	
+	void* current = core.get_memory_data(RETRO_MEMORY_SAVE_RAM);
+	if (current && sram_last && sram_last_size==sram_size && !memcmp(current, sram_last, sram_size)) return; // unchanged
+
 	char filename[MAX_PATH];
 	SRAM_getPath(filename);
 	printf("sav path (write): %s\n", filename);
@@ -426,6 +440,7 @@ static void SRAM_write(void) {
 	if (!sram || sram_size != fwrite(sram, 1, sram_size, sram_file)) {
 		LOG_error("Error writing SRAM data to file\n");
 	}
+	else SRAM_remember(sram, sram_size);
 
 	fclose(sram_file);
 
@@ -3253,7 +3268,27 @@ static void Play_tick(void) { // once per main loop iteration
 	if (play.unsaved_ms>=60000) Play_save(); // so a dead battery loses at most a minute
 }
 
+// the saves made as the menu opens (in-game save, clock, play time) run on a thread so the menu shows at once;
+// the game is stopped meanwhile, and anything that runs it or saves again first waits for them
+static pthread_t menu_saves_thread;
+static int menu_saves_running = 0;
+static void* Menu_savesThread(void* arg) {
+	SRAM_write();
+	RTC_write();
+	Play_save();
+	return NULL;
+}
+static void Menu_startSaves(void) {
+	if (pthread_create(&menu_saves_thread, NULL, Menu_savesThread, NULL)==0) menu_saves_running = 1;
+	else Menu_savesThread(NULL);
+}
+static void Menu_waitForSaves(void) {
+	if (!menu_saves_running) return;
+	pthread_join(menu_saves_thread, NULL);
+	menu_saves_running = 0;
+}
 void Menu_beforeSleep(void) {
+	Menu_waitForSaves();
 	// LOG_info("beforeSleep\n");
 	Play_save();
 	SRAM_write();
@@ -4492,12 +4527,10 @@ static void Menu_loop(void) {
 		screen = GFX_resize(DEVICE_WIDTH,DEVICE_HEIGHT,DEVICE_PITCH);
 	}
 	
-	SRAM_write();
-	RTC_write();
-	Play_save();
+	Menu_startSaves();
 	PWR_warn(0);
 	if (!HAS_POWER_BUTTON) PWR_enableSleep();
-	PWR_setCPUSpeed(CPU_SPEED_MENU); // set Hz directly
+	PWR_setCPUSpeedAsync(CPU_SPEED_POWERSAVE); // without waiting for it, and quick enough for the menu to feel snappy
 	GFX_setVsync(VSYNC_STRICT);
 	GFX_setEffect(EFFECT_NONE);
 	
@@ -4617,6 +4650,7 @@ static void Menu_loop(void) {
 			dirty = 1;
 		}
 		else if (PAD_justPressed(BTN_A)) {
+			Menu_waitForSaves(); // everything here can run the game or save again
 			SFX_play(SFX_CONFIRM);
 			switch(selected) {
 				case ITEM_CONT:
@@ -4890,6 +4924,7 @@ static void Menu_loop(void) {
 		else GFX_sync();
 		hdmimon();
 	}
+	Menu_waitForSaves(); // before the game runs again
 	
 	SDL_FreeSurface(preview);
 	

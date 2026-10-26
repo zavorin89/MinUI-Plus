@@ -831,19 +831,38 @@ static void setCPUSpeed(int speed, int wait) {
 	sprintf(cmd,"overclock.elf userspace %d %d 384 1080 0%s", cpu, freq, wait ? "" : " &");
 	system(cmd);
 }
+static pthread_mutex_t cpu_lock = PTHREAD_MUTEX_INITIALIZER;
+static int cpu_generation = 0;
 void PLAT_setCPUSpeed(int speed) {
+	pthread_mutex_lock(&cpu_lock);
+	cpu_generation += 1; // any change still on its way is now stale
 	setCPUSpeed(speed, 1);
+	pthread_mutex_unlock(&cpu_lock);
 }
 // even backgrounded with "&", system() stops the caller while it forks and starts a shell (a dropped frame or
-// two in the menu), so the change is made from a thread of its own instead
+// two in the menu), so the change is made from a thread of its own instead. Every change bumps a generation
+// under one lock, so a thread that gets there after a newer change (eg. leaving a menu quickly) does nothing
+typedef struct { int speed; int generation; } CPUChange;
 static void* setCPUSpeedThread(void* arg) {
-	setCPUSpeed((int)(intptr_t)arg, 1);
+	CPUChange* change = arg;
+	pthread_mutex_lock(&cpu_lock);
+	if (change->generation==cpu_generation) setCPUSpeed(change->speed, 1);
+	pthread_mutex_unlock(&cpu_lock);
+	free(change);
 	return NULL;
 }
 void PLAT_setCPUSpeedAsync(int speed) {
+	CPUChange* change = malloc(sizeof(CPUChange));
+	pthread_mutex_lock(&cpu_lock);
+	change->speed = speed;
+	change->generation = ++cpu_generation;
+	pthread_mutex_unlock(&cpu_lock);
 	pthread_t thread;
-	if (pthread_create(&thread, NULL, setCPUSpeedThread, (void*)(intptr_t)speed)==0) pthread_detach(thread);
-	else setCPUSpeed(speed, 0);
+	if (pthread_create(&thread, NULL, setCPUSpeedThread, change)==0) pthread_detach(thread);
+	else {
+		free(change);
+		setCPUSpeed(speed, 0);
+	}
 }
 
 #define RUMBLE_PATH "/sys/devices/virtual/timed_output/vibrator/enable"
