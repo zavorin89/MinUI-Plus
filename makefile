@@ -54,6 +54,12 @@ system:
 	cp ./workspace/all/say/build/$(PLATFORM)/say.elf ./build/SYSTEM/$(PLATFORM)/bin/
 	cp ./workspace/all/clock/build/$(PLATFORM)/clock.elf ./build/EXTRAS/Tools/$(PLATFORM)/Clock.pak/
 	cp ./workspace/all/minput/build/$(PLATFORM)/minput.elf ./build/EXTRAS/Tools/$(PLATFORM)/Input.pak/
+ifeq ($(PLATFORM),my282)
+	cp ./workspace/all/rasync/build/$(PLATFORM)/rasync.elf "./build/EXTRAS/Tools/$(PLATFORM)/RetroAchievements.pak/"
+	cp ./workspace/all/wifi/build/$(PLATFORM)/wifi.elf "./build/EXTRAS/Tools/$(PLATFORM)/Wi-Fi.pak/"
+	cp ./workspace/all/boxart/build/$(PLATFORM)/boxart.elf "./build/EXTRAS/Tools/$(PLATFORM)/Box Art.pak/"
+	cp ./workspace/all/controls/build/$(PLATFORM)/controls.elf "./build/EXTRAS/Tools/$(PLATFORM)/Controls.pak/"
+endif
 
 cores: # TODO: can't assume every platform will have the same stock cores (platform should be responsible for copy too)
 	# stock cores

@@ -14,6 +14,11 @@ endif
 
 .PHONY: all
 
+# MinUI+ tools, A30 only for now (Wi-Fi and the device's OpenSSL)
+ifeq ($(PLATFORM),my282)
+EXTRA_TOOLS = rasync wifi boxart controls
+endif
+
 all:
 	cd ./$(PLATFORM)/libmsettings && make
 	cd ./$(PLATFORM) && make early # eg. other libs
@@ -24,6 +29,7 @@ all:
 	cd ./all/minput/ && make
 	cd ./all/syncsettings/ && make
 	cd ./all/say/ && make
+	for TOOL in $(EXTRA_TOOLS); do (cd ./all/$$TOOL && make) || exit 1; done
 	cd ./$(PLATFORM)/cores && make
 	cd ./$(PLATFORM) && make
 
@@ -36,4 +42,5 @@ clean:
 	cd ./all/minput/ && make clean
 	cd ./all/syncsettings/ && make clean
 	cd ./all/say/ && make clean
+	for TOOL in $(EXTRA_TOOLS); do (cd ./all/$$TOOL && make clean); done
 	cd ./$(PLATFORM) && make clean
