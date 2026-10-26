@@ -6,6 +6,7 @@
 #include <sys/stat.h>
 #include <dirent.h>
 #include <strings.h>
+#include <pthread.h>
 #include <ctype.h>
 #include <unistd.h>
 #include <fcntl.h>
@@ -2929,13 +2930,156 @@ static SDL_Surface* greySurface(SDL_Surface* src) {
 }
 
 // the cache slot for an entry with its textures ready (art NULL means a card), NULL when it can't be decoded yet
-static CarouselArt* getCarouselSlot(Entry* entry, SDL_Surface* screen, int can_decode) {
-	char res_path[MAX_PATH];
+// the GPU carousel's art is decoded on a thread (PNG decoding is what made scrolling stutter), nearest first;
+// the main thread only uploads what's ready, and waits for (or decodes) just the selected game's art
+#define DECODE_JOBS 12
+enum { JOB_FREE, JOB_WAITING, JOB_WORKING, JOB_DONE };
+typedef struct {
+	char path[MAX_PATH];
+	int state;
+	int priority; // places from the selection: lower goes first
+	int wanted; // asked for again this frame (waiting jobs nobody wants any more are dropped)
+	SDL_Surface* art;
+	SDL_Surface* grey;
+} DecodeJob;
+static DecodeJob decode_jobs[DECODE_JOBS];
+static pthread_mutex_t decode_lock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t decode_wake = PTHREAD_COND_INITIALIZER; // a job to do, or time to stop
+static pthread_cond_t decode_done = PTHREAD_COND_INITIALIZER; // a job finished
+static pthread_t decode_thread;
+static int decode_started = 0;
+static int decode_stop = 0;
+static SDL_Surface* decode_screen = NULL; // only its pixel format is read
+
+static SDL_Surface* greySurface(SDL_Surface* src);
+static void* Decoder_run(void* arg) {
+	pthread_mutex_lock(&decode_lock);
+	while (!decode_stop) {
+		DecodeJob* job = NULL;
+		for (int i=0; i<DECODE_JOBS; i++) {
+			DecodeJob* it = &decode_jobs[i];
+			if (it->state==JOB_WAITING && (!job || it->priority<job->priority)) job = it;
+		}
+		if (!job) {
+			pthread_cond_wait(&decode_wake, &decode_lock);
+			continue;
+		}
+		job->state = JOB_WORKING;
+		char path[MAX_PATH];
+		strcpy(path, job->path);
+		pthread_mutex_unlock(&decode_lock);
+		SDL_Surface* art = loadArt(path, decode_screen);
+		SDL_Surface* grey = art ? greySurface(art) : NULL;
+		pthread_mutex_lock(&decode_lock);
+		job->art = art;
+		job->grey = grey;
+		job->state = JOB_DONE;
+		pthread_cond_broadcast(&decode_done);
+	}
+	pthread_mutex_unlock(&decode_lock);
+	return NULL;
+}
+static void DecodeJob_free(DecodeJob* job) {
+	if (job->art) SDL_FreeSurface(job->art);
+	if (job->grey) SDL_FreeSurface(job->grey);
+	memset(job, 0, sizeof(DecodeJob));
+}
+static void Decoder_request(char* path, int priority, SDL_Surface* screen) {
+	if (prefixMatch("card:", path)) return;
+	pthread_mutex_lock(&decode_lock);
+	if (!decode_started) {
+		decode_screen = screen;
+		if (pthread_create(&decode_thread, NULL, Decoder_run, NULL)==0) decode_started = 1;
+	}
+	DecodeJob* job = NULL;
+	for (int i=0; i<DECODE_JOBS && !job; i++) if (decode_jobs[i].state!=JOB_FREE && exactMatch(decode_jobs[i].path, path)) job = &decode_jobs[i];
+	if (job) {
+		job->wanted = 1;
+		if (job->state==JOB_WAITING && priority<job->priority) job->priority = priority;
+	}
+	else {
+		for (int i=0; i<DECODE_JOBS && !job; i++) if (decode_jobs[i].state==JOB_FREE) job = &decode_jobs[i];
+		for (int i=0; i<DECODE_JOBS && !job; i++) if (decode_jobs[i].state==JOB_DONE && !decode_jobs[i].wanted) job = &decode_jobs[i]; // art nobody's looking at now
+		DecodeJob* furthest = NULL;
+		for (int i=0; i<DECODE_JOBS && !job; i++) {
+			DecodeJob* it = &decode_jobs[i];
+			if (it->state==JOB_WAITING && it->priority>priority && (!furthest || it->priority>furthest->priority)) furthest = it;
+		}
+		if (!job) job = furthest;
+		if (job) {
+			DecodeJob_free(job);
+			strcpy(job->path, path);
+			job->priority = priority;
+			job->wanted = 1;
+			job->state = JOB_WAITING;
+			pthread_cond_signal(&decode_wake);
+		}
+	}
+	pthread_mutex_unlock(&decode_lock);
+}
+// before a frame's requests: what isn't asked for again by the end of it isn't needed
+static void Decoder_beginFrame(void) {
+	pthread_mutex_lock(&decode_lock);
+	for (int i=0; i<DECODE_JOBS; i++) decode_jobs[i].wanted = 0;
+	pthread_mutex_unlock(&decode_lock);
+}
+static void Decoder_endFrame(void) {
+	pthread_mutex_lock(&decode_lock);
+	for (int i=0; i<DECODE_JOBS; i++) if (decode_jobs[i].state==JOB_WAITING && !decode_jobs[i].wanted) DecodeJob_free(&decode_jobs[i]);
+	pthread_mutex_unlock(&decode_lock);
+}
+// the decoded art for path when it's done (1), waiting for it first when wait is set and it's being decoded
+static int Decoder_take(char* path, SDL_Surface** art, SDL_Surface** grey, int wait) {
+	int got = 0;
+	pthread_mutex_lock(&decode_lock);
+	for (int i=0; i<DECODE_JOBS; i++) {
+		DecodeJob* job = &decode_jobs[i];
+		if (job->state==JOB_FREE || !exactMatch(job->path, path)) continue;
+		while (wait && job->state==JOB_WORKING) pthread_cond_wait(&decode_done, &decode_lock);
+		if (job->state==JOB_DONE) {
+			*art = job->art;
+			*grey = job->grey;
+			job->art = job->grey = NULL;
+			DecodeJob_free(job);
+			got = 1;
+		}
+		else if (wait && job->state==JOB_WAITING) DecodeJob_free(job); // the caller decodes it now instead
+		break;
+	}
+	pthread_mutex_unlock(&decode_lock);
+	return got;
+}
+static int Decoder_hasDone(void) {
+	if (!decode_started) return 0;
+	int done = 0;
+	pthread_mutex_lock(&decode_lock);
+	for (int i=0; i<DECODE_JOBS && !done; i++) done = decode_jobs[i].state==JOB_DONE && decode_jobs[i].wanted;
+	pthread_mutex_unlock(&decode_lock);
+	return done;
+}
+static void Decoder_quit(void) {
+	if (decode_started) {
+		pthread_mutex_lock(&decode_lock);
+		decode_stop = 1;
+		pthread_cond_broadcast(&decode_wake);
+		pthread_mutex_unlock(&decode_lock);
+		pthread_join(decode_thread, NULL);
+		decode_started = 0;
+	}
+	for (int i=0; i<DECODE_JOBS; i++) DecodeJob_free(&decode_jobs[i]);
+}
+
+// where the carousel's picture for an entry comes from: its box art, its switcher screenshot, or "card:" for none
+static void getCarouselPath(Entry* entry, char* res_path) {
 	if (inSwitcher()) {
 		int slot;
 		if (!getSwitcherSave(entry, res_path, &slot)) sprintf(res_path, "card:%s", entry->path);
 	}
 	else getResPath(entry, res_path);
+}
+static CarouselArt* getCarouselSlot(Entry* entry, SDL_Surface* screen, int can_decode) {
+	char res_path[MAX_PATH];
+	getCarouselPath(entry, res_path);
 
 	CarouselArt* slot = NULL;
 	CarouselArt* oldest = &carousel_cache[0];
@@ -2947,19 +3091,22 @@ static CarouselArt* getCarouselSlot(Entry* entry, SDL_Surface* screen, int can_d
 		}
 		if (!it->loaded || (oldest->loaded && it->used<oldest->used)) oldest = it;
 	}
+	SDL_Surface* decoded_grey = NULL;
 	if (!slot) {
-		if (!can_decode) return NULL;
+		int card = prefixMatch("card:", res_path);
+		SDL_Surface* art = NULL;
+		int got = !card && Decoder_take(res_path, &art, &decoded_grey, can_decode); // the thread's, if it's done
+		if (!got && !card && !can_decode) return NULL;
 		slot = oldest;
 		CarouselArt_clear(slot);
 		strcpy(slot->path, res_path);
-		slot->art = prefixMatch("card:", res_path) ? NULL : loadArt(res_path, screen);
+		slot->art = got ? art : (card ? NULL : loadArt(res_path, screen));
 		slot->loaded = 1;
 	}
 	slot->used = ++carousel_clock;
-	if (slot->art && !slot->color) {
-		if (!can_decode) return NULL;
+	if (slot->art && !slot->color) { // uploading is quick, the decoding was the slow part
 		slot->color = PLAT_createTexture(slot->art);
-		SDL_Surface* grey = greySurface(slot->art);
+		SDL_Surface* grey = decoded_grey ? decoded_grey : greySurface(slot->art);
 		slot->grey = PLAT_createTexture(grey);
 		if (grey) SDL_FreeSurface(grey);
 		// fit the selected size, keeping the art's shape
@@ -3002,7 +3149,8 @@ static void Carousel_freeGPU(void) {
 	card_texture = no_shot_texture = NULL;
 }
 
-#define CAROUSEL_SCROLL_DECODES 2 // art loaded per frame while a direction is held, the rest wait a frame as cards
+#define CAROUSEL_SCROLL_DECODES 1 // art the frame may wait for while a direction is held: just the selected game's
+#define CAROUSEL_PREFETCH 3 // places past the edges the thread decodes ahead
 // decodes is how many art it may load this frame (the GPU makes the rest cheap, so even while scrolling fast)
 static void blitCarouselGPU(SDL_Surface* screen, Directory* dir, int decodes, float shift) {
 	int total = dir->entries->count;
@@ -3031,6 +3179,7 @@ static void blitCarouselGPU(SDL_Surface* screen, Directory* dir, int decodes, fl
 		}
 	}
 
+	Decoder_beginFrame();
 	// each place's art, and where places sit at rest (spacing follows the art's shape, like the software carousel)
 	CarouselArt* slots[CAROUSEL_SLOTS];
 	int scales[CAROUSEL_SLOTS], widths[CAROUSEL_SLOTS], xs[CAROUSEL_SLOTS];
@@ -3049,9 +3198,27 @@ static void blitCarouselGPU(SDL_Surface* screen, Directory* dir, int decodes, fl
 			slots[n] = getCarouselSlot(entry, screen, 1);
 			decodes -= 1;
 		}
+		if (!slots[n]) { // for the thread, to show in a frame or two
+			char res_path[MAX_PATH];
+			getCarouselPath(entry, res_path);
+			Decoder_request(res_path, place, screen);
+		}
 		int fit_w = slots[n] ? slots[n]->fit_w : SCALE1(CAROUSEL_ART_HEIGHT);
 		widths[n] = fit_w * scales[n] / 100;
 	}
+	// and the next few past either edge, so a held direction finds them decoded
+	for (int place=CAROUSEL_REACH+1; place<=CAROUSEL_REACH+CAROUSEL_PREFETCH; place++) {
+		for (int side=-1; side<=1; side+=2) {
+			int i = dir->selected + side * place;
+			if (i<0 || i>=total) continue;
+			Entry* entry = dir->entries->items[i];
+			if (getCarouselSlot(entry, screen, 0)) continue;
+			char res_path[MAX_PATH];
+			getCarouselPath(entry, res_path);
+			Decoder_request(res_path, place, screen);
+		}
+	}
+	Decoder_endFrame();
 	xs[mid] = cx;
 	for (int side=-1; side<=1; side+=2) {
 		int edge = cx + side * widths[mid] / 2;
@@ -3145,13 +3312,14 @@ static int Carousel_preloadGPU(Directory* dir, SDL_Surface* screen) {
 			int i = dir->selected + side * place;
 			if (i<0 || i>=total) continue;
 			Entry* entry = dir->entries->items[i];
-			CarouselArt* slot = getCarouselSlot(entry, screen, 0); // what's there already
+			CarouselArt* slot = getCarouselSlot(entry, screen, 0); // what's there already (or the thread finished)
 			if (slot) continue;
-			getCarouselSlot(entry, screen, 1);
-			return 1;
+			char res_path[MAX_PATH];
+			getCarouselPath(entry, res_path);
+			Decoder_request(res_path, place, screen);
 		}
 	}
-	return 0;
+	return 0; // the thread does the work, so the loop can still wait for the next frame
 }
 
 // a selected name too long for the space left of its art scrolls back and forth instead of covering the art
@@ -3748,7 +3916,7 @@ int main (int argc, char *argv[]) {
 	
 	// the menu runs on one slow core to save battery, except:
 	// - for a while after boot, when Wi-Fi and the system's own startup are still busy (both cores at full speed)
-	// - while buttons are being pressed, so new art decodes quickly (one core, faster)
+	// - while buttons are being pressed, so new art decodes quickly (both cores, the second decoding art)
 	#define BOOT_STAMP_PATH "/tmp/minui_booted"
 	#define BOOT_BOOST_MS 10000
 	#define NAV_BOOST_MS 2500
@@ -3797,7 +3965,7 @@ int main (int argc, char *argv[]) {
 		if (PAD_isPressed(BTN_ANY|BTN_MENU) || PAD_justReleased(BTN_ANY|BTN_MENU)) last_input_at = now;
 		int wanted_speed = CPU_SPEED_MENU;
 		if (boot_boost_until && (int32_t)(boot_boost_until-now)>0) wanted_speed = CPU_SPEED_NORMAL;
-		else if (last_input_at && now-last_input_at<NAV_BOOST_MS) wanted_speed = CPU_SPEED_POWERSAVE;
+		else if (last_input_at && now-last_input_at<NAV_BOOST_MS) wanted_speed = CPU_SPEED_NORMAL; // both cores: the second decodes the carousel's art
 		if (wanted_speed!=cpu_speed) {
 			cpu_speed = wanted_speed;
 			PWR_setCPUSpeedAsync(cpu_speed);
@@ -4202,6 +4370,7 @@ int main (int argc, char *argv[]) {
 			if (!Carousel_shift(now)) carousel_slide_from = 0; // one last still frame
 			dirty = 1;
 		}
+		if (!dirty && showsCarousel() && Decoder_hasDone()) dirty = 1; // art the thread just finished, to put on screen
 		if (marquee_active && now-marquee_drawn_at>=MARQUEE_FRAME_MS && !dirty) dirty = MARQUEE_ONLY;
 		
 		if (dirty==MARQUEE_ONLY && marquee_base && marquee_text && !flash_until) {
@@ -4549,6 +4718,7 @@ int main (int argc, char *argv[]) {
 	freeTextCache();
 	if (marquee_base) SDL_FreeSurface(marquee_base);
 	if (marquee_text) SDL_FreeSurface(marquee_text);
+	Decoder_quit(); // before the art's surfaces and the screen go
 	Carousel_quit();
 	Carousel_freeGPU();
 	PLAT_destroyTexture(flash_texture);
