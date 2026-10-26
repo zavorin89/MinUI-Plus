@@ -39,6 +39,7 @@
 #define BORDERS_PATH SDCARD_PATH "/Borders"
 
 #define LAST_PATH "/tmp/last.txt" // transient
+#define LAST_BACKUP_PATH SHARED_USERDATA_PATH "/.minui/last.txt" // the same, on the card in case /tmp loses it (cleared at boot by launch.sh)
 #define CHANGE_DISC_PATH "/tmp/change_disc.txt"
 #define RESUME_SLOT_PATH "/tmp/resume_slot.txt"
 #define NOUI_PATH "/tmp/noui"

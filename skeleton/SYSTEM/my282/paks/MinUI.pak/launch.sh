@@ -70,10 +70,18 @@ cd $(dirname "$0")
 
 #######################################
 
+# minui's place in the menus: a fresh boot starts at the top (going by uptime, since this script can also be
+# started again without a reboot, eg. if /tmp is cleared)
+UPTIME=`cut -d. -f1 /proc/uptime`
+if [ "$UPTIME" -lt 120 ]; then
+	rm -f "$SHARED_USERDATA_PATH/.minui/last.txt"
+fi
+
 EXEC_PATH="/tmp/minui_exec"
 NEXT_PATH="/tmp/next"
 touch "$EXEC_PATH" && sync
 while [ -f "$EXEC_PATH" ]; do
+	{ echo "uptime: `cut -d' ' -f1 /proc/uptime`"; ls -a /tmp; df /tmp; } > $LOGS_PATH/tmp.txt 2>&1 # what minui finds in /tmp (its place in the menus lives there)
 	minui.elf > $LOGS_PATH/minui.txt 2>&1
 	STATUS=$?
 	if [ $STATUS -ne 0 ]; then # kept for troubleshooting, minui.txt is replaced on the next run

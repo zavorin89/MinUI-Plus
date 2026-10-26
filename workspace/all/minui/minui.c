@@ -1886,12 +1886,18 @@ static void saveLast(char* path) {
 		path = FAUX_RECENT_PATH;
 	}
 	putFile(LAST_PATH, path);
+	putFile(LAST_BACKUP_PATH, path);
 }
 static void loadLast(void) { // call after loading root directory
-	if (!exists(LAST_PATH)) return;
+	char* from = exists(LAST_PATH) ? LAST_PATH : (exists(LAST_BACKUP_PATH) ? LAST_BACKUP_PATH : NULL);
+	if (!from) {
+		LOG_info("last place: none saved\n");
+		return;
+	}
 
 	char last_path[256];
-	getFile(LAST_PATH, last_path, 256);
+	getFile(from, last_path, 256);
+	LOG_info("last place: %s%s\n", last_path, from==LAST_BACKUP_PATH ? " (from the card copy: /tmp had lost it)" : "");
 	
 	if (prefixMatch(FAUX_MOSTPLAYED_PATH "/", last_path)) { // not in the root, so reopen it directly
 		openDirectory(FAUX_MOSTPLAYED_PATH, 0);
