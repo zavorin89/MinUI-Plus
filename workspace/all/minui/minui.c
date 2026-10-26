@@ -2345,7 +2345,9 @@ static SDL_Surface* loadArt(char* res_path, SDL_Surface* screen) {
 	SDL_FreeSurface(image);
 	return art;
 }
-static SDL_Surface* getThumb(Entry* entry, SDL_Surface* screen) {
+static int Decoder_take(char* path, SDL_Surface** art, SDL_Surface** grey, int wait);
+// the art, from the cache or the decoding thread; when it's neither and can_decode is off, NULL for now
+static SDL_Surface* getThumb(Entry* entry, SDL_Surface* screen, int can_decode) {
 	char res_path[MAX_PATH];
 	getResPath(entry, res_path);
 
@@ -2357,9 +2359,14 @@ static SDL_Surface* getThumb(Entry* entry, SDL_Surface* screen) {
 		}
 		if (!thumbs[i].loaded || (thumbs[oldest].loaded && thumbs[i].used<thumbs[oldest].used)) oldest = i;
 	}
+	SDL_Surface* art = NULL;
+	SDL_Surface* grey = NULL;
+	int got = Decoder_take(res_path, &art, &grey, can_decode);
+	if (grey) SDL_FreeSurface(grey);
+	if (!got && !can_decode) return NULL;
 	if (thumbs[oldest].art) SDL_FreeSurface(thumbs[oldest].art);
 	strcpy(thumbs[oldest].path, res_path);
-	thumbs[oldest].art = loadArt(res_path, screen);
+	thumbs[oldest].art = got ? art : loadArt(res_path, screen);
 	thumbs[oldest].loaded = 1;
 	thumbs[oldest].used = ++thumb_clock;
 	return thumbs[oldest].art;
@@ -2370,20 +2377,39 @@ static int hasThumb(Entry* entry) { // decoded already (or known to be missing)
 	for (int i=0; i<THUMB_CACHE_SIZE; i++) if (thumbs[i].loaded && exactMatch(thumbs[i].path, res_path)) return 1;
 	return 0;
 }
-// while idle in the list, decodes the art for the rows next to the selected one, one per call
-static int preloadThumbs(Directory* dir, SDL_Surface* screen) {
+// the list asks the decoding thread for the selected row's art and the rows either side (so holding a direction
+// finds them ready), and takes in whatever it has finished; the selected one is taken last so it stays newest
+#define THUMB_PREFETCH 3
+static void Decoder_request(char* path, int priority, int grey_too, SDL_Surface* screen);
+static void Decoder_beginFrame(void);
+static void Decoder_endFrame(void);
+static void requestThumbs(Directory* dir, SDL_Surface* screen) {
 	int total = dir->entries->count;
-	for (int place=1; place<=2; place++) {
+	if (!total) return;
+	Decoder_beginFrame();
+	for (int place=0; place<=THUMB_PREFETCH; place++) {
 		for (int side=1; side>=-1; side-=2) {
+			if (!place && side<0) continue;
 			int i = dir->selected + side * place;
-			if (i<0 || i>=total || hasThumb(dir->entries->items[i])) continue;
-			Entry* selected = dir->entries->items[dir->selected];
-			getThumb(dir->entries->items[i], screen);
-			getThumb(selected, screen); // keeps the shown one newest
-			return 1;
+			if (i<0 || i>=total) continue;
+			Entry* entry = dir->entries->items[i];
+			if (hasThumb(entry)) continue;
+			char res_path[MAX_PATH];
+			getResPath(entry, res_path);
+			Decoder_request(res_path, place, 0, screen);
 		}
 	}
-	return 0;
+	Decoder_endFrame();
+	for (int place=THUMB_PREFETCH; place>=0; place--) {
+		for (int side=1; side>=-1; side-=2) {
+			int i = dir->selected + side * place;
+			if (i>=0 && i<total) getThumb(dir->entries->items[i], screen, 0);
+		}
+	}
+}
+static int preloadThumbs(Directory* dir, SDL_Surface* screen) {
+	requestThumbs(dir, screen);
+	return 0; // the thread does the work, so the loop can still wait for the next frame
 }
 static void freeThumbs(void) {
 	for (int i=0; i<THUMB_CACHE_SIZE; i++) {
@@ -2949,6 +2975,7 @@ typedef struct {
 	int state;
 	int priority; // places from the selection: lower goes first
 	int wanted; // asked for again this frame (waiting jobs nobody wants any more are dropped)
+	int grey_too; // the carousel's side art needs a grey copy, the list's art doesn't
 	SDL_Surface* art;
 	SDL_Surface* grey;
 } DecodeJob;
@@ -2980,9 +3007,10 @@ static void* Decoder_run(void* arg) {
 		job->state = JOB_WORKING;
 		char path[MAX_PATH];
 		strcpy(path, job->path);
+		int grey_too = job->grey_too;
 		pthread_mutex_unlock(&decode_lock);
 		SDL_Surface* art = loadArt(path, decode_screen);
-		SDL_Surface* grey = art ? greySurface(art) : NULL;
+		SDL_Surface* grey = art && grey_too ? greySurface(art) : NULL;
 		pthread_mutex_lock(&decode_lock);
 		job->art = art;
 		job->grey = grey;
@@ -2997,7 +3025,7 @@ static void DecodeJob_free(DecodeJob* job) {
 	if (job->grey) SDL_FreeSurface(job->grey);
 	memset(job, 0, sizeof(DecodeJob));
 }
-static void Decoder_request(char* path, int priority, SDL_Surface* screen) {
+static void Decoder_request(char* path, int priority, int grey_too, SDL_Surface* screen) {
 	if (prefixMatch("card:", path)) return;
 	pthread_mutex_lock(&decode_lock);
 	if (!decode_started) {
@@ -3009,6 +3037,7 @@ static void Decoder_request(char* path, int priority, SDL_Surface* screen) {
 	if (job) {
 		job->wanted = 1;
 		if (job->state==JOB_WAITING && priority<job->priority) job->priority = priority;
+		if (job->state==JOB_WAITING) job->grey_too |= grey_too;
 	}
 	else {
 		for (int i=0; i<DECODE_JOBS && !job; i++) if (decode_jobs[i].state==JOB_FREE) job = &decode_jobs[i];
@@ -3023,6 +3052,7 @@ static void Decoder_request(char* path, int priority, SDL_Surface* screen) {
 			DecodeJob_free(job);
 			strcpy(job->path, path);
 			job->priority = priority;
+			job->grey_too = grey_too;
 			job->wanted = 1;
 			job->state = JOB_WAITING;
 			pthread_cond_signal(&decode_wake);
@@ -3229,7 +3259,7 @@ static void blitCarouselGPU(SDL_Surface* screen, Directory* dir, int decodes, fl
 		if (!slots[n]) { // for the thread, to show in a frame or two
 			char res_path[MAX_PATH];
 			getCarouselPath(entry, res_path);
-			Decoder_request(res_path, place, screen);
+			Decoder_request(res_path, place, 1, screen);
 		}
 		int fit_w = slots[n] ? slots[n]->fit_w : SCALE1(CAROUSEL_ART_HEIGHT);
 		widths[n] = fit_w * scales[n] / 100;
@@ -3242,7 +3272,7 @@ static void blitCarouselGPU(SDL_Surface* screen, Directory* dir, int decodes, fl
 			Entry* entry = dir->entries->items[i];
 			char res_path[MAX_PATH];
 			getCarouselPath(entry, res_path);
-			if (!Carousel_has(res_path)) Decoder_request(res_path, place, screen); // decoded, but left off the GPU until it's on screen
+			if (!Carousel_has(res_path)) Decoder_request(res_path, place, 1, screen); // decoded, but left off the GPU until it's on screen
 		}
 	}
 	Decoder_endFrame();
@@ -3344,7 +3374,7 @@ static int Carousel_preloadGPU(Directory* dir, SDL_Surface* screen) {
 			if (slot) continue;
 			char res_path[MAX_PATH];
 			getCarouselPath(entry, res_path);
-			Decoder_request(res_path, place, screen);
+			Decoder_request(res_path, place, 1, screen);
 		}
 	}
 	return 0; // the thread does the work, so the loop can still wait for the next frame
@@ -4407,7 +4437,7 @@ int main (int argc, char *argv[]) {
 			if (!Carousel_shift(now)) carousel_slide_from = 0; // one last still frame
 			dirty = 1;
 		}
-		if (!dirty && showsCarousel() && Decoder_hasDone()) dirty = 1; // art the thread just finished, to put on screen
+		if (!dirty && !show_version && Decoder_hasDone()) dirty = 1; // art the thread just finished, to put on screen
 		if (marquee_active && now-marquee_drawn_at>=MARQUEE_FRAME_MS && !dirty) dirty = MARQUEE_ONLY;
 		
 		if (dirty==MARQUEE_ONLY && marquee_base && marquee_text && !flash_until) {
@@ -4433,14 +4463,24 @@ int main (int argc, char *argv[]) {
 			// that is no bigger than platform FIXED_HEIGHT x FIXED_HEIGHT
 			int had_thumb = 0;
 			int carousel = showsCarousel() && total>0;
-			if (!show_version && total>0 && !carousel && (!scrolling || hasThumb(top->entries->items[top->selected]))) { // passing through: only art that's already decoded
-				SDL_Surface* art = getThumb(top->entries->items[top->selected], screen);
+			if (!show_version && total>0 && !carousel) {
+				// from the thread while scrolling (shown as soon as it's ready), waited for once the list is still
+				requestThumbs(top, screen);
+				Entry* entry = top->entries->items[top->selected];
+				SDL_Surface* art = getThumb(entry, screen, !scrolling);
+				static int last_art_x = 0; // where the last art started, so rows keep their width while the next is on its way
 				if (art) {
 					had_thumb = 1;
 					ox = MAX(FIXED_WIDTH - FIXED_HEIGHT, (FIXED_WIDTH - art->w));
 					oy = (FIXED_HEIGHT - art->h) / 2;
 					SDL_BlitSurface(art, NULL, screen, &(SDL_Rect){ox,oy});
+					last_art_x = ox;
 				}
+				else if (!hasThumb(entry) && last_art_x) { // still decoding (not missing): no jump in the names
+					had_thumb = 1;
+					ox = last_art_x;
+				}
+				else last_art_x = 0;
 			}
 			
 			int ow = GFX_blitHardwareGroup(screen, show_setting);
