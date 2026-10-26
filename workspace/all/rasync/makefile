@@ -25,7 +25,7 @@ INCDIR = -I. -I../common/ -I../../$(PLATFORM)/platform/
 RA = ../minarch
 RC = $(RA)/rcheevos/src
 INCDIR += -I$(RA) -I$(RA)/rcheevos/include -I$(RC) -I$(RA)/libchdr/include
-SOURCE = $(TARGET).c ../common/keyboard.c ../common/utils.c ../common/api.c ../common/scaler.c ../../$(PLATFORM)/platform/platform.c
+SOURCE = $(TARGET).c ../common/keyboard.c ../common/wifi_ask.c ../common/utils.c ../common/api.c ../common/scaler.c ../../$(PLATFORM)/platform/platform.c
 SOURCE += $(RA)/ra_http.c $(RA)/ra_cache.c $(RA)/ra_chd.c $(RA)/libchdr/unity.c $(wildcard $(RC)/api/*.c $(RC)/runtime/*.c $(RC)/util/*.c $(RC)/hash/*.c)
 
 CC = $(CROSS_COMPILE)gcc

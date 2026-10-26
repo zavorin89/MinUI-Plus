@@ -25,7 +25,7 @@ INCDIR = -I. -I../common/ -I../../$(PLATFORM)/platform/
 RA = ../minarch
 
 INCDIR += -I$(RA)
-SOURCE = $(TARGET).c ../common/utils.c ../common/api.c ../common/scaler.c ../../$(PLATFORM)/platform/platform.c
+SOURCE = $(TARGET).c ../common/wifi_ask.c ../common/utils.c ../common/api.c ../common/scaler.c ../../$(PLATFORM)/platform/platform.c
 SOURCE += $(RA)/ra_http.c
 
 CC = $(CROSS_COMPILE)gcc

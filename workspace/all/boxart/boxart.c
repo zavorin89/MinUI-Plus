@@ -18,6 +18,7 @@
 #include "utils.h"
 #include "ra_http.h"
 #include "ra_cache.h" // RA_CA_PATH
+#include "wifi_ask.h"
 
 #define ART_WIDTH 250
 #define USER_AGENT "MinUI/" PLATFORM " box art"
@@ -520,10 +521,7 @@ static int fetchArt(Game* game, ArtList* list, char* href) {
 
 // just one game's art, for the launcher's game menu (boxart.elf <path to the game>)
 static void findOne(char* path) {
-	if (!hasWifi()) {
-		showMessage("Box art needs Wi-Fi\nTurn it on in Tools > Wi-Fi first", 1);
-		return;
-	}
+	if (!hasWifi() && !WIFI_offer(screen, "Box art needs Wi-Fi")) return;
 	Game game = {0};
 	snprintf(game.folder, sizeof(game.folder), "%s", path);
 	char* slash = strrchr(game.folder, '/');
@@ -554,10 +552,7 @@ static void findOne(char* path) {
 }
 
 static void findMissing(void) {
-	if (!hasWifi()) {
-		showMessage("Box art needs Wi-Fi\nTurn it on in Tools > Wi-Fi first", 1);
-		return;
-	}
+	if (!hasWifi() && !WIFI_offer(screen, "Box art needs Wi-Fi")) return;
 	PWR_setCPUSpeed(CPU_SPEED_PERFORMANCE); // decoding and resizing is the slow part
 	PWR_disableAutosleep(); // a long run with no buttons pressed
 	log_file = fopen(LOG_PATH, "w");

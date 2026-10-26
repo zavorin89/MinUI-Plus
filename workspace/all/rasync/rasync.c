@@ -20,6 +20,7 @@
 #include "ra_http.h"
 #include "keyboard.h"
 #include "ra_chd.h"
+#include "wifi_ask.h"
 
 #define UNZIP_PATH SDCARD_PATH "/.tmp_update/my282/unzip"
 #define USER_AGENT "MinUI/" PLATFORM " rcheevos" // same client name minarch uses
@@ -229,7 +230,8 @@ static void runSync(void) {
 	RA_Creds creds;
 
 	if (!RACache_readCreds(&creds)) showMessage("Sync failed\nSign in first", 1);
-	else if (!hasWifi()) showMessage("Sync failed\nTurn on Wi-Fi first (Tools > Wi-Fi)", 1);
+	else if (!hasWifi() && !WIFI_offer(screen, "Syncing needs Wi-Fi")) { // left off: nothing to say
+	}
 	else {
 		showMessage("Signing in...", 0);
 		if (!signIn(&creds)) showMessage("Sync failed\nCouldn't sign in to RetroAchievements\nSign in again from this menu", 1);
@@ -389,10 +391,7 @@ static int confirm(char* msg) {
 }
 
 static void signInFromConsole(void) {
-	if (!hasWifi()) {
-		showMessage("Turn on Wi-Fi first\n(Tools > Wi-Fi)", 1);
-		return;
-	}
+	if (!hasWifi() && !WIFI_offer(screen, "Signing in needs Wi-Fi")) return;
 	RA_Creds creds, saved;
 	RACache_readCreds(&saved);
 	memset(&creds, 0, sizeof(creds));
