@@ -2941,6 +2941,8 @@ static int carousel_uploads_left = CAROUSEL_UPLOADS;
 static int carousel_uploads = 0;
 static int carousel_decoded = 0; // decoded on the main thread (the selected game's, when the thread hadn't got to it)
 static uint32_t carousel_waited = 0; // ms spent waiting for or decoding the selected game's art
+static uint32_t frame_polled_at, frame_drawn_at, frame_flipped_at; // phases of the last frame, for the same log
+static uint32_t frame_started_at, frame_draw_started_at;
 enum { JOB_FREE, JOB_WAITING, JOB_WORKING, JOB_DONE };
 typedef struct {
 	char path[MAX_PATH];
@@ -3981,8 +3983,13 @@ int main (int argc, char *argv[]) {
 		uint32_t frame_gap = now - last_frame_at;
 		if (carousel_slide_from && last_frame_at && frame_gap>40) carousel_slide_at += frame_gap - 16;
 		if (last_frame_at && frame_gap>=50 && showsCarousel() && Carousel_useGPU()) { // what a slow carousel frame was doing
-			LOG_info("slow carousel frame: %ums (%i uploaded, %i decoded here, %ums on the selected art)\n", frame_gap, carousel_uploads, carousel_decoded, carousel_waited);
+			LOG_info("slow carousel frame: %ums (%i uploaded, %i decoded here, %ums on the selected art; input %u, moving %u, drawing %u, to screen %u)\n",
+				frame_gap, carousel_uploads, carousel_decoded, carousel_waited,
+				frame_polled_at-frame_started_at, frame_draw_started_at ? frame_draw_started_at-frame_polled_at : 0,
+				frame_drawn_at ? frame_drawn_at-frame_draw_started_at : 0, frame_flipped_at ? frame_flipped_at-frame_drawn_at : 0);
 		}
+		frame_started_at = now;
+		frame_draw_started_at = frame_drawn_at = frame_flipped_at = 0;
 		// the first seconds' hiccups go in minui.txt, to see what a fresh boot is waiting on
 		if (last_frame_at && frame_gap>=100 && (getMicroseconds()-main_begin)<20*1000000) {
 			LOG_info("slow frame: %ums, %llums after start\n", frame_gap, (unsigned long long)(getMicroseconds()-main_begin)/1000);
@@ -4004,6 +4011,7 @@ int main (int argc, char *argv[]) {
 		int total = top->entries->count;
 		
 		PWR_update(&dirty, &show_setting, NULL, NULL);
+		frame_polled_at = SDL_GetTicks();
 		
 		// a long MENU press (anywhere) opens the game switcher when it's let go, a tap still opens the info screen
 		// any other button pressed meanwhile makes it a combo instead (eg. MENU + volume for brightness)
@@ -4411,6 +4419,7 @@ int main (int argc, char *argv[]) {
 			dirty = 0;
 		}
 		else if (dirty) {
+			frame_draw_started_at = SDL_GetTicks();
 			GFX_clear(screen);
 			marquee_active = 0; // set again if this frame scrolls a name
 			marquee_drawn_at = now;
@@ -4557,7 +4566,7 @@ int main (int argc, char *argv[]) {
 				// list
 				if (carousel) {
 					// passing through: only art that's already decoded
-					if (Carousel_useGPU()) blitCarouselGPU(screen, top, scrolling ? CAROUSEL_SCROLL_DECODES : CAROUSEL_SLOTS, Carousel_shift(now));
+					if (Carousel_useGPU()) blitCarouselGPU(screen, top, CAROUSEL_SCROLL_DECODES, Carousel_shift(now)); // the selected art now, the rest from the thread
 					else blitCarousel(screen, top, !scrolling, Carousel_shift(now));
 				}
 				else if (total>0) {
@@ -4705,7 +4714,9 @@ int main (int argc, char *argv[]) {
 				if (flash_until && !flash_gpu && !show_version) blitFlash(screen); // a popup stays over the scrolling name
 			}
 
+			frame_drawn_at = SDL_GetTicks();
 			GFX_flip(screen);
+			frame_flipped_at = SDL_GetTicks();
 			dirty = 0;
 			static int first_frame = 1;
 			if (first_frame) {
