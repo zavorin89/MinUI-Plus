@@ -488,6 +488,71 @@ static int collectGames(Game* games, int missing_only) {
 	return count;
 }
 
+// downloads and sizes one game's art from the system's list: ART_FOUND (href is the art's name),
+// ART_NO_MATCH, or ART_FAILED (href is the address that failed)
+enum { ART_FOUND, ART_NO_MATCH, ART_FAILED };
+static int fetchArt(Game* game, ArtList* list, char* href) {
+	Art* art = findArt(list, game->name);
+	if (!art) return ART_NO_MATCH;
+
+	char system_encoded[MAX_PATH], url[MAX_PATH*3];
+	urlEncode(game->system, system_encoded);
+	sprintf(url, THUMBS_URL "%s/Named_Boxarts/%s", system_encoded, art->href);
+	HTTP_Response response = {0};
+	int ok = 0;
+	if (HTTP_request(url, NULL, NULL, USER_AGENT, RA_CA_PATH, &response)) {
+		if (response.status==200) {
+			SDL_Surface* image = IMG_Load_RW(SDL_RWFromConstMem(response.body, response.body_length), 1);
+			if (image) {
+				char res_dir[MAX_PATH], art_path[MAX_PATH];
+				sprintf(res_dir, "%s/.res", game->folder);
+				mkdir(res_dir, 0755);
+				sprintf(art_path, "%s/%s.png", res_dir, game->file);
+				ok = saveResized(image, art_path); // replaces any art it had, only once the new art is in hand
+				SDL_FreeSurface(image);
+			}
+		}
+		HTTP_freeResponse(&response);
+	}
+	snprintf(href, MAX_PATH, "%s", ok ? art->href : url);
+	return ok ? ART_FOUND : ART_FAILED;
+}
+
+// just one game's art, for the launcher's game menu (boxart.elf <path to the game>)
+static void findOne(char* path) {
+	if (!hasWifi()) {
+		showMessage("Box art needs Wi-Fi\nTurn it on in Tools > Wi-Fi first", 1);
+		return;
+	}
+	Game game = {0};
+	snprintf(game.folder, sizeof(game.folder), "%s", path);
+	char* slash = strrchr(game.folder, '/');
+	if (!slash) return;
+	*slash = '\0';
+	snprintf(game.file, sizeof(game.file), "%s", slash+1);
+	struct stat st;
+	gameName(game.file, stat(path, &st)==0 && S_ISDIR(st.st_mode), game.name);
+	game.system = librarySystem(game.folder);
+	if (!game.system) {
+		showMessage("The box art library doesn't cover this system", 1);
+		return;
+	}
+	PWR_setCPUSpeed(CPU_SPEED_PERFORMANCE);
+	showMessage("Finding box art...", 0);
+	ArtList list = {0};
+	int result = ART_FAILED;
+	char href[MAX_PATH] = "";
+	if (loadArtList(game.system, &list)) result = fetchArt(&game, &list, href);
+	freeArtList(&list);
+	sync();
+	PWR_setCPUSpeed(CPU_SPEED_MENU);
+	char message[MAX_PATH*2];
+	if (result==ART_FOUND) snprintf(message, sizeof(message), "Box art found");
+	else if (result==ART_NO_MATCH) snprintf(message, sizeof(message), "No box art matches\n%s", game.name);
+	else snprintf(message, sizeof(message), "Couldn't download the box art\nCheck the Wi-Fi connection");
+	showMessage(message, 1);
+}
+
 static void findMissing(void) {
 	if (!hasWifi()) {
 		showMessage("Box art needs Wi-Fi\nTurn it on in Tools > Wi-Fi first", 1);
@@ -515,39 +580,19 @@ static void findMissing(void) {
 			showProgress("Finding box art", i, count, "Getting the list of art for this system...");
 			if (!loadArtList(game->system, &list)) ART_LOG("couldn't get the art list for %s\n", game->system);
 		}
-		Art* art = findArt(&list, game->name);
-		if (!art) {
+		char href[MAX_PATH];
+		int result = fetchArt(game, &list, href);
+		if (result==ART_FOUND) {
+			found += 1;
+			ART_LOG("found: %s -> %s\n", game->file, href);
+		}
+		else if (result==ART_NO_MATCH) {
 			unmatched += 1;
 			ART_LOG("no match: %s/%s\n", strrchr(game->folder, '/')+1, game->file);
-			continue;
-		}
-
-		char system_encoded[MAX_PATH], url[MAX_PATH*3];
-		urlEncode(game->system, system_encoded);
-		sprintf(url, THUMBS_URL "%s/Named_Boxarts/%s", system_encoded, art->href);
-		HTTP_Response response = {0};
-		int ok = 0;
-		if (HTTP_request(url, NULL, NULL, USER_AGENT, RA_CA_PATH, &response)) {
-			if (response.status==200) {
-				SDL_Surface* image = IMG_Load_RW(SDL_RWFromConstMem(response.body, response.body_length), 1);
-				if (image) {
-					char res_dir[MAX_PATH], art_path[MAX_PATH];
-					sprintf(res_dir, "%s/.res", game->folder);
-					mkdir(res_dir, 0755);
-					sprintf(art_path, "%s/%s.png", res_dir, game->file);
-					ok = saveResized(image, art_path);
-					SDL_FreeSurface(image);
-				}
-			}
-			HTTP_freeResponse(&response);
-		}
-		if (ok) {
-			found += 1;
-			ART_LOG("found: %s -> %s\n", game->file, art->href);
 		}
 		else {
 			failed += 1;
-			ART_LOG("download failed: %s (%s)\n", game->file, url);
+			ART_LOG("download failed: %s (%s)\n", game->file, href);
 		}
 	}
 	freeArtList(&list);
@@ -616,6 +661,15 @@ int main(int argc , char* argv[]) {
 	PAD_init();
 	PWR_init();
 	InitSettings();
+
+	if (argc>1) { // one game, from the launcher's game menu
+		findOne(argv[1]);
+		QuitSettings();
+		PWR_quit();
+		PAD_quit();
+		GFX_quit();
+		return EXIT_SUCCESS;
+	}
 
 	enum { ROW_MISSING, ROW_RESIZE, ROW_COUNT };
 	int selected = 0;

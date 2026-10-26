@@ -30,8 +30,16 @@ static Page pages[] = {
 		{ "Select",			"Switch list / carousel view" },
 		{ "Hold Select",	"Pin to the game switcher" },
 		{ "Start",			"Pick a random game" },
-		{ "Menu + X",		"Delete the game" },
-		{ "Menu + Y",		"Choose the game's core" },
+		{ "Menu + Y",		"Game menu: core, box art, delete" },
+		{ "Menu + X",		"Delete the game (straight away)" },
+	}},
+	{ "Game menu (Menu + Y)", {
+		{ "Up / Down",		"Choose" },
+		{ "A",				"Change core, get box art or delete" },
+		{ "B",				"Back to the list" },
+		{ "Change core",	"Up / Down to pick, A to use it" },
+		{ "Get box art",	"Downloads it (Wi-Fi needs to be on)" },
+		{ "Delete game",	"Asks first, then about saves and art" },
 	}},
 	{ "Anywhere in MinUI", {
 		{ "Menu",			"Settings and play time" },

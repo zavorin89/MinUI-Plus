@@ -3554,6 +3554,118 @@ static void pickCore(SDL_Surface* screen) {
 	showFlash(cores[selected].name, 0);
 }
 
+// the game menu (MENU + Y): change its core, get its box art, delete it
+#define BOX_ART_PAK SDCARD_PATH "/Tools/" PLATFORM "/Box Art.pak/launch.sh"
+static void gameMenu(SDL_Surface* screen) {
+	Entry* entry = top->entries->items[top->selected];
+	char rel_path[MAX_PATH];
+	if (entry->type==ENTRY_PAK || !getFavoritePath(entry, rel_path)) {
+		showFlash("Only games have options", 0);
+		return;
+	}
+	char sd_path[MAX_PATH];
+	snprintf(sd_path, sizeof(sd_path), "%s%s", SDCARD_PATH, rel_path);
+	char system_tag[MAX_PATH];
+	getEmuName(sd_path, system_tag);
+
+	enum { ROW_CORE, ROW_ART, ROW_DELETE };
+	int rows[3];
+	int count = 0;
+	Core cores[CORE_MAX];
+	char core_name[64] = "";
+	if (getCores(system_tag, cores)>1) {
+		char tag[64];
+		if (!getGameCore(sd_path, tag)) strcpy(tag, system_tag);
+		getCoreName(tag, core_name, &(const char*){NULL});
+		rows[count++] = ROW_CORE;
+	}
+	char art_path[MAX_PATH];
+	getResPath(entry, art_path);
+	int has_art = exists(art_path);
+	if (exists(BOX_ART_PAK)) rows[count++] = ROW_ART;
+	if (isSortableFolder(top->path)) rows[count++] = ROW_DELETE;
+	if (!count) {
+		showFlash("No options for this game", 0);
+		return;
+	}
+
+	int selected = 0;
+	int dirty = 1;
+	int result = -1;
+	while (result<0) {
+		GFX_startFrame();
+		PAD_poll();
+		if (PAD_justPressed(BTN_B)) result = 0; // (not a MENU tap: letting go of MENU from the combo would count)
+		else if (PAD_justPressed(BTN_A)) result = 1;
+		else if (PAD_justRepeated(BTN_UP)) { selected = (selected + count - 1) % count; SFX_play(SFX_TICK); dirty = 1; }
+		else if (PAD_justRepeated(BTN_DOWN)) { selected = (selected + 1) % count; SFX_play(SFX_TICK); dirty = 1; }
+		PWR_update(&dirty, NULL, NULL, NULL);
+		if (dirty) {
+			GFX_clear(screen);
+			char shown[256];
+			GFX_truncateText(font.large, entry->name, shown, screen->w - SCALE1(PADDING*4), 0);
+			SDL_Surface* text = TTF_RenderUTF8_Blended(font.large, shown, COLOR_WHITE);
+			int block_h = text->h + SCALE1(PADDING) + SCALE1(PILL_SIZE) * count + SCALE1(PADDING + 16);
+			int y = (screen->h - SCALE1(PILL_SIZE+PADDING) - block_h) / 2;
+			SDL_BlitSurface(text, NULL, screen, &(SDL_Rect){ (screen->w - text->w) / 2, y });
+			y += text->h + SCALE1(PADDING);
+			SDL_FreeSurface(text);
+			int rows_w = SCALE1(260);
+			int x = (screen->w - rows_w) / 2;
+			char* hint = "";
+			for (int i=0; i<count; i++) {
+				int is_selected = i==selected;
+				char* name = "";
+				char* value = "";
+				if (rows[i]==ROW_CORE) { name = "Change core"; value = core_name; if (is_selected) hint = "Pick which emulator runs this game"; }
+				else if (rows[i]==ROW_ART) { name = has_art ? "Replace box art" : "Get box art"; if (is_selected) hint = "Downloads it from the libretro library (needs Wi-Fi)"; }
+				else if (rows[i]==ROW_DELETE) { name = "Delete game"; if (is_selected) hint = "Asks first, then about its saves and box art"; }
+				if (is_selected) GFX_blitPill(ASSET_WHITE_PILL, screen, &(SDL_Rect){ x - SCALE1(BUTTON_PADDING), y, rows_w + SCALE1(BUTTON_PADDING*2), SCALE1(PILL_SIZE) });
+				SDL_Surface* name_txt = TTF_RenderUTF8_Blended(font.large, name, is_selected ? COLOR_BLACK : COLOR_WHITE);
+				SDL_BlitSurface(name_txt, NULL, screen, &(SDL_Rect){ x, y + (SCALE1(PILL_SIZE) - name_txt->h) / 2 });
+				SDL_FreeSurface(name_txt);
+				if (value[0]) {
+					SDL_Surface* value_txt = TTF_RenderUTF8_Blended(font.small, value, is_selected ? COLOR_BLACK : COLOR_DARK_TEXT);
+					SDL_BlitSurface(value_txt, NULL, screen, &(SDL_Rect){ x + rows_w - value_txt->w, y + (SCALE1(PILL_SIZE) - value_txt->h) / 2 });
+					SDL_FreeSurface(value_txt);
+				}
+				y += SCALE1(PILL_SIZE);
+			}
+			SDL_Surface* hint_txt = TTF_RenderUTF8_Blended(font.small, hint, COLOR_LIGHT_TEXT);
+			if (hint_txt) {
+				SDL_BlitSurface(hint_txt, NULL, screen, &(SDL_Rect){ (screen->w - hint_txt->w) / 2, y + SCALE1(PADDING) });
+				SDL_FreeSurface(hint_txt);
+			}
+			GFX_blitButtonGroup((char*[]){ "B","BACK", "A","SELECT", NULL }, 1, screen, 1);
+			GFX_flip(screen);
+			dirty = 0;
+		}
+		else GFX_sync();
+	}
+	if (!result) {
+		SFX_play(SFX_BACK);
+		return;
+	}
+	SFX_play(SFX_CONFIRM);
+	int row = rows[selected];
+	if (row==ROW_CORE) pickCore(screen);
+	else if (row==ROW_DELETE) deleteSelected(screen);
+	else if (row==ROW_ART) {
+		// off to the Box Art tool for this one game, then back to this same spot in the list
+		char last[MAX_PATH];
+		if (exactMatch(FAUX_FAVORITES_PATH, top->path) || exactMatch(FAUX_RECENT_PATH, top->path) || exactMatch(FAUX_MOSTPLAYED_PATH, top->path) || prefixMatch(COLLECTIONS_PATH, top->path)) {
+			snprintf(last, sizeof(last), "%s/%s", top->path, strrchr(entry->path, '/')+1);
+		}
+		else snprintf(last, sizeof(last), "%s", entry->path);
+		saveLast(last);
+		char pak[MAX_PATH], game[MAX_PATH], cmd[MAX_PATH*4];
+		strcpy(pak, BOX_ART_PAK);
+		strcpy(game, entry->path);
+		snprintf(cmd, sizeof(cmd), "'%s' '%s'", escapeSingleQuotes(pak), escapeSingleQuotes(game));
+		queueNext(cmd);
+	}
+}
+
 static void openSwitcher(void) {
 	forgetSwitcherSaves(); // a game may have been saved since
 	openDirectory(FAUX_SWITCHER_PATH, 0);
@@ -3973,9 +4085,10 @@ int main (int argc, char *argv[]) {
 			}
 
 			if (total>0 && PAD_isPressed(BTN_MENU) && PAD_justPressed(BTN_Y)) {
-				pickCore(screen);
+				gameMenu(screen);
+				total = top->entries->count;
 				can_resume = 0;
-				readyResume(top->entries->items[top->selected]); // a different core has its own save states
+				if (total>0) readyResume(top->entries->items[top->selected]); // a different core has its own save states
 				dirty = 1;
 			}
 			else if (total>0 && PAD_isPressed(BTN_MENU) && PAD_justPressed(BTN_X) && isSortableFolder(top->path)) {
