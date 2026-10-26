@@ -1,0 +1,11 @@
+Screen borders
+
+Shown around games when "Screen Border" is on (in a game's menu: Options > Frontend).
+A game uses Borders/<TAG>.png (eg. GBC.png), or Borders/<TAG>/<game file name>.png for that game alone.
+Extras/ holds other Game Boy looks: copy one over GB.png to use it.
+
+All borders except VB.png are by drkhrse, from their Miyoo bezel pack:
+https://github.com/drkhrse/drkhrse_miyoo_bezels
+Thank you, drkhrse!
+
+VB.png (Virtual Boy) was made for MinUI+ in the same style.

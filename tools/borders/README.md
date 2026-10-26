@@ -3,12 +3,13 @@
 minarch's "Screen border" option fills the black bars around a game with `Borders/<TAG>.png` (640x480).
 The game is drawn on top at its normal size, so only the area outside it shows.
 
-`reference/` holds drkhrse's Miyoo bezels (github.com/drkhrse/drkhrse_miyoo_bezels), used on the private card.
-They have no license allowing redistribution, so they're git-ignored: the public release uses bezels we generate.
+The release ships drkhrse's Miyoo bezels (github.com/drkhrse/drkhrse_miyoo_bezels) in `skeleton/EXTRAS/Borders/`,
+credited in its `CREDITS.txt`. The pack has no license file, so they're included with credit and a link.
+The steps below are for making borders for systems the pack doesn't cover, in the same style.
 
 ## Making them with ChatGPT
 
-Attach two references from `reference/` (eg. `GBC.png` and `GG.png`) and use:
+Attach two of the shipped borders (eg. `GBC.png` and `GG.png`) as references and use:
 
 > Create a 640x480 image in exactly the same style as the attached references: dark charcoal device-bezel bands with
 > subtle texture, a small red power light and grey "POWER" label, and the system's name or wordmark in the console's
@@ -34,4 +35,4 @@ These are the game's size at each system's default scaling (Aspect, except Poké
 
 ## Installing
 
-Copy `generated/<TAG>.png` to `Borders/<TAG>.png` on the card.
+Copy `generated/<TAG>.png` to `Borders/<TAG>.png` on the card, and to `skeleton/EXTRAS/Borders/` for the release.
