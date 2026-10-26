@@ -3973,17 +3973,17 @@ int main (int argc, char *argv[]) {
 	// LOG_info("- menu init: %lu\n", SDL_GetTicks() - main_begin);
 	
 	// the menu runs on one slow core to save battery, except:
-	// - for a while after boot, when Wi-Fi and the system's own startup are still busy (both cores at full speed)
+	// - for a while after boot, when Wi-Fi and the system's own startup are still busy (both cores at full speed),
+	//   and briefly every time it starts (eg. back from a game), while the first art decodes
 	// - while buttons are being pressed, so new art decodes quickly (both cores, the second decoding art)
 	#define BOOT_STAMP_PATH "/tmp/minui_booted"
 	#define BOOT_BOOST_MS 10000
+	#define START_BOOST_MS 3000
 	#define NAV_BOOST_MS 2500
-	uint32_t boot_boost_until = 0;
-	if (!exists(BOOT_STAMP_PATH)) {
-		touch(BOOT_STAMP_PATH);
-		boot_boost_until = SDL_GetTicks() + BOOT_BOOST_MS;
-	}
-	int cpu_speed = boot_boost_until ? CPU_SPEED_NORMAL : CPU_SPEED_MENU;
+	int fresh_boot = !exists(BOOT_STAMP_PATH);
+	if (fresh_boot) touch(BOOT_STAMP_PATH);
+	uint32_t boot_boost_until = SDL_GetTicks() + (fresh_boot ? BOOT_BOOST_MS : START_BOOST_MS);
+	int cpu_speed = CPU_SPEED_NORMAL;
 	PWR_setCPUSpeed(cpu_speed);
 	uint32_t last_input_at = 0;
 	GFX_setVsync(VSYNC_STRICT);
@@ -4761,7 +4761,7 @@ int main (int argc, char *argv[]) {
 			static int first_frame = 1;
 			if (first_frame) {
 				first_frame = 0;
-				LOG_info("first frame: %llums after start%s\n", (unsigned long long)(getMicroseconds()-main_begin)/1000, boot_boost_until ? " (fresh boot)" : "");
+				LOG_info("first frame: %llums after start%s\n", (unsigned long long)(getMicroseconds()-main_begin)/1000, fresh_boot ? " (fresh boot)" : "");
 			}
 		}
 		else {
