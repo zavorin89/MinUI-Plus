@@ -53,6 +53,19 @@ void LOG_note(int level, const char* fmt, ...);
 
 ///////////////////////////////
 
+// themes tint everything white and grey with a light color, named after food
+typedef struct ThemeColors {
+	SDL_Color white;
+	SDL_Color gray;
+	SDL_Color light_text;
+	SDL_Color dark_text;
+} ThemeColors;
+extern ThemeColors theme_colors;
+int GFX_getThemeCount(void);
+const char* GFX_getThemeName(int index);
+int GFX_getTheme(void); // index of the current theme
+void GFX_setTheme(int index); // recolors everything drawn from here on and saves the choice
+
 extern uint32_t RGB_WHITE;
 extern uint32_t RGB_BLACK;
 extern uint32_t RGB_LIGHT_GRAY;
@@ -163,6 +176,8 @@ void GFX_flip(SDL_Surface* screen);
 #define GFX_supportsOverscan PLAT_supportsOverscan // (void)
 #define GFX_supportsBorder PLAT_supportsBorder // (void)
 #define GFX_setBorder PLAT_setBorder // (const char* path) NULL clears it
+#define GFX_setNotification PLAT_setNotification // (SDL_Surface* full screen with transparency) NULL hides it
+#define GFX_setNotificationAlpha PLAT_setNotificationAlpha // (int 0-255) fades the notification, kept for the next one
 void GFX_sync(void); // call this to maintain 60fps when not calling GFX_flip() this frame
 void GFX_quit(void);
 
@@ -177,6 +192,7 @@ void GFX_setVsync(int vsync);
 
 int GFX_truncateText(TTF_Font* font, const char* in_name, char* out_name, int max_width, int padding); // returns final width
 int GFX_wrapText(TTF_Font* font, char* str, int max_width, int max_lines);
+int GFX_wrapTextEnding(TTF_Font* font, char* str, int max_width, int max_lines, const char* ending);
 
 #define GFX_getScaler PLAT_getScaler		// scaler_t:(GFX_Renderer* renderer)
 #define GFX_blitRenderer PLAT_blitRenderer	// void:(GFX_Renderer* renderer)
@@ -210,6 +226,20 @@ typedef struct SND_Frame {
 void SND_init(double sample_rate, double frame_rate);
 size_t SND_batchSamples(const SND_Frame* frames, size_t frame_count);
 void SND_quit(void);
+
+// short synthesized sounds, mixed into the game's audio when it's playing or on their own device otherwise
+enum {
+	SFX_TICK, // moving the selection
+	SFX_CONFIRM, // opening, choosing
+	SFX_BACK, // going back
+	SFX_ACHIEVEMENT, // a RetroAchievements unlock (plays even with menu sounds off)
+	SFX_COUNT,
+};
+void SFX_play(int sound);
+void SFX_warmUp(void); // opens the device and makes the menu sounds on a thread, so the first one plays without a wait
+int SFX_menuSoundsEnabled(void);
+void SFX_setMenuSounds(int enabled); // also saves the choice
+void SFX_quit(void); // lets a sound that's playing finish (briefly), then closes its device
 
 ///////////////////////////////
 
@@ -313,6 +343,7 @@ enum {
 	CPU_SPEED_PERFORMANCE,
 };
 #define PWR_setCPUSpeed PLAT_setCPUSpeed
+#define PWR_setCPUSpeedAsync PLAT_setCPUSpeedAsync
 
 ///////////////////////////////
 
@@ -339,6 +370,15 @@ void PLAT_flip(SDL_Surface* screen, int sync);
 int PLAT_supportsOverscan(void);
 int PLAT_supportsBorder(void);
 void PLAT_setBorder(const char* path); // image drawn behind the game, filling the screen
+void PLAT_setNotification(SDL_Surface* overlay); // drawn over the game until cleared, copied so the caller keeps ownership
+void PLAT_setNotificationAlpha(int alpha);
+
+// GPU textures: uploaded once, then drawn scaled (smoothly), faded and darkened over the screen on the next flip,
+// in the order queued (the queue empties each flip). Platforms without a GPU path return NULL from PLAT_createTexture
+typedef struct GFX_Texture GFX_Texture;
+GFX_Texture* PLAT_createTexture(SDL_Surface* surface); // a copy, the caller keeps the surface
+void PLAT_destroyTexture(GFX_Texture* texture);
+void PLAT_queueTexture(GFX_Texture* texture, SDL_Rect* dst, int alpha, int shade); // dst in screen pixels, alpha and shade 0-255
 
 SDL_Surface* PLAT_initOverlay(void);
 void PLAT_quitOverlay(void);
@@ -350,6 +390,7 @@ void PLAT_enableBacklight(int enable);
 void PLAT_powerOff(void);
 	
 void PLAT_setCPUSpeed(int speed); // enum
+void PLAT_setCPUSpeedAsync(int speed); // the same, without waiting for the change to be made
 void PLAT_setRumble(int strength);
 int PLAT_pickSampleRate(int requested, int max);
 

@@ -2,6 +2,7 @@
 #define UTILS_H
 
 #include <stdint.h>
+#include "defines.h" // SWITCHER_MAX, MAX_PATH
 
 int prefixMatch(char* pre, char* str);
 int suffixMatch(char* suf, char* str);
@@ -37,8 +38,15 @@ typedef struct PlayTime {
 int parsePlayTimeLine(char* line, char** path, PlayTime* out); // modifies line, returns 0 if malformed
 int getPlayTime(char* path, PlayTime* out); // path relative to SDCARD_PATH, returns 1 if found
 void setPlayTime(char* path, PlayTime* time);
+void removePlayTime(char* path); // eg. for a deleted game
 int getPlayTimeTotals(int* total_seconds, char* top_path, int* top_seconds); // returns number of games
 int getAveragePlayTime(PlayTime* time); // seconds per session
 void formatPlayTime(int seconds, char* out); // eg. "12h 34m"
+
+// the game switcher's list, paths are relative to SDCARD_PATH
+int Switcher_load(char paths[SWITCHER_MAX][MAX_PATH]); // returns how many
+int Switcher_has(char* path);
+int Switcher_add(char* path); // 1 when added, 0 when already there, -1 when full
+void Switcher_remove(char* path);
 
 #endif

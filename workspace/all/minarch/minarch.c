@@ -18,6 +18,8 @@
 #include "api.h"
 #include "utils.h"
 #include "scaler.h"
+#include "ra.h"
+#include "ra_cache.h" // RA_HARDCORE_PATH
 
 ///////////////////////////////////////
 
@@ -520,6 +522,7 @@ static void State_read(void) { // from picoarch
 		LOG_error("Error restoring save state: %s (%s)\n", filename, strerror(errno));
 		goto error;
 	}
+	RA_stateLoaded(); // a hardcore session ends here
 
 error:
 	if (state) free(state);
@@ -567,20 +570,42 @@ error:
 	
 	fast_forward = was_ff;
 }
+static void State_writeDisc(int slot);
 static void State_autosave(void) {
 	int last_state_slot = state_slot;
 	state_slot = AUTO_RESUME_SLOT;
 	State_write();
 	state_slot = last_state_slot;
+	State_writeDisc(AUTO_RESUME_SLOT); // so resuming a multi-disc game starts the disc this was saved on
+}
+// in hardcore the resume waits until the game is identified: games with achievements start fresh instead
+#define RESUME_WAIT_MS 8000
+static int deferred_resume_slot = -1;
+static uint32_t deferred_resume_at = 0;
+static void State_resumeSlot(int slot) {
+	int last_state_slot = state_slot;
+	state_slot = slot;
+	State_read();
+	state_slot = last_state_slot;
 }
 static void State_resume(void) {
 	if (!exists(RESUME_SLOT_PATH)) return;
 	
-	int last_state_slot = state_slot;
-	state_slot = getInt(RESUME_SLOT_PATH);
+	int slot = getInt(RESUME_SLOT_PATH);
 	unlink(RESUME_SLOT_PATH);
-	State_read();
-	state_slot = last_state_slot;
+	if (exists(RA_HARDCORE_PATH) && RA_isLoading()) {
+		deferred_resume_slot = slot;
+		deferred_resume_at = SDL_GetTicks();
+		return;
+	}
+	State_resumeSlot(slot);
+}
+static void State_updateDeferredResume(void) { // once per frame until it's decided
+	if (deferred_resume_slot<0) return;
+	if (RA_isLoading() && SDL_GetTicks()-deferred_resume_at<RESUME_WAIT_MS) return;
+	if (RA_isHardcore()) RA_notify("RetroAchievements  \xC2\xB7  Hardcore", "Started fresh", "Save states would end hardcore, in-game saves still work");
+	else State_resumeSlot(deferred_resume_slot);
+	deferred_resume_slot = -1;
 }
 
 ///////////////////////////////
@@ -1476,19 +1501,18 @@ static void OptionList_init(const struct retro_core_option_definition *defs) {
 			strcpy(item->name, getOptionNameFromKey(def->key,def->desc));
 			
 			if (def->info) {
+				// the hint under the list gets three lines across the screen; when that's not enough
+				// it says so, and A shows the whole text (in a smaller font, so even the longest fit)
+				#define MORE_HINT "... (A for more)"
 				len = strlen(def->info) + 1;
-				item->desc = calloc(len, sizeof(char));
-				strncpy(item->desc, def->info, len);
+				item->desc = calloc(len + strlen(MORE_HINT), sizeof(char));
+				strcpy(item->desc, def->info);
+				int hint_width = SCALE1(FIXED_WIDTH/FIXED_SCALE - PADDING*2);
+				GFX_wrapTextEnding(font.tiny, item->desc, hint_width, 3, MORE_HINT);
 
-				item->full = calloc(len, sizeof(char));
-				strncpy(item->full, item->desc, len);
-				// item->desc[len-1] = '\0';
-				
-				// these magic numbers are more about chars per line than pixel width 
-				// so it's not going to be relative to the screen size, only the scale
-				// what does that even mean?
-				GFX_wrapText(font.tiny, item->desc, SCALE1(240), 2); // TODO magic number!
-				GFX_wrapText(font.medium, item->full, SCALE1(240), 7); // TODO: magic number!
+				item->full = calloc(len + 3, sizeof(char));
+				strcpy(item->full, def->info);
+				GFX_wrapText(font.small, item->full, hint_width, 12);
 			}
 		
 			for (count=0; def->values[count].value; count++);
@@ -1681,6 +1705,7 @@ static int setFastForward(int enable) {
 
 static uint32_t buttons = 0; // RETRO_DEVICE_ID_JOYPAD_* buttons
 static int ignore_menu = 0;
+static void Switcher_saveAndQuit(void);
 static void input_poll_callback(void) {
 	PAD_poll();
 
@@ -1688,8 +1713,10 @@ static void input_poll_callback(void) {
 	PWR_update(NULL, &show_setting, Menu_beforeSleep, Menu_afterSleep);
 
 	// I _think_ this can stay as is...
+	static uint32_t menu_down_at = 0;
 	if (PAD_justPressed(BTN_MENU)) {
 		ignore_menu = 0;
+		menu_down_at = SDL_GetTicks();
 	}
 	if (PAD_isPressed(BTN_MENU) && (PAD_isPressed(BTN_PLUS) || PAD_isPressed(BTN_MINUS))) {
 		ignore_menu = 1;
@@ -1761,6 +1788,15 @@ static void input_poll_callback(void) {
 				if (mapping->mod) ignore_menu = 1;
 			}
 		}
+	}
+	
+	// any other button while MENU is down makes it a combo (eg. MENU + volume for brightness), not a menu press
+	if (PAD_isPressed(BTN_MENU) && !PAD_justPressed(BTN_MENU) && PAD_justPressed(BTN_ANY)) ignore_menu = 1;
+	
+	// held, then let go: off to the game switcher
+	if (!ignore_menu && PAD_justReleased(BTN_MENU) && SDL_GetTicks()-menu_down_at>=SWITCHER_HOLD_MS) {
+		ignore_menu = 1;
+		Switcher_saveAndQuit();
 	}
 	
 	if (!ignore_menu && PAD_justReleased(BTN_MENU)) {
@@ -1887,6 +1923,20 @@ static bool set_rumble_state(unsigned port, enum retro_rumble_effect effect, uin
 	VIB_setStrength(strength);
 	return 1;
 }
+// the core's memory layout, which RetroAchievements needs to find each console's RAM
+static struct retro_memory_map memory_map = {0};
+static void saveMemoryMap(const struct retro_memory_map* map) {
+	if (memory_map.descriptors) free((void*)memory_map.descriptors);
+	struct retro_memory_descriptor* copy = malloc(sizeof(struct retro_memory_descriptor) * map->num_descriptors);
+	memcpy(copy, map->descriptors, sizeof(struct retro_memory_descriptor) * map->num_descriptors);
+	memory_map.descriptors = copy;
+	memory_map.num_descriptors = map->num_descriptors;
+}
+static void getCoreMemory(unsigned id, uint8_t** data, size_t* size) {
+	*data = core.get_memory_data ? core.get_memory_data(id) : NULL;
+	*size = core.get_memory_size ? core.get_memory_size(id) : 0;
+}
+
 static bool environment_callback(unsigned cmd, void *data) { // copied from picoarch initially
 	// LOG_info("environment_callback: %i\n", cmd);
 	
@@ -2179,6 +2229,11 @@ static bool environment_callback(unsigned cmd, void *data) { // copied from pico
 	// 	puts("RETRO_ENVIRONMENT_GET_FASTFORWARDING"); fflush(stdout);
 	// 	break;
 	// };
+	
+	case RETRO_ENVIRONMENT_SET_MEMORY_MAPS: {
+		if (data) saveMemoryMap((const struct retro_memory_map*)data);
+		break;
+	}
 	
 	default:
 		// LOG_debug("Unsupported environment cmd: %u\n", cmd);
@@ -3035,13 +3090,14 @@ void Core_close(void) {
 
 ///////////////////////////////////////
 
-#define MENU_ITEM_COUNT 5
+#define MENU_ITEM_COUNT 6
 #define MENU_SLOT_COUNT 8
 
 enum {
 	ITEM_CONT,
 	ITEM_SAVE,
 	ITEM_LOAD,
+	ITEM_ACHIEVEMENTS, // hidden unless the game has a RetroAchievements set
 	ITEM_OPTS,
 	ITEM_QUIT,
 };
@@ -3083,6 +3139,7 @@ static struct {
 		[ITEM_CONT] = "Continue",
 		[ITEM_SAVE] = "Save",
 		[ITEM_LOAD] = "Load",
+		[ITEM_ACHIEVEMENTS] = "Achievements",
 		[ITEM_OPTS] = "Options",
 		[ITEM_QUIT] = "Quit",
 	}
@@ -3090,7 +3147,7 @@ static struct {
 
 void Menu_init(void) {
 	menu.overlay = SDL_CreateRGBSurface(SDL_SWSURFACE,DEVICE_WIDTH,DEVICE_HEIGHT,FIXED_DEPTH,RGBA_MASK_AUTO);
-	SDLX_SetAlpha(menu.overlay, SDL_SRCALPHA, 0x80);
+	SDLX_SetAlpha(menu.overlay, SDL_SRCALPHA, 0xB8); // dark enough that the menu reads clearly over busy games
 	SDL_FillRect(menu.overlay, NULL, 0);
 	
 	char emu_name[256];
@@ -3272,6 +3329,39 @@ static int Menu_message(char* message, char** pairs) {
 	return MENU_CALLBACK_NOP; // TODO: this should probably be an arg
 }
 
+// an option's whole description, in the small font since some run to a dozen lines
+static int Menu_detail(char* text) {
+	GFX_setMode(MODE_MAIN);
+	int dirty = 1;
+	while (1) {
+		GFX_startFrame();
+		PAD_poll();
+
+		if (PAD_justPressed(BTN_A) || PAD_justPressed(BTN_B)) break;
+		
+		PWR_update(&dirty, NULL, Menu_beforeSleep, Menu_afterSleep);
+		
+		if (dirty) {
+			GFX_clear(screen);
+			int w,h;
+			int leading = SCALE1(16);
+			GFX_sizeText(font.small, text, leading, &w,&h);
+			int area = screen->h - SCALE1(PILL_SIZE+PADDING*2); // above the button
+			GFX_blitText(font.small, text, leading, COLOR_WHITE, screen, &(SDL_Rect){
+				0, SCALE1(PADDING) + (area - h) / 2, screen->w, h
+			});
+			GFX_blitButtonGroup((char*[]){ "B","BACK", NULL }, 0, screen, 1);
+			GFX_flip(screen);
+			dirty = 0;
+		}
+		else GFX_sync();
+		
+		hdmimon();
+	}
+	GFX_setMode(MODE_MENU);
+	return MENU_CALLBACK_NOP;
+}
+
 static int Menu_options(MenuList* list);
 
 static int MenuList_freeItems(MenuList* list, int i) {
@@ -3346,7 +3436,7 @@ static int OptionEmulator_optionChanged(MenuList* list, int i) {
 static int OptionEmulator_optionDetail(MenuList* list, int i) {
 	MenuItem* item = &list->items[i];
 	Option* option = OptionList_getOption(&config.core, item->key);
-	if (option->full) return Menu_message(option->full, (char*[]){ "B","BACK", NULL });
+	if (option->full) return Menu_detail(option->full);
 	else return MENU_CALLBACK_NOP;
 }
 static MenuList OptionEmulator_menu = {
@@ -3979,6 +4069,15 @@ static int Menu_options(MenuList* list) {
 					MenuItem* item = &items[i];
 					SDL_Color text_color = COLOR_WHITE;
 
+					// a name too long to sit beside its value (only when the row is already screen wide) is shortened
+					char name[256];
+					snprintf(name, sizeof(name), "%s", item->name);
+					if (type==MENU_VAR && item->value>=0 && mw>=screen->w - SCALE1(PADDING*2)) {
+						int vw;
+						TTF_SizeUTF8(font.tiny, item->values[item->value], &vw, NULL);
+						GFX_truncateText(font.small, item->name, name, mw - vw - SCALE1(OPTION_PADDING*4), 0);
+					}
+
 					if (j==selected_row) {
 						// gray pill
 						GFX_blitPill(ASSET_OPTION, screen, &(SDL_Rect){
@@ -3990,7 +4089,7 @@ static int Menu_options(MenuList* list) {
 						
 						// white pill
 						int w = 0;
-						TTF_SizeUTF8(font.small, item->name, &w, NULL);
+						TTF_SizeUTF8(font.small, name, &w, NULL);
 						w += SCALE1(OPTION_PADDING*2);
 						GFX_blitPill(ASSET_BUTTON, screen, &(SDL_Rect){
 							ox,
@@ -4002,7 +4101,7 @@ static int Menu_options(MenuList* list) {
 						
 						if (item->desc) desc = item->desc;
 					}
-					text = TTF_RenderUTF8_Blended(font.small, item->name, text_color);
+					text = TTF_RenderUTF8_Blended(font.small, name, text_color);
 					SDL_BlitSurface(text, NULL, screen, &(SDL_Rect){
 						ox+SCALE1(OPTION_PADDING),
 						oy+SCALE1((j*BUTTON_SIZE)+1)
@@ -4037,9 +4136,14 @@ static int Menu_options(MenuList* list) {
 			if (desc) {
 				int w,h;
 				GFX_sizeText(font.tiny, desc, SCALE1(12), &w,&h);
+				int y = screen->h - SCALE1(PADDING) - h;
+				// three lines reach up to the scroll arrow: sit lower (into the bottom padding) to clear it
+				int below_arrow = screen->h - SCALE1(PADDING + PILL_SIZE + BUTTON_SIZE) + SCALE1((PILL_SIZE - SCROLL_HEIGHT) / 2 + SCROLL_HEIGHT + 2);
+				if (y<below_arrow) y = below_arrow;
+				if (y+h>screen->h) y = screen->h - h;
 				GFX_blitText(font.tiny, desc, SCALE1(12), COLOR_WHITE, screen, &(SDL_Rect){
 					(screen->w - w) / 2,
-					screen->h - SCALE1(PADDING) - h,
+					y,
 					w,h
 				});
 			}
@@ -4220,6 +4324,36 @@ static void Menu_updateState(void) {
 	// LOG_info("save_path: %s (%i)\n", save_path, menu.save_exists);
 	// LOG_info("bmp_path: %s txt_path: %s (%i)\n", menu.bmp_path, menu.txt_path, menu.preview_exists);
 }
+// notes which disc a save was made on, next to it, like Menu_saveState does for the visible slots
+static void State_writeDisc(int slot) {
+	if (!menu.total_discs) return;
+	char txt_path[MAX_PATH*2];
+	snprintf(txt_path, sizeof(txt_path), "%s/%s.%d.txt", menu.minui_dir, game.name, slot);
+	char* disc = game.path; // the disc that's actually running
+	if (prefixMatch(menu.base_path, disc)) disc += strlen(menu.base_path);
+	putFile(txt_path, disc);
+}
+
+// the game's path as the launcher and the game switcher know it (the m3u for multi-disc games)
+static char* Game_switcherPath(void) {
+	char* path = game.m3u_path[0] ? game.m3u_path : game.path;
+	return prefixMatch(SDCARD_PATH, path) ? path + strlen(SDCARD_PATH) : path;
+}
+// a quick save with a screenshot into the hidden resume slot, then back to the launcher's game switcher
+static void Switcher_saveAndQuit(void) {
+	State_autosave();
+
+	char bmp_path[MAX_PATH*2];
+	snprintf(bmp_path, sizeof(bmp_path), "%s/%s.%d.bmp", menu.minui_dir, game.name, AUTO_RESUME_SLOT);
+	SDL_Surface* bitmap = SDL_CreateRGBSurfaceFrom(renderer.src, renderer.true_w, renderer.true_h, FIXED_DEPTH, renderer.src_p, RGBA_MASK_565);
+	SDL_SaveBMP(bitmap, bmp_path);
+	SDL_FreeSurface(bitmap);
+
+	Switcher_add(Game_switcherPath()); // so there's a way back (does nothing when it's already there or full)
+	putFile(SWITCHER_OPEN_PATH, "1");
+	quit = 1;
+}
+
 static void Menu_saveState(void) {
 	// LOG_info("Menu_saveState\n");
 
@@ -4309,7 +4443,42 @@ static char* getAlias(char* path, char* alias) {
 	}
 }
 
+#define MENU_ROW_SIZE 25 // a bit smaller than PILL_SIZE so every item fits between the title and the button hints
+
+// GFX_blitPill only works at the pill asset's own height, so the shorter menu pills draw their round ends here
+static void Menu_blitPill(uint32_t color, SDL_Surface* dst, SDL_Rect* rect) {
+	int h = rect->h;
+	int r = h / 2;
+	Uint8 cr,cg,cb;
+	SDL_GetRGB(color, dst->format, &cr,&cg,&cb);
+	SDL_Surface* ends = SDL_CreateRGBSurface(0, h,h, 32, 0x00FF0000,0x0000FF00,0x000000FF,0xFF000000);
+	if (!ends) return;
+	float c = h / 2.0f;
+	for (int y=0; y<h; y++) {
+		Uint32* row = (Uint32*)((Uint8*)ends->pixels + y * ends->pitch);
+		for (int x=0; x<h; x++) {
+			int inside = 0; // 4x4 samples per pixel for smooth edges
+			for (int sy=0; sy<4; sy++) {
+				for (int sx=0; sx<4; sx++) {
+					float dx = x + (sx + 0.5f) / 4 - c;
+					float dy = y + (sy + 0.5f) / 4 - c;
+					if (dx*dx + dy*dy <= c*c) inside += 1;
+				}
+			}
+			row[x] = SDL_MapRGBA(ends->format, cr,cg,cb, inside * 255 / 16);
+		}
+	}
+	int w = rect->w > h ? rect->w - h : 0; // not MAX(): it has no outer parens
+	SDL_BlitSurface(ends, &(SDL_Rect){0,0,r,h}, dst, &(SDL_Rect){rect->x,rect->y});
+	if (w>0) SDL_FillRect(dst, &(SDL_Rect){rect->x+r,rect->y,w,h}, color);
+	SDL_BlitSurface(ends, &(SDL_Rect){r,0,h-r,h}, dst, &(SDL_Rect){rect->x+r+w,rect->y});
+	SDL_FreeSurface(ends);
+}
+
 static void Menu_loop(void) {
+	char* menu_message = NULL; // a short confirmation over the menu, eg. after pinning to the game switcher
+	uint32_t menu_message_until = 0;
+	int in_switcher = -1; // looked up when first drawn
 	menu.bitmap = SDL_CreateRGBSurfaceFrom(renderer.src, renderer.true_w, renderer.true_h, FIXED_DEPTH, renderer.src_p, RGBA_MASK_565);
 	// LOG_info("Menu_loop:menu.bitmap %ix%i\n", menu.bitmap->w,menu.bitmap->h);
 	
@@ -4359,6 +4528,8 @@ static void Menu_loop(void) {
 	}
 		
 	int selected = 0; // resets every launch
+	int hidden_item = RA_hasAchievements() ? -1 : ITEM_ACHIEVEMENTS;
+	int item_count = MENU_ITEM_COUNT - (hidden_item!=-1);
 	Menu_initState();
 	
 	int status = STATUS_CONT; // TODO: no longer used?
@@ -4374,16 +4545,24 @@ static void Menu_loop(void) {
 		uint32_t now = SDL_GetTicks();
 
 		PAD_poll();
+		if (menu_message_until && now>=menu_message_until) {
+			menu_message_until = 0;
+			dirty = 1;
+		}
 		
 		if (PAD_justPressed(BTN_UP)) {
 			selected -= 1;
 			if (selected<0) selected += MENU_ITEM_COUNT;
+			if (selected==hidden_item) selected -= 1;
 			dirty = 1;
+			SFX_play(SFX_TICK);
 		}
 		else if (PAD_justPressed(BTN_DOWN)) {
 			selected += 1;
+			if (selected==hidden_item) selected += 1;
 			if (selected>=MENU_ITEM_COUNT) selected -= MENU_ITEM_COUNT;
 			dirty = 1;
+			SFX_play(SFX_TICK);
 		}
 		else if (PAD_justPressed(BTN_LEFT)) {
 			if (menu.total_discs>1 && selected==ITEM_CONT) {
@@ -4396,6 +4575,7 @@ static void Menu_loop(void) {
 				menu.slot -= 1;
 				if (menu.slot<0) menu.slot += MENU_SLOT_COUNT;
 				dirty = 1;
+				SFX_play(SFX_TICK);
 			}
 		}
 		else if (PAD_justPressed(BTN_RIGHT)) {
@@ -4409,6 +4589,7 @@ static void Menu_loop(void) {
 				menu.slot += 1;
 				if (menu.slot>=MENU_SLOT_COUNT) menu.slot -= MENU_SLOT_COUNT;
 				dirty = 1;
+				SFX_play(SFX_TICK);
 			}
 		}
 		
@@ -4419,8 +4600,24 @@ static void Menu_loop(void) {
 		if (PAD_justPressed(BTN_B) || (BTN_WAKE!=BTN_MENU && PAD_tappedMenu(now))) {
 			status = STATUS_CONT;
 			show_menu = 0;
+			SFX_play(SFX_BACK);
+		}
+		else if (PAD_justPressed(BTN_X)) {
+			SFX_play(SFX_CONFIRM);
+			// pins (or unpins) this game in the game switcher
+			char* path = Game_switcherPath();
+			if (Switcher_has(path)) {
+				Switcher_remove(path);
+				menu_message = "Unpinned from game switcher";
+			}
+			else if (Switcher_add(path)==-1) menu_message = "Game switcher is full (10)";
+			else menu_message = "Pinned to game switcher";
+			menu_message_until = now + 1500;
+			in_switcher = -1;
+			dirty = 1;
 		}
 		else if (PAD_justPressed(BTN_A)) {
+			SFX_play(SFX_CONFIRM);
 			switch(selected) {
 				case ITEM_CONT:
 				if (menu.total_discs && rom_disc!=menu.disc) {
@@ -4445,6 +4642,10 @@ static void Menu_loop(void) {
 					status = STATUS_LOAD;
 					show_menu = 0;
 				}
+				break;
+				case ITEM_ACHIEVEMENTS:
+					RA_showAchievements(screen, Menu_beforeSleep, Menu_afterSleep);
+					dirty = 1;
 				break;
 				case ITEM_OPTS: {
 					if (simple_mode) {
@@ -4515,61 +4716,67 @@ static void Menu_loop(void) {
 			SDL_FreeSurface(text);
 			
 			if (show_setting && !GetHDMI()) GFX_blitHardwareHints(screen, show_setting);
-			else GFX_blitButtonGroup((char*[]){ BTN_SLEEP==BTN_POWER?"POWER":"MENU","SLEEP", NULL }, 0, screen, 0);
+			else {
+				if (in_switcher==-1) in_switcher = Switcher_has(Game_switcherPath());
+				GFX_blitButtonGroup((char*[]){ BTN_SLEEP==BTN_POWER?"POWER":"MENU","SLEEP", "X",in_switcher ? "UNPIN" : "PIN", NULL }, 0, screen, 0);
+			}
 			GFX_blitButtonGroup((char*[]){ "B","BACK", "A","OKAY", NULL }, 1, screen, 1);
 			
 			// list
-			oy = (((DEVICE_HEIGHT / FIXED_SCALE) - PADDING * 2) - (MENU_ITEM_COUNT * PILL_SIZE)) / 2;
-			for (int i=0; i<MENU_ITEM_COUNT; i++) {
+			int text_oy = (SCALE1(MENU_ROW_SIZE) - TTF_FontHeight(font.medium)) / 2;
+			oy = (((DEVICE_HEIGHT / FIXED_SCALE) - PADDING * 2) - (item_count * MENU_ROW_SIZE)) / 2;
+			for (int i=0, r=0; i<MENU_ITEM_COUNT; i++) {
+				if (i==hidden_item) continue;
 				char* item = menu.items[i];
 				SDL_Color text_color = COLOR_WHITE;
 				
 				if (i==selected) {
 					// disc change
 					if (menu.total_discs>1 && i==ITEM_CONT) {				
-						GFX_blitPill(ASSET_DARK_GRAY_PILL, screen, &(SDL_Rect){
+						Menu_blitPill(RGB_DARK_GRAY, screen, &(SDL_Rect){
 							SCALE1(PADDING),
 							SCALE1(oy + PADDING),
 							screen->w - SCALE1(PADDING * 2),
-							SCALE1(PILL_SIZE)
+							SCALE1(MENU_ROW_SIZE)
 						});
-						text = TTF_RenderUTF8_Blended(font.large, disc_name, COLOR_WHITE);
+						text = TTF_RenderUTF8_Blended(font.medium, disc_name, COLOR_WHITE);
 						SDL_BlitSurface(text, NULL, screen, &(SDL_Rect){
 							screen->w - SCALE1(PADDING + BUTTON_PADDING) - text->w,
-							SCALE1(oy + PADDING + 4)
+							SCALE1(oy + PADDING) + text_oy
 						});
 						SDL_FreeSurface(text);
 					}
 					
-					TTF_SizeUTF8(font.large, item, &ow, NULL);
+					TTF_SizeUTF8(font.medium, item, &ow, NULL);
 					ow += SCALE1(BUTTON_PADDING*2);
 					
 					// pill
-					GFX_blitPill(ASSET_WHITE_PILL, screen, &(SDL_Rect){
+					Menu_blitPill(RGB_WHITE, screen, &(SDL_Rect){
 						SCALE1(PADDING),
-						SCALE1(oy + PADDING + (i * PILL_SIZE)),
+						SCALE1(oy + PADDING + (r * MENU_ROW_SIZE)),
 						ow,
-						SCALE1(PILL_SIZE)
+						SCALE1(MENU_ROW_SIZE)
 					});
 					text_color = COLOR_BLACK;
 				}
 				else {
 					// shadow
-					text = TTF_RenderUTF8_Blended(font.large, item, COLOR_BLACK);
+					text = TTF_RenderUTF8_Blended(font.medium, item, COLOR_BLACK);
 					SDL_BlitSurface(text, NULL, screen, &(SDL_Rect){
 						SCALE1(2 + PADDING + BUTTON_PADDING),
-						SCALE1(1 + PADDING + oy + (i * PILL_SIZE) + 4)
+						SCALE1(1 + PADDING + oy + (r * MENU_ROW_SIZE)) + text_oy
 					});
 					SDL_FreeSurface(text);
 				}
 				
 				// text
-				text = TTF_RenderUTF8_Blended(font.large, item, text_color);
+				text = TTF_RenderUTF8_Blended(font.medium, item, text_color);
 				SDL_BlitSurface(text, NULL, screen, &(SDL_Rect){
 					SCALE1(PADDING + BUTTON_PADDING),
-					SCALE1(oy + PADDING + (i * PILL_SIZE) + 4)
+					SCALE1(oy + PADDING + (r * MENU_ROW_SIZE)) + text_oy
 				});
 				SDL_FreeSurface(text);
+				r += 1;
 			}
 			
 			// slot preview
@@ -4609,6 +4816,15 @@ static void Menu_loop(void) {
 					else GFX_blitMessage(font.large, "Empty Slot", screen, &preview_rect);
 				}
 				
+				if (selected==ITEM_LOAD && RA_isHardcore()) {
+					// a heads up over the preview: loading turns this session's hardcore off
+					SDL_Surface* text = TTF_RenderUTF8_Blended(font.small, "Loading ends hardcore", COLOR_WHITE);
+					SDL_Rect box = { ox + (hw - text->w)/2 - SCALE1(BUTTON_PADDING), oy + hh - text->h - SCALE1(BUTTON_PADDING*2), text->w + SCALE1(BUTTON_PADDING*2), text->h + SCALE1(BUTTON_PADDING) };
+					GFX_blitRect(ASSET_DARK_GRAY_PILL, screen, &box);
+					SDL_BlitSurface(text, NULL, screen, &(SDL_Rect){ box.x + SCALE1(BUTTON_PADDING), box.y + SCALE1(BUTTON_PADDING)/2 });
+					SDL_FreeSurface(text);
+				}
+				
 				// pagination
 				ox += (pw-SCALE1(15*MENU_SLOT_COUNT))/2;
 				oy += hh+SCALE1(WINDOW_RADIUS);
@@ -4629,22 +4845,43 @@ static void Menu_loop(void) {
 				char* labels[] = { "Play time", "This session", "Sessions", "Average" };
 				char* values[] = { total, session, sessions, average };
 				#define STATS_ROWS 4
+				#define STATS_ROW_SIZE 22 // the stats box scales down with the menu so it clears the longest highlighted item
 
-				int pw = DEVICE_WIDTH / 2 + SCALE1(WINDOW_RADIUS*2);
-				int ph = SCALE1(PILL_SIZE * STATS_ROWS + BUTTON_PADDING*2);
+				// sized to fit its text so the box stays clear of the highlighted menu item
+				int label_w = 0, value_w = 0;
+				for (int i=0; i<STATS_ROWS; i++) {
+					int w;
+					TTF_SizeUTF8(font.small, labels[i], &w, NULL);
+					label_w = MAX(label_w, w);
+					TTF_SizeUTF8(font.small, values[i], &w, NULL);
+					value_w = MAX(value_w, w);
+				}
+				int pw = label_w + value_w + SCALE1(BUTTON_PADDING*3);
+				int ph = SCALE1(STATS_ROW_SIZE * STATS_ROWS + BUTTON_PADDING*2);
 				ox = DEVICE_WIDTH - pw - SCALE1(PADDING);
 				oy = (DEVICE_HEIGHT - ph) / 2;
 				GFX_blitRect(ASSET_BLACK_PILL, screen, &(SDL_Rect){ox,oy,pw,ph}); // matches the title pill
 
+				int stats_oy = (SCALE1(STATS_ROW_SIZE) - TTF_FontHeight(font.small)) / 2;
 				for (int i=0; i<STATS_ROWS; i++) {
-					int ty = oy + SCALE1(BUTTON_PADDING + i * PILL_SIZE + 4);
-					text = TTF_RenderUTF8_Blended(font.large, labels[i], COLOR_DARK_TEXT);
+					int ty = oy + SCALE1(BUTTON_PADDING + i * STATS_ROW_SIZE) + stats_oy;
+					text = TTF_RenderUTF8_Blended(font.small, labels[i], COLOR_DARK_TEXT);
 					SDL_BlitSurface(text, NULL, screen, &(SDL_Rect){ox + SCALE1(BUTTON_PADDING), ty});
 					SDL_FreeSurface(text);
-					text = TTF_RenderUTF8_Blended(font.large, values[i], COLOR_WHITE);
+					text = TTF_RenderUTF8_Blended(font.small, values[i], COLOR_WHITE);
 					SDL_BlitSurface(text, NULL, screen, &(SDL_Rect){ox + pw - SCALE1(BUTTON_PADDING) - text->w, ty});
 					SDL_FreeSurface(text);
 				}
+			}
+	
+			if (menu_message_until) {
+				SDL_Surface* text = TTF_RenderUTF8_Blended(font.large, menu_message, COLOR_WHITE);
+				int pw = text->w + SCALE1(BUTTON_PADDING*4);
+				int ph = text->h + SCALE1(BUTTON_PADDING*2);
+				SDL_Rect box = { (screen->w-pw)/2, (screen->h-ph)/2, pw, ph };
+				GFX_blitRect(ASSET_DARK_GRAY_PILL, screen, &box);
+				SDL_BlitSurface(text, NULL, screen, &(SDL_Rect){ box.x + (pw-text->w)/2, box.y + (ph-text->h)/2 });
+				SDL_FreeSurface(text);
 			}
 	
 			GFX_flip(screen);
@@ -4839,6 +5076,7 @@ int main(int argc , char* argv[]) {
 	options_menu.items[1].desc = (char*)core.version;
 	
 	Core_load();
+	RA_init((char*)core.tag, game.tmp_path[0] ? game.tmp_path : game.path, game.data, game.size, memory_map.num_descriptors ? &memory_map : NULL, getCoreMemory);
 	Input_init(NULL);
 	Config_readOptions(); // but others load and report options later (eg. nes)
 	Config_readControls(); // restore controls (after the core has reported its defaults)
@@ -4889,6 +5127,9 @@ int main(int argc , char* argv[]) {
 		}
 
 		Play_tick();
+		RA_doFrame();
+		RA_update();
+		State_updateDeferredResume();
 		if (show_menu) Menu_loop();
 		
 		if (toggle_thread) {
@@ -4924,6 +5165,7 @@ int main(int argc , char* argv[]) {
 	}
 
 	Play_save();
+	RA_quit();
 	Menu_quit();
 	QuitSettings();
 	

@@ -103,6 +103,7 @@ SDL_Surface* PLAT_initVideo(void) {
 	int p = FIXED_PITCH;
 	vid.window   = SDL_CreateWindow("", SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, h,w, SDL_WINDOW_SHOWN);
 	vid.renderer = SDL_CreateRenderer(vid.window,-1,SDL_RENDERER_ACCELERATED|SDL_RENDERER_PRESENTVSYNC);
+	if (!vid.renderer) vid.renderer = SDL_CreateRenderer(vid.window,-1,SDL_RENDERER_SOFTWARE); // eg. headless tests
 	
 	// SDL_RendererInfo info;
 	// SDL_GetRendererInfo(vid.renderer, &info);
@@ -218,6 +219,48 @@ void PLAT_blitRenderer(GFX_Renderer* renderer) {
 	);
 }
 
+// GPU textures drawn over the screen on the next flip, see api.h (here so the GPU paths can be tried on a Mac)
+struct GFX_Texture {
+	SDL_Texture* texture;
+};
+#define TEXTURE_QUEUE_SIZE 48
+static struct { GFX_Texture* texture; SDL_Rect dst; int alpha; int shade; } texture_queue[TEXTURE_QUEUE_SIZE];
+static int texture_queue_count = 0;
+
+GFX_Texture* PLAT_createTexture(SDL_Surface* surface) {
+	if (!surface || !vid.renderer || getenv("MINUI_NO_GPU")) return NULL;
+	SDL_Texture* texture = SDL_CreateTextureFromSurface(vid.renderer, surface);
+	if (!texture) return NULL;
+	SDL_SetTextureBlendMode(texture, SDL_BLENDMODE_BLEND);
+	SDL_SetTextureScaleMode(texture, SDL_ScaleModeLinear);
+	GFX_Texture* self = malloc(sizeof(GFX_Texture));
+	self->texture = texture;
+	return self;
+}
+void PLAT_destroyTexture(GFX_Texture* self) {
+	if (!self) return;
+	for (int i=0; i<texture_queue_count; i++) if (texture_queue[i].texture==self) texture_queue[i].texture = NULL;
+	SDL_DestroyTexture(self->texture);
+	free(self);
+}
+void PLAT_queueTexture(GFX_Texture* self, SDL_Rect* dst, int alpha, int shade) {
+	if (!self || texture_queue_count==TEXTURE_QUEUE_SIZE || dst->w<=0 || dst->h<=0) return;
+	texture_queue[texture_queue_count++] = (typeof(texture_queue[0])){ self, *dst, alpha, shade };
+}
+static void drawTextureQueue(void) {
+	for (int i=0; i<texture_queue_count; i++) {
+		GFX_Texture* self = texture_queue[i].texture;
+		if (!self) continue;
+		SDL_Rect* dst = &texture_queue[i].dst;
+		int shade = texture_queue[i].shade;
+		SDL_SetTextureAlphaMod(self->texture, texture_queue[i].alpha);
+		SDL_SetTextureColorMod(self->texture, shade, shade, shade);
+		if (rotate) SDL_RenderCopyEx(vid.renderer, self->texture, NULL, &(SDL_Rect){ device_height + dst->x, dst->y, dst->w, dst->h }, rotate*90, &(SDL_Point){ -dst->x, -dst->y }, SDL_FLIP_NONE);
+		else SDL_RenderCopy(vid.renderer, self->texture, NULL, dst);
+	}
+	texture_queue_count = 0;
+}
+
 void PLAT_flip(SDL_Surface* IGNORED, int ignored) {
 	
 	if (!vid.blit) {
@@ -231,9 +274,20 @@ void PLAT_flip(SDL_Surface* IGNORED, int ignored) {
 			LOG_info("not rotated\n");
 			SDL_RenderCopy(vid.renderer, vid.texture, NULL,NULL);
 		}
+		drawTextureQueue();
+		char* shot = getenv("MINUI_GPU_SHOT"); // tests: what actually reached the display, GPU textures included
+		if (shot) {
+			int w, h;
+			SDL_GetRendererOutputSize(vid.renderer, &w, &h);
+			SDL_Surface* out = SDL_CreateRGBSurfaceWithFormat(0, w, h, 32, SDL_PIXELFORMAT_ARGB8888);
+			SDL_RenderReadPixels(vid.renderer, NULL, SDL_PIXELFORMAT_ARGB8888, out->pixels, out->pitch);
+			SDL_SaveBMP(out, shot);
+			SDL_FreeSurface(out);
+		}
 		SDL_RenderPresent(vid.renderer);
 		return;
 	}
+	texture_queue_count = 0;
 	
 	if (!vid.blit) resizeVideo(FIXED_WIDTH,FIXED_HEIGHT,FIXED_PITCH); // !!!???
 	

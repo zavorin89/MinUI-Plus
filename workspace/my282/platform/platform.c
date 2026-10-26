@@ -169,6 +169,7 @@ static struct VID_Context {
 	SDL_Texture* effect;
 	SDL_Texture* border;
 	char border_path[MAX_PATH];
+	SDL_Texture* notification;
 
 	SDL_Surface* buffer;
 	SDL_Surface* screen;
@@ -316,6 +317,7 @@ void PLAT_quitVideo(void) {
 	if (vid.target) SDL_DestroyTexture(vid.target);
 	if (vid.effect) SDL_DestroyTexture(vid.effect);
 	if (vid.border) SDL_DestroyTexture(vid.border);
+	if (vid.notification) SDL_DestroyTexture(vid.notification);
 	SDL_DestroyTexture(vid.texture);
 	SDL_DestroyRenderer(vid.renderer);
 	SDL_DestroyWindow(vid.window);
@@ -552,6 +554,67 @@ void PLAT_setBorder(const char* path) {
 	if (vid.border) strcpy(vid.border_path, path);
 }
 
+static int notification_alpha = 255;
+void PLAT_setNotification(SDL_Surface* overlay) {
+	if (vid.notification) SDL_DestroyTexture(vid.notification);
+	vid.notification = NULL;
+	if (!overlay) return;
+	vid.notification = SDL_CreateTextureFromSurface(vid.renderer, overlay);
+	if (vid.notification) {
+		SDL_SetTextureBlendMode(vid.notification, SDL_BLENDMODE_BLEND);
+		SDL_SetTextureAlphaMod(vid.notification, notification_alpha);
+	}
+}
+void PLAT_setNotificationAlpha(int alpha) {
+	notification_alpha = alpha;
+	if (vid.notification) SDL_SetTextureAlphaMod(vid.notification, alpha);
+}
+
+///////////////////////////////
+
+// GPU textures drawn over the screen on the next flip, see api.h
+struct GFX_Texture {
+	SDL_Texture* texture;
+};
+#define TEXTURE_QUEUE_SIZE 48
+static struct { GFX_Texture* texture; SDL_Rect dst; int alpha; int shade; } texture_queue[TEXTURE_QUEUE_SIZE];
+static int texture_queue_count = 0;
+
+GFX_Texture* PLAT_createTexture(SDL_Surface* surface) {
+	if (!surface) return NULL;
+	SDL_Texture* texture = SDL_CreateTextureFromSurface(vid.renderer, surface);
+	if (!texture) return NULL;
+	SDL_SetTextureBlendMode(texture, SDL_BLENDMODE_BLEND);
+	SDL_SetTextureScaleMode(texture, SDL_ScaleModeLinear); // smooth when drawn at a different size
+	GFX_Texture* self = malloc(sizeof(GFX_Texture));
+	self->texture = texture;
+	return self;
+}
+void PLAT_destroyTexture(GFX_Texture* self) {
+	if (!self) return;
+	for (int i=0; i<texture_queue_count; i++) if (texture_queue[i].texture==self) texture_queue[i].texture = NULL; // not drawn after it's gone
+	SDL_DestroyTexture(self->texture);
+	free(self);
+}
+void PLAT_queueTexture(GFX_Texture* self, SDL_Rect* dst, int alpha, int shade) {
+	if (!self || texture_queue_count==TEXTURE_QUEUE_SIZE || dst->w<=0 || dst->h<=0) return;
+	texture_queue[texture_queue_count++] = (typeof(texture_queue[0])){ self, *dst, alpha, shade };
+}
+// the queue, rotated like the screen (around the same point so everything lines up), then emptied
+static void drawTextureQueue(void) {
+	for (int i=0; i<texture_queue_count; i++) {
+		GFX_Texture* self = texture_queue[i].texture;
+		if (!self) continue;
+		SDL_Rect* dst = &texture_queue[i].dst;
+		int shade = texture_queue[i].shade;
+		SDL_SetTextureAlphaMod(self->texture, texture_queue[i].alpha);
+		SDL_SetTextureColorMod(self->texture, shade, shade, shade);
+		if (rotate) SDL_RenderCopyEx(vid.renderer, self->texture, NULL, &(SDL_Rect){ dst->x, device_width + dst->y, dst->w, dst->h }, rotate*90, &(SDL_Point){ -dst->x, -dst->y }, SDL_FLIP_NONE);
+		else SDL_RenderCopy(vid.renderer, self->texture, NULL, dst);
+	}
+	texture_queue_count = 0;
+}
+
 void PLAT_blitRenderer(GFX_Renderer* renderer) {
 	vid.blit = renderer;
 	SDL_RenderClear(vid.renderer);
@@ -564,10 +627,12 @@ void PLAT_flip(SDL_Surface* IGNORED, int ignored) {
 		SDL_UpdateTexture(vid.texture,NULL,vid.screen->pixels,vid.screen->pitch);
 		if (rotate) SDL_RenderCopyEx(vid.renderer,vid.texture,NULL,&(SDL_Rect){0,device_width,device_width,device_height},rotate*90,&(SDL_Point){0,0},SDL_FLIP_NONE);
 		else SDL_RenderCopy(vid.renderer, vid.texture, NULL,NULL);
+		drawTextureQueue(); // eg. the carousel's art, over the menu
 		SDL_RenderPresent(vid.renderer);
 		return;
 	}
 	
+	texture_queue_count = 0; // only menus queue textures
 	// uint32_t then = SDL_GetTicks();
 	SDL_UpdateTexture(vid.texture,NULL,vid.blit->src,vid.blit->src_p);
 	// LOG_info("blit blocked for %ims (%i,%i)\n", SDL_GetTicks()-then,vid.buffer->w,vid.buffer->h);
@@ -645,6 +710,12 @@ void PLAT_flip(SDL_Surface* IGNORED, int ignored) {
 		else SDL_RenderCopy(vid.renderer, vid.effect, &(SDL_Rect){0,0,dst_rect->w,dst_rect->h},dst_rect);
 	}
 	
+	// notifications (eg. achievements) go over everything, positioned like the border
+	if (vid.notification) {
+		if (rotate) SDL_RenderCopyEx(vid.renderer,vid.notification,NULL,&(SDL_Rect){ox,oy,device_width,device_height},rotate*90,NULL,SDL_FLIP_NONE);
+		else SDL_RenderCopy(vid.renderer, vid.notification, NULL, NULL);
+	}
+	
 	// uint32_t then = SDL_GetTicks();
 	SDL_RenderPresent(vid.renderer);
 	// LOG_info("SDL_RenderPresent blocked for %ims\n", SDL_GetTicks()-then);
@@ -695,9 +766,9 @@ void PLAT_getBatteryStatus(int* is_charging, int* charge) {
 	else           *charge =  10;
 
 	// wifi status, just hooking into the regular PWR polling
-	// char status[16];
-	// getFile("/sys/class/net/wlan0/operstate", status,16);
-	// online = prefixMatch("up", status);
+	char status[16];
+	getFile("/sys/class/net/wlan0/operstate", status,16);
+	online = prefixMatch("up", status);
 }
 
 #define LED_PATH "/sys/class/leds/led1/brightness"
@@ -728,7 +799,7 @@ void PLAT_powerOff(void) {
 
 ///////////////////////////////
 
-void PLAT_setCPUSpeed(int speed) {
+static void setCPUSpeed(int speed, int wait) {
 	int freq = 0;
 	int cpu  = 1;
 	switch (speed) {
@@ -739,8 +810,14 @@ void PLAT_setCPUSpeed(int speed) {
 	}
 
 	char cmd[128];
-	sprintf(cmd,"overclock.elf userspace %d %d 384 1080 0", cpu, freq);
+	sprintf(cmd,"overclock.elf userspace %d %d 384 1080 0%s", cpu, freq, wait ? "" : " &");
 	system(cmd);
+}
+void PLAT_setCPUSpeed(int speed) {
+	setCPUSpeed(speed, 1);
+}
+void PLAT_setCPUSpeedAsync(int speed) {
+	setCPUSpeed(speed, 0);
 }
 
 #define RUMBLE_PATH "/sys/devices/virtual/timed_output/vibrator/enable"
@@ -749,7 +826,9 @@ void PLAT_setRumble(int strength) {
 }
 
 int PLAT_pickSampleRate(int requested, int max) {
-	return MIN(requested, max);
+	// the firmware mixes everything at 48000Hz (asound.conf's dmix), so anything else gets converted again
+	// on its way out: output that and let minarch's resampler do the one conversion
+	return max;
 }
 
 char* PLAT_getModel(void) {

@@ -261,11 +261,14 @@ void setPlayTime(char* path, PlayTime* time) {
 		}
 		fclose(in);
 	}
-	writePlayTimeLine(out, path, time);
+	if (time) writePlayTimeLine(out, path, time);
 	fclose(out);
 	
 	rename(tmp_path, PLAYTIME_PATH);
 	sync();
+}
+void removePlayTime(char* path) {
+	setPlayTime(path, NULL);
 }
 int getPlayTimeTotals(int* total_seconds, char* top_path, int* top_seconds) {
 	*total_seconds = 0;
@@ -300,4 +303,54 @@ void formatPlayTime(int seconds, char* out) {
 	if (hours) sprintf(out, "%ih %im", hours, minutes);
 	else if (seconds>=60) sprintf(out, "%im", minutes);
 	else strcpy(out, "<1m");
+}
+
+///////////////////////////////
+
+int Switcher_load(char paths[SWITCHER_MAX][MAX_PATH]) {
+	FILE* file = fopen(SWITCHER_PATH, "r");
+	if (!file) return 0;
+	int count = 0;
+	char line[MAX_PATH];
+	while (count<SWITCHER_MAX && fgets(line, sizeof(line), file)) {
+		normalizeNewline(line);
+		trimTrailingNewlines(line);
+		if (!line[0]) continue;
+		strcpy(paths[count++], line);
+	}
+	fclose(file);
+	return count;
+}
+static void Switcher_save(char paths[SWITCHER_MAX][MAX_PATH], int count) {
+	FILE* file = fopen(SWITCHER_PATH, "w");
+	if (!file) return;
+	for (int i=0; i<count; i++) fprintf(file, "%s\n", paths[i]);
+	fclose(file);
+	sync();
+}
+int Switcher_has(char* path) {
+	char paths[SWITCHER_MAX][MAX_PATH];
+	int count = Switcher_load(paths);
+	for (int i=0; i<count; i++) if (exactMatch(paths[i], path)) return 1;
+	return 0;
+}
+int Switcher_add(char* path) {
+	char paths[SWITCHER_MAX][MAX_PATH];
+	int count = Switcher_load(paths);
+	for (int i=0; i<count; i++) if (exactMatch(paths[i], path)) return 0;
+	if (count==SWITCHER_MAX) return -1;
+	strcpy(paths[count++], path);
+	Switcher_save(paths, count);
+	return 1;
+}
+void Switcher_remove(char* path) {
+	char paths[SWITCHER_MAX][MAX_PATH];
+	int count = Switcher_load(paths);
+	int kept = 0;
+	for (int i=0; i<count; i++) {
+		if (exactMatch(paths[i], path)) continue;
+		if (kept!=i) strcpy(paths[kept], paths[i]);
+		kept += 1;
+	}
+	Switcher_save(paths, kept);
 }

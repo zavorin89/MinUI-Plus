@@ -21,12 +21,19 @@ SDL?=SDL
 
 TARGET = minarch
 INCDIR = -I. -I./libretro-common/include/ -I../common/ -I../../$(PLATFORM)/platform/
-SOURCE = $(TARGET).c ../common/scaler.c ../common/utils.c ../common/api.c ../../$(PLATFORM)/platform/platform.c
+SOURCE = $(TARGET).c ra.c ra_http.c ra_cache.c ra_chd.c libchdr/unity.c ../common/scaler.c ../common/utils.c ../common/api.c ../../$(PLATFORM)/platform/platform.c
+
+# RetroAchievements (rcheevos, vendored in rcheevos/), minus the Windows-only RAIntegration bridge
+RC = rcheevos/src
+SOURCE += $(wildcard $(RC)/api/*.c $(RC)/runtime/*.c $(RC)/util/*.c $(RC)/hash/*.c) $(RC)/client/rc_client.c $(RC)/libretro/rc_libretro.c
+INCDIR += -Ircheevos/include -I$(RC) -I$(RC)/libretro -Ilibchdr/include
 
 CC = $(CROSS_COMPILE)gcc
 CFLAGS   = $(ARCH) -fomit-frame-pointer
 CFLAGS  += $(INCDIR) -DPLATFORM=\"$(PLATFORM)\" -DUSE_$(SDL) -Ofast -std=gnu99
+CFLAGS  += -DWANT_RAW_DATA_SECTOR=1 -DWANT_SUBCODE=0 -DVERIFY_BLOCK_CRC=0 # libchdr, for hashing PlayStation .chd discs
 CFLAGS	+= -Os -flto
+CFLAGS	+= -DRC_CLIENT_SUPPORTS_HASH
 LDFLAGS	 = -ldl $(LIBS) -lmsettings -l$(SDL) -l$(SDL)_image -l$(SDL)_ttf -lpthread -lm -lz
 # CFLAGS  += -Wall -Wno-unused-variable -Wno-unused-function -Wno-format-overflow
 # CFLAGS  += -fsanitize=address -fno-common

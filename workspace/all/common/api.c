@@ -58,13 +58,144 @@ uint32_t RGB_DARK_GRAY;
 static struct GFX_Context {
 	SDL_Surface* screen;
 	SDL_Surface* assets;
+	SDL_Surface* assets_base; // untinted, so the theme can change while running
+	int theme;
 
 	int mode;
 	int vsync;
 } gfx;
 
-static SDL_Rect asset_rects[ASSET_COUNT];
+///////////////////////////////
+
 static uint32_t asset_rgbs[ASSET_COLORS];
+
+typedef struct Theme {
+	const char* name;
+	uint8_t r,g,b; // what white becomes
+} Theme;
+static const Theme themes[] = { // spread around the color wheel so no two look alike
+	{ "Vanilla",		0xff,0xff,0xff }, // the classic look
+	{ "Strawberry",		0xff,0x8f,0xa3 }, // red-pink
+	{ "Tangerine",		0xff,0xaa,0x5c }, // orange
+	{ "Cinnamon",		0xd9,0xa0,0x7a }, // muted warm brown
+	{ "Lemon",			0xff,0xe8,0x66 }, // yellow
+	{ "Lime",			0xc4,0xf0,0x6a }, // yellow-green
+	{ "Mint",			0x7f,0xf0,0xcc }, // aqua green
+	{ "Blue Raspberry",	0x7c,0xcf,0xff }, // sky blue
+	{ "Blueberry",		0x9d,0xae,0xff }, // periwinkle
+	{ "Grape",			0xc6,0x9c,0xff }, // purple
+	{ "Bubblegum",		0xff,0x96,0xe2 }, // magenta-pink
+};
+#define THEME_COUNT (int)(sizeof(themes)/sizeof(themes[0]))
+ThemeColors theme_colors = {
+	{TRIAD_WHITE}, {TRIAD_GRAY}, {TRIAD_LIGHT_TEXT}, {TRIAD_DARK_TEXT},
+};
+
+// a neutral grey of brightness v tinted by the theme, mixed toward white by keep/256 (for text that has to stay readable)
+static SDL_Color themeTint(int v, int keep) {
+	const Theme* t = &themes[gfx.theme];
+	int r = v * t->r / 255, g = v * t->g / 255, b = v * t->b / 255;
+	return (SDL_Color){ (r*(256-keep) + v*keep) >> 8, (g*(256-keep) + v*keep) >> 8, (b*(256-keep) + v*keep) >> 8 };
+}
+static uint32_t themeRGB(int v) {
+	SDL_Color c = themeTint(v, 0);
+	return SDL_MapRGB(gfx.screen->format, c.r, c.g, c.b);
+}
+// recolors the white and grey parts of the asset sheet, leaving colored ones (eg. the low battery red) alone
+static void tintAssets(void) {
+	if (!gfx.assets_base) return;
+	if (gfx.assets) SDL_FreeSurface(gfx.assets);
+	gfx.assets = SDL_ConvertSurface(gfx.assets_base, gfx.assets_base->format, 0);
+	SDLX_SetAlpha(gfx.assets, SDL_SRCALPHA, 0); // blended like the loaded sheet
+	if (!gfx.theme || gfx.assets->format->BytesPerPixel!=4) return; // vanilla is the sheet as drawn
+	SDL_LockSurface(gfx.assets);
+	SDL_PixelFormat* format = gfx.assets->format;
+	for (int y=0; y<gfx.assets->h; y++) {
+		uint32_t* row = (uint32_t*)((uint8_t*)gfx.assets->pixels + y * gfx.assets->pitch);
+		for (int x=0; x<gfx.assets->w; x++) {
+			uint8_t r,g,b,a;
+			SDL_GetRGBA(row[x], format, &r,&g,&b,&a);
+			if (!a) continue;
+			int lo = MIN(r, MIN(g, b));
+			int hi = MAX(r, MAX(g, b));
+			if (hi-lo>24) continue; // has its own color
+			SDL_Color c = themeTint((r+g+b)/3, 0);
+			row[x] = SDL_MapRGBA(format, c.r, c.g, c.b, a);
+		}
+	}
+	SDL_UnlockSurface(gfx.assets);
+}
+static void applyTheme(void) {
+	theme_colors.white = themeTint(0xff, 128); // text: half way, still clearly light
+	theme_colors.gray = themeTint(0x99, 128);
+	theme_colors.light_text = themeTint(0xcc, 128);
+	theme_colors.dark_text = themeTint(0x66, 64);
+
+	RGB_WHITE		= themeRGB(0xff);
+	RGB_BLACK		= SDL_MapRGB(gfx.screen->format, TRIAD_BLACK);
+	RGB_LIGHT_GRAY	= themeRGB(0x7f);
+	RGB_GRAY		= themeRGB(0x99);
+	RGB_DARK_GRAY	= themeRGB(0x26);
+
+	asset_rgbs[ASSET_WHITE_PILL]	= RGB_WHITE;
+	asset_rgbs[ASSET_BLACK_PILL]	= RGB_BLACK;
+	asset_rgbs[ASSET_DARK_GRAY_PILL]= RGB_DARK_GRAY;
+	asset_rgbs[ASSET_OPTION]		= RGB_DARK_GRAY;
+	asset_rgbs[ASSET_BUTTON]		= RGB_WHITE;
+	asset_rgbs[ASSET_PAGE_BG]		= RGB_WHITE;
+	asset_rgbs[ASSET_STATE_BG]		= RGB_WHITE;
+	asset_rgbs[ASSET_PAGE]			= RGB_BLACK;
+	asset_rgbs[ASSET_BAR]			= RGB_WHITE;
+	asset_rgbs[ASSET_BAR_BG]		= RGB_BLACK;
+	asset_rgbs[ASSET_BAR_BG_MENU]	= RGB_DARK_GRAY;
+	asset_rgbs[ASSET_UNDERLINE]		= RGB_GRAY;
+	asset_rgbs[ASSET_DOT]			= RGB_LIGHT_GRAY;
+	asset_rgbs[ASSET_HOLE]			= RGB_BLACK;
+
+	tintAssets();
+}
+int GFX_getThemeCount(void) {
+	return THEME_COUNT;
+}
+const char* GFX_getThemeName(int index) {
+	return themes[index].name;
+}
+int GFX_getTheme(void) {
+	return gfx.theme;
+}
+void GFX_setTheme(int index) {
+	if (index<0 || index>=THEME_COUNT) index = 0;
+	gfx.theme = index;
+	applyTheme();
+	putFile(THEME_PATH, (char*)themes[index].name);
+}
+
+// button labels and hints are a few dozen strings drawn on every redraw, so each is rendered once and kept
+#define HINT_CACHE_SIZE 48
+static struct { TTF_Font* font; uint32_t color; char text[128]; SDL_Surface* surface; uint32_t used; } hint_cache[HINT_CACHE_SIZE];
+static uint32_t hint_clock = 0;
+static SDL_Surface* renderHint(TTF_Font* font, char* text, SDL_Color color) { // owned by the cache, don't free it
+	uint32_t key = (color.r<<24) | (color.g<<16) | (color.b<<8) | color.a;
+	int oldest = 0;
+	for (int i=0; i<HINT_CACHE_SIZE; i++) {
+		if (hint_cache[i].surface && hint_cache[i].font==font && hint_cache[i].color==key && !strcmp(hint_cache[i].text, text)) {
+			hint_cache[i].used = ++hint_clock;
+			return hint_cache[i].surface;
+		}
+		if (!hint_cache[i].surface || (hint_cache[oldest].surface && hint_cache[i].used<hint_cache[oldest].used)) oldest = i;
+	}
+	SDL_Surface* surface = TTF_RenderUTF8_Blended(font, text, color);
+	if (!surface || strlen(text)>=sizeof(hint_cache[0].text)) return surface; // too long to keep (rare): the caller can't free it, so it leaks once
+	if (hint_cache[oldest].surface) SDL_FreeSurface(hint_cache[oldest].surface);
+	hint_cache[oldest].font = font;
+	hint_cache[oldest].color = key;
+	strcpy(hint_cache[oldest].text, text);
+	hint_cache[oldest].surface = surface;
+	hint_cache[oldest].used = ++hint_clock;
+	return surface;
+}
+
+static SDL_Rect asset_rects[ASSET_COUNT];
 GFX_Fonts font;
 
 ///////////////////////////////
@@ -102,27 +233,6 @@ SDL_Surface* GFX_init(int mode) {
 	gfx.vsync = VSYNC_STRICT;
 	gfx.mode = mode;
 	
-	RGB_WHITE		= SDL_MapRGB(gfx.screen->format, TRIAD_WHITE);
-	RGB_BLACK		= SDL_MapRGB(gfx.screen->format, TRIAD_BLACK);
-	RGB_LIGHT_GRAY	= SDL_MapRGB(gfx.screen->format, TRIAD_LIGHT_GRAY);
-	RGB_GRAY		= SDL_MapRGB(gfx.screen->format, TRIAD_GRAY);
-	RGB_DARK_GRAY	= SDL_MapRGB(gfx.screen->format, TRIAD_DARK_GRAY);
-	
-	asset_rgbs[ASSET_WHITE_PILL]	= RGB_WHITE;
-	asset_rgbs[ASSET_BLACK_PILL]	= RGB_BLACK;
-	asset_rgbs[ASSET_DARK_GRAY_PILL]= RGB_DARK_GRAY;
-	asset_rgbs[ASSET_OPTION]		= RGB_DARK_GRAY;
-	asset_rgbs[ASSET_BUTTON]		= RGB_WHITE;
-	asset_rgbs[ASSET_PAGE_BG]		= RGB_WHITE;
-	asset_rgbs[ASSET_STATE_BG]		= RGB_WHITE;
-	asset_rgbs[ASSET_PAGE]			= RGB_BLACK;
-	asset_rgbs[ASSET_BAR]			= RGB_WHITE;
-	asset_rgbs[ASSET_BAR_BG]		= RGB_BLACK;
-	asset_rgbs[ASSET_BAR_BG_MENU]	= RGB_DARK_GRAY;
-	asset_rgbs[ASSET_UNDERLINE]		= RGB_GRAY;
-	asset_rgbs[ASSET_DOT]			= RGB_LIGHT_GRAY;
-	asset_rgbs[ASSET_HOLE]			= RGB_BLACK;
-	
 	asset_rects[ASSET_WHITE_PILL]		= (SDL_Rect){SCALE4( 1, 1,30,30)};
 	asset_rects[ASSET_BLACK_PILL]		= (SDL_Rect){SCALE4(33, 1,30,30)};
 	asset_rects[ASSET_DARK_GRAY_PILL]	= (SDL_Rect){SCALE4(65, 1,30,30)};
@@ -152,7 +262,22 @@ SDL_Surface* GFX_init(int mode) {
 	char asset_path[MAX_PATH];
 	sprintf(asset_path, RES_PATH "/assets@%ix.png", FIXED_SCALE);
 	if (!exists(asset_path)) LOG_info("missing assets, you're about to segfault dummy!\n");
-	gfx.assets = IMG_Load(asset_path);
+	gfx.assets_base = IMG_Load(asset_path);
+	
+	// the saved theme, by name so reordering the list doesn't change anyone's pick
+	gfx.theme = 0;
+	char theme_name[64] = "";
+	if (exists(THEME_PATH)) getFile(THEME_PATH, theme_name, sizeof(theme_name));
+	for (int i=0; i<THEME_COUNT; i++) {
+		if (prefixMatch((char*)themes[i].name, theme_name)) gfx.theme = i;
+	}
+	// flavors that were replaced by more distinct ones
+	char* renamed[][2] = { { "Peach", "Tangerine" }, { "Matcha", "Lime" } };
+	for (int r=0; r<2; r++) {
+		if (!prefixMatch(renamed[r][0], theme_name)) continue;
+		for (int i=0; i<THEME_COUNT; i++) if (!strcmp(themes[i].name, renamed[r][1])) gfx.theme = i;
+	}
+	applyTheme();
 	
 	TTF_Init();
 	font.large 	= TTF_OpenFont(FONT_PATH, SCALE1(FONT_LARGE));
@@ -168,12 +293,16 @@ SDL_Surface* GFX_init(int mode) {
 	return gfx.screen;
 }
 void GFX_quit(void) {
+	for (int i=0; i<HINT_CACHE_SIZE; i++) if (hint_cache[i].surface) SDL_FreeSurface(hint_cache[i].surface);
+	memset(hint_cache, 0, sizeof(hint_cache));
 	TTF_CloseFont(font.large);
 	TTF_CloseFont(font.medium);
 	TTF_CloseFont(font.small);
 	TTF_CloseFont(font.tiny);
 	
 	SDL_FreeSurface(gfx.assets);
+	SDL_FreeSurface(gfx.assets_base);
+	gfx.assets = gfx.assets_base = NULL;
 	
 	GFX_freeAAScaler();
 	
@@ -228,6 +357,11 @@ void GFX_sync(void) {
 FALLBACK_IMPLEMENTATION int PLAT_supportsOverscan(void) { return 0; }
 FALLBACK_IMPLEMENTATION int PLAT_supportsBorder(void) { return 0; }
 FALLBACK_IMPLEMENTATION void PLAT_setBorder(const char* path) { }
+FALLBACK_IMPLEMENTATION void PLAT_setNotification(SDL_Surface* overlay) { }
+FALLBACK_IMPLEMENTATION void PLAT_setNotificationAlpha(int alpha) { }
+FALLBACK_IMPLEMENTATION GFX_Texture* PLAT_createTexture(SDL_Surface* surface) { return NULL; } // no GPU path, callers draw in software
+FALLBACK_IMPLEMENTATION void PLAT_destroyTexture(GFX_Texture* texture) { }
+FALLBACK_IMPLEMENTATION void PLAT_queueTexture(GFX_Texture* texture, SDL_Rect* dst, int alpha, int shade) { }
 FALLBACK_IMPLEMENTATION void PLAT_setEffectColor(int next_color) { }
 
 int GFX_truncateText(TTF_Font* font, const char* in_name, char* out_name, int max_width, int padding) {
@@ -235,77 +369,97 @@ int GFX_truncateText(TTF_Font* font, const char* in_name, char* out_name, int ma
 	strcpy(out_name, in_name);
 	TTF_SizeUTF8(font, out_name, &text_width, NULL);
 	text_width += padding;
-	
-	while (text_width>max_width) {
-		int len = strlen(out_name);
-		if (len<=4) break; // nothing left to trim, avoids writing before out_name
-		int cut = len-4;
-		while (cut>0 && (out_name[cut] & 0xC0)==0x80) cut--; // don't split a multibyte UTF-8 character
-		strcpy(&out_name[cut], "...\0");
-		TTF_SizeUTF8(font, out_name, &text_width, NULL);
-		text_width += padding;
+	if (text_width<=max_width) return text_width;
+
+	// the longest start (on a whole UTF-8 character) that fits with "..." after it, found by halving
+	// instead of trimming a character at a time, so a long name costs a few measurements instead of dozens
+	int len = strlen(in_name);
+	int lo = 0, hi = len; // byte lengths: lo always fits (or is where we give up), hi never does
+	int lo_width = 0;
+	while (hi-lo>1) {
+		int mid = (lo + hi) / 2;
+		while (mid>lo && (in_name[mid] & 0xC0)==0x80) mid--; // back to the start of a character
+		if (mid==lo) { // only continuation bytes between: step forward to the next character instead
+			mid = lo + 1;
+			while (mid<hi && (in_name[mid] & 0xC0)==0x80) mid++;
+			if (mid>=hi) break;
+		}
+		memcpy(out_name, in_name, mid);
+		strcpy(out_name+mid, "...");
+		int w;
+		TTF_SizeUTF8(font, out_name, &w, NULL);
+		w += padding;
+		if (w<=max_width) { lo = mid; lo_width = w; }
+		else hi = mid;
 	}
-	
-	return text_width;
+	int keep = lo;
+	if (!keep) { // nothing fits, show at least one character (like before)
+		keep = 1;
+		while (keep<len && (in_name[keep] & 0xC0)==0x80) keep++;
+	}
+	int trimmed = keep;
+	while (trimmed>1 && (in_name[trimmed-1]==' ' || in_name[trimmed-1]=='.')) trimmed--; // no "Name ..." or "Name...."
+	memcpy(out_name, in_name, trimmed);
+	strcpy(out_name+trimmed, "...");
+	if (trimmed==lo && lo) return lo_width;
+	TTF_SizeUTF8(font, out_name, &text_width, NULL);
+	return text_width + padding;
 }
-int GFX_wrapText(TTF_Font* font, char* str, int max_width, int max_lines) {
+// wraps str in place at spaces so no line is wider than max_width, keeping the line breaks it already has;
+// with more text than max_lines (0 for no limit) the last line stops at a whole word and ends in ending
+// (eg. "..."), so str needs strlen(ending) spare bytes
+int GFX_wrapTextEnding(TTF_Font* font, char* str, int max_width, int max_lines, const char* ending) {
 	if (!str) return 0;
-	
-	int line_width;
-	int max_line_width = 0;
+	int widest = 0;
+	int lines = 0;
 	char* line = str;
-	char buffer[MAX_PATH];
-	
-	TTF_SizeUTF8(font, line, &line_width, NULL);
-	if (line_width<=max_width) {
-		line_width = GFX_truncateText(font,line,buffer,max_width,0);
-		strcpy(line,buffer);
-		return line_width;
-	}
-	
-	char* prev = NULL;
-	char* tmp = line;
-	int lines = 1;
-	int i = 0;
-	while (!max_lines || lines<max_lines) {
-		tmp = strchr(tmp, ' ');
-		if (!tmp) {
-			if (prev) {
-				TTF_SizeUTF8(font, line, &line_width, NULL);
-				if (line_width>=max_width) {
-					if (line_width>max_line_width) max_line_width = line_width;
-					prev[0] = '\n';
-					line = prev + 1;
-				}
+	while (1) {
+		lines += 1;
+		// the last space (or the paragraph's end) where this line still fits; a lone word that's too wide stays whole
+		char* cut = NULL;
+		int width = 0;
+		for (char* end=line; ; end++) {
+			if (*end && *end!=' ' && *end!='\n') continue;
+			char c = *end;
+			*end = '\0';
+			int w;
+			TTF_SizeUTF8(font, line, &w, NULL);
+			*end = c;
+			if (w>max_width && cut) break;
+			cut = end;
+			width = w;
+			if (!c || c=='\n' || w>max_width) break;
+		}
+
+		if (*cut && max_lines && lines==max_lines) { // out of lines: as many whole words as fit with the ending
+			char shown[MAX_PATH+64];
+			int keep = 0; // bytes of line kept
+			for (char* end=line; ; end++) {
+				if (*end && *end!=' ' && *end!='\n') continue;
+				int len = end - line;
+				while (len>0 && strchr(" .,;:", line[len-1])) len--; // no "word ..." or "word,..."
+				snprintf(shown, sizeof(shown), "%.*s%s", len, line, ending);
+				int w;
+				TTF_SizeUTF8(font, shown, &w, NULL);
+				if (w>max_width && keep) break;
+				keep = len;
+				width = w;
+				if (!*end || *end=='\n' || w>max_width) break;
 			}
+			strcpy(line + keep, ending);
+			if (width>widest) widest = width;
 			break;
 		}
-		tmp[0] = '\0';
-		
-		TTF_SizeUTF8(font, line, &line_width, NULL);
 
-		if (line_width>=max_width) { // wrap
-			if (line_width>max_line_width) max_line_width = line_width;
-			tmp[0] = ' ';
-			tmp += 1;
-			prev[0] = '\n';
-			prev += 1;
-			line = prev;
-			lines += 1;
-		}
-		else { // continue
-			tmp[0] = ' ';
-			prev = tmp;
-			tmp += 1;
-		}
-		i += 1;
+		if (width>widest) widest = width;
+		if (!*cut) break;
+		*cut = '\n';
+		line = cut + 1;
 	}
-	
-	line_width = GFX_truncateText(font,line,buffer,max_width,0);
-	strcpy(line,buffer);
-	
-	if (line_width>max_line_width) max_line_width = line_width;
-	return max_line_width;
+	return widest;
+}
+int GFX_wrapText(TTF_Font* font, char* str, int max_width, int max_lines) {
+	return GFX_wrapTextEnding(font, str, max_width, max_lines, "...");
 }
 
 ///////////////////////////////
@@ -605,13 +759,16 @@ int GFX_getButtonWidth(char* hint, char* button) {
 		button_width += SCALE1(BUTTON_SIZE);
 	}
 	else {
+		// the cached render GFX_blitButton is about to draw, so the width costs nothing extra
 		button_width += SCALE1(BUTTON_SIZE) / 2;
-		TTF_SizeUTF8(special_case ? font.large : font.tiny, button, &width, NULL);
+		SDL_Surface* label = renderHint(special_case ? font.large : font.tiny, button, COLOR_BUTTON_TEXT);
+		width = label ? label->w : 0;
 		button_width += width;
 	}
 	button_width += SCALE1(BUTTON_MARGIN);
 	
-	TTF_SizeUTF8(font.small, hint, &width, NULL);
+	SDL_Surface* text = renderHint(font.small, hint, COLOR_WHITE);
+	width = text ? text->w : 0;
 	button_width += width + SCALE1(BUTTON_MARGIN);
 	return button_width;
 }
@@ -626,13 +783,13 @@ void GFX_blitButton(char* hint, char*button, SDL_Surface* dst, SDL_Rect* dst_rec
 		GFX_blitAsset(ASSET_BUTTON, NULL, dst, dst_rect);
 
 		// label
-		text = TTF_RenderUTF8_Blended(font.medium, button, COLOR_BUTTON_TEXT);
-		SDL_BlitSurface(text, NULL, dst, &(SDL_Rect){dst_rect->x+(SCALE1(BUTTON_SIZE)-text->w)/2,dst_rect->y+(SCALE1(BUTTON_SIZE)-text->h)/2});
+		text = renderHint(font.medium, button, COLOR_BUTTON_TEXT);
+		if (text) SDL_BlitSurface(text, NULL, dst, &(SDL_Rect){dst_rect->x+(SCALE1(BUTTON_SIZE)-text->w)/2,dst_rect->y+(SCALE1(BUTTON_SIZE)-text->h)/2});
 		ox += SCALE1(BUTTON_SIZE);
-		SDL_FreeSurface(text);
 	}
 	else {
-		text = TTF_RenderUTF8_Blended(special_case ? font.large : font.tiny, button, COLOR_BUTTON_TEXT);
+		text = renderHint(special_case ? font.large : font.tiny, button, COLOR_BUTTON_TEXT);
+		if (!text) return;
 		GFX_blitPill(ASSET_BUTTON, dst, &(SDL_Rect){dst_rect->x,dst_rect->y,SCALE1(BUTTON_SIZE)/2+text->w,SCALE1(BUTTON_SIZE)});
 		ox += SCALE1(BUTTON_SIZE)/4;
 		
@@ -640,15 +797,13 @@ void GFX_blitButton(char* hint, char*button, SDL_Surface* dst, SDL_Rect* dst_rec
 		SDL_BlitSurface(text, NULL, dst, &(SDL_Rect){ox+dst_rect->x,oy+dst_rect->y+(SCALE1(BUTTON_SIZE)-text->h)/2,text->w,text->h});
 		ox += text->w;
 		ox += SCALE1(BUTTON_SIZE)/4;
-		SDL_FreeSurface(text);
 	}
 	
 	ox += SCALE1(BUTTON_MARGIN);
 
 	// hint text
-	text = TTF_RenderUTF8_Blended(font.small, hint, COLOR_WHITE);
-	SDL_BlitSurface(text, NULL, dst, &(SDL_Rect){ox+dst_rect->x,dst_rect->y+(SCALE1(BUTTON_SIZE)-text->h)/2,text->w,text->h});
-	SDL_FreeSurface(text);
+	text = renderHint(font.small, hint, COLOR_WHITE);
+	if (text) SDL_BlitSurface(text, NULL, dst, &(SDL_Rect){ox+dst_rect->x,dst_rect->y+(SCALE1(BUTTON_SIZE)-text->h)/2,text->w,text->h});
 }
 void GFX_blitMessage(TTF_Font* font, char* msg, SDL_Surface* dst, SDL_Rect* dst_rect) {
 	if (!dst_rect) dst_rect = &(SDL_Rect){0,0,dst->w,dst->h};
@@ -933,6 +1088,7 @@ void GFX_blitText(TTF_Font* font, char* str, int leading, SDL_Color color, SDL_S
 #define ms SDL_GetTicks
 
 typedef int (*SND_Resampler)(const SND_Frame frame);
+static void SND_fillStream(uint8_t* stream, int len);
 static struct SND_Context {
 	int initialized;
 	double frame_rate;
@@ -949,12 +1105,19 @@ static struct SND_Context {
 	int frame_filled; // max_buf_w
 	
 	SND_Resampler resample;
+	SND_Frame previous; // the linear resampler's last input frame
+	int phase; // how far the next output sits between previous and the frame coming in, 0 to sample_rate_out
 } snd = {0};
+static void SFX_mix(int16_t* stream, int frames);
 static void SND_audioCallback(void* userdata, uint8_t* stream, int len) { // plat_sound_callback
+	SND_fillStream(stream, len);
+	SFX_mix((int16_t*)stream, len / (sizeof(int16_t) * 2)); // menu sounds and the achievement chime, over the game
+}
+static void SND_fillStream(uint8_t* stream, int len) {
 	
 	// return (void)memset(stream,0,len); // TODO: tmp, silent
 	
-	if (snd.frame_count==0) return;
+	if (snd.frame_count==0) return (void)memset(stream,0,len);
 	
 	int16_t *out = (int16_t *)stream;
 	len /= (sizeof(int16_t) * 2);
@@ -1010,29 +1173,34 @@ static int SND_resampleNone(SND_Frame frame) { // audio_resample_passthrough
 	if (snd.frame_in >= snd.frame_count) snd.frame_in = 0;
 	return 1;
 }
-static int SND_resampleNear(SND_Frame frame) { // audio_resample_nearest
-	static int diff = 0;
-	int consumed = 0;
-
-	if (diff < snd.sample_rate_out) {
-		snd.buffer[snd.frame_in++] = frame;
+// each output frame is a blend of the two input frames either side of it, instead of a copy of the nearest
+// (which repeats or drops frames and sounds rough). Called with the same frame until it returns 1: each call
+// either writes one output frame (returning 0) or takes the frame in as the new left-hand one (returning 1)
+static int SND_resampleLinear(SND_Frame frame) {
+	if (snd.phase<snd.sample_rate_out) {
+		int64_t t = snd.phase;
+		int64_t span = snd.sample_rate_out;
+		SND_Frame out = { // always between the two, so it fits back in 16 bits
+			.left  = (int16_t)(snd.previous.left  + (int)(((int64_t)(frame.left  - snd.previous.left)  * t) / span)),
+			.right = (int16_t)(snd.previous.right + (int)(((int64_t)(frame.right - snd.previous.right) * t) / span)),
+		};
+		snd.buffer[snd.frame_in++] = out;
 		if (snd.frame_in >= snd.frame_count) snd.frame_in = 0;
-		diff += snd.sample_rate_in;
+		snd.phase += snd.sample_rate_in;
+		return 0;
 	}
-
-	if (diff >= snd.sample_rate_out) {
-		consumed++;
-		diff -= snd.sample_rate_out;
-	}
-
-	return consumed;
+	snd.phase -= snd.sample_rate_out;
+	snd.previous = frame;
+	return 1;
 }
 static void SND_selectResampler(void) { // plat_sound_select_resampler
+	snd.previous = (SND_Frame){0,0};
+	snd.phase = 0;
 	if (snd.sample_rate_in==snd.sample_rate_out) {
 		snd.resample =  SND_resampleNone;
 	}
 	else {
-		snd.resample = SND_resampleNear;
+		snd.resample = SND_resampleLinear;
 	}
 }
 size_t SND_batchSamples(const SND_Frame* frames, size_t frame_count) { // plat_sound_write / plat_sound_write_resample
@@ -1117,6 +1285,7 @@ void SND_quit(void) { // plat_sound_finish
 	
 	SDL_PauseAudio(1);
 	SDL_CloseAudio();
+	snd.initialized = 0;
 	
 	if (snd.buffer) {
 		free(snd.buffer);
@@ -1126,10 +1295,224 @@ void SND_quit(void) { // plat_sound_finish
 
 ///////////////////////////////
 
+// sound effects: synthesized once at the output's sample rate, then mixed in by whichever callback owns the device
+#define SFX_VOICES 4
+static struct {
+	int rate; // what the bank was made for, 0 before
+	int16_t* samples[SFX_COUNT]; // mono
+	int lengths[SFX_COUNT];
+	struct { int sound; int position; } voices[SFX_VOICES]; // sound -1 when free
+	int own_device; // opened by SFX for menus (no game audio running)
+	int enabled; // menu sounds, -1 until read
+} sfx = { .enabled = -1 };
+
+// a decaying sine partial added into out: frequency, start, amplitude (0-1), decay time constant, all in seconds
+// (a rotating phasor and a per-sample decay factor, so it's multiplies instead of sinf/expf for every sample)
+static void SFX_partial(float* out, int length, int rate, float freq, float start, float amp, float tau) {
+	int from = start * rate;
+	float step = 2 * (float)M_PI * freq / rate;
+	float rc = cosf(step), rs = sinf(step);
+	float c = 1, sn = 0; // cos and sin of the phase
+	float decay = expf(-1.0f / (tau * rate));
+	float level = amp;
+	int attack = rate / 1000; // 1ms fade in, no click at the start
+	for (int i=from; i<length; i++) {
+		int n = i - from;
+		out[i] += level * (n<attack ? (float)n/attack : 1) * sn;
+		float nc = c*rc - sn*rs;
+		sn = sn*rc + c*rs;
+		c = nc;
+		level *= decay;
+		if (level<0.0005f) break; // inaudible from here on
+	}
+}
+// a burst of noise added into out, decaying over tau: the snap of a click. bright (0-1) mixes in more of its
+// high end (first difference) over the full band, darker clicks keep more low end
+static void SFX_noise(float* out, int length, int rate, float start, float amp, float tau, float bright) {
+	int from = start * rate;
+	uint32_t seed = 0x1234567; // the same click every time
+	float decay = expf(-1.0f / (tau * rate));
+	float level = amp;
+	float last = 0;
+	for (int i=from; i<length; i++) {
+		seed = seed * 1664525 + 1013904223;
+		float white = ((seed >> 9) / (float)(1 << 23)) * 2 - 1;
+		float high = (white - last) * 0.5f;
+		last = white;
+		out[i] += level * (high * bright + white * (1 - bright));
+		level *= decay;
+		if (level<0.0005f) break;
+	}
+}
+static void SFX_make(int sound, int rate) {
+	float seconds = sound==SFX_ACHIEVEMENT ? 1.2f : 0.05f;
+	int length = seconds * rate;
+	float* out = calloc(length, sizeof(float));
+	switch (sound) {
+		case SFX_TICK: // a crisp click: a snap of bright noise with a faint high ping
+			SFX_noise(out, length, rate, 0, 0.55f, 0.0012f, 0.85f);
+			SFX_partial(out, length, rate, 3800, 0, 0.12f, 0.0015f);
+			break;
+		case SFX_CONFIRM: // a fuller click with a little low "thock" under it, a beat longer than the tick
+			SFX_noise(out, length, rate, 0, 0.55f, 0.0018f, 0.7f);
+			SFX_partial(out, length, rate, 2600, 0, 0.10f, 0.002f);
+			SFX_partial(out, length, rate, 520, 0, 0.22f, 0.006f);
+			break;
+		case SFX_BACK: // softer and darker
+			SFX_noise(out, length, rate, 0, 0.40f, 0.0015f, 0.4f);
+			SFX_partial(out, length, rate, 1500, 0, 0.08f, 0.002f);
+			break;
+		case SFX_ACHIEVEMENT: { // a rising bell arpeggio: E6, G#6, B6, E7
+			float notes[] = { 1318.5f, 1661.2f, 1975.5f, 2637.0f };
+			for (int n=0; n<4; n++) {
+				float start = n * 0.085f;
+				float amp = n==3 ? 0.22f : 0.17f;
+				SFX_partial(out, length, rate, notes[n], start, amp, 0.32f);
+				SFX_partial(out, length, rate, notes[n]*2.01f, start, amp*0.25f, 0.12f); // bell overtone
+				SFX_partial(out, length, rate, notes[n]*3.02f, start, amp*0.08f, 0.06f);
+			}
+			break;
+		}
+	}
+	sfx.samples[sound] = malloc(length * sizeof(int16_t));
+	for (int i=0; i<length; i++) {
+		float v = out[i];
+		if (v>1) v = 1;
+		if (v<-1) v = -1;
+		sfx.samples[sound][i] = v * 32767;
+	}
+	sfx.lengths[sound] = length;
+	free(out);
+}
+static void SFX_mix(int16_t* stream, int frames) {
+	if (!sfx.rate) return;
+	for (int v=0; v<SFX_VOICES; v++) {
+		int sound = sfx.voices[v].sound;
+		if (sound<0) continue;
+		int16_t* samples = sfx.samples[sound];
+		int position = sfx.voices[v].position;
+		int count = MIN(frames, sfx.lengths[sound] - position);
+		for (int i=0; i<count; i++) {
+			int s = samples[position + i];
+			int l = stream[i*2] + s;
+			int r = stream[i*2+1] + s;
+			stream[i*2] = l>32767 ? 32767 : (l<-32768 ? -32768 : l);
+			stream[i*2+1] = r>32767 ? 32767 : (r<-32768 ? -32768 : r);
+		}
+		sfx.voices[v].position += count;
+		if (sfx.voices[v].position>=sfx.lengths[sound]) sfx.voices[v].sound = -1;
+	}
+}
+static void SFX_callback(void* userdata, uint8_t* stream, int len) { // the device SFX opens when no game is playing
+	memset(stream, 0, len);
+	SFX_mix((int16_t*)stream, len / (sizeof(int16_t) * 2));
+}
+static void SFX_prepare(void) {
+	int rate;
+	if (snd.initialized) rate = snd.sample_rate_out;
+	else {
+		if (!sfx.own_device) {
+			SDL_InitSubSystem(SDL_INIT_AUDIO);
+			SDL_AudioSpec want = {0}, have;
+			want.freq = PLAT_pickSampleRate(44100, MAX_SAMPLE_RATE);
+			want.format = AUDIO_S16;
+			want.channels = 2;
+			want.samples = SAMPLES;
+			want.callback = SFX_callback;
+			if (SDL_OpenAudio(&want, &have)<0) return;
+			sfx.own_device = have.freq;
+			for (int v=0; v<SFX_VOICES; v++) sfx.voices[v].sound = -1;
+			SDL_PauseAudio(0);
+			// opening the device puts the output back at full volume, until the volume buttons set it again: set it now
+			if (!GetHDMI()) SetVolume(GetVolume());
+		}
+		rate = sfx.own_device;
+	}
+	if (sfx.rate==rate) return;
+	SDL_LockAudio();
+	for (int i=0; i<SFX_COUNT; i++) { // made again, when first played, at the new rate
+		if (sfx.samples[i]) free(sfx.samples[i]);
+		sfx.samples[i] = NULL;
+		sfx.lengths[i] = 0;
+	}
+	for (int v=0; v<SFX_VOICES; v++) sfx.voices[v].sound = -1;
+	sfx.rate = rate;
+	SDL_UnlockAudio();
+}
+int SFX_menuSoundsEnabled(void) {
+	if (sfx.enabled==-1) sfx.enabled = exists(MENU_SOUNDS_PATH) ? getInt(MENU_SOUNDS_PATH)!=0 : 1; // on unless turned off
+	return sfx.enabled;
+}
+void SFX_setMenuSounds(int enabled) {
+	sfx.enabled = enabled;
+	putInt(MENU_SOUNDS_PATH, enabled);
+}
+// opening the audio device and making the sounds takes a moment (longer on a CPU busy just after boot),
+// so the launcher does it on a thread while its first frame is up instead of on the first button press
+static pthread_t sfx_thread;
+static volatile int sfx_warming = 0;
+static int sfx_thread_started = 0;
+static void* SFX_warmThread(void* arg) {
+	SFX_prepare();
+	if (sfx.rate) {
+		int sounds[] = { SFX_TICK, SFX_CONFIRM, SFX_BACK };
+		for (int i=0; i<3; i++) if (!sfx.samples[sounds[i]]) SFX_make(sounds[i], sfx.rate);
+	}
+	sfx_warming = 0;
+	return NULL;
+}
+void SFX_warmUp(void) {
+	if (sfx_thread_started || snd.initialized || sfx.rate || !SFX_menuSoundsEnabled()) return;
+	sfx_warming = 1;
+	if (pthread_create(&sfx_thread, NULL, SFX_warmThread, NULL)==0) sfx_thread_started = 1;
+	else sfx_warming = 0;
+}
+void SFX_play(int sound) {
+	if (sound<0 || sound>=SFX_COUNT) return;
+	if (sound!=SFX_ACHIEVEMENT && !SFX_menuSoundsEnabled()) return;
+	if (sfx_warming) return; // not ready yet: skipped rather than waited for
+	SFX_prepare();
+	if (!sfx.rate) return;
+	if (!sfx.samples[sound]) SFX_make(sound, sfx.rate); // only the sounds that get used (the chime is never made in the launcher)
+	SDL_LockAudio();
+	int voice = 0;
+	for (int v=0; v<SFX_VOICES; v++) { // a free voice, or the one furthest along
+		if (sfx.voices[v].sound<0) { voice = v; break; }
+		if (sfx.voices[v].position>sfx.voices[voice].position) voice = v;
+	}
+	if (sound==SFX_TICK) { // a quick run of ticks replaces itself instead of piling up
+		for (int v=0; v<SFX_VOICES; v++) if (sfx.voices[v].sound==SFX_TICK) { voice = v; break; }
+	}
+	sfx.voices[voice].sound = sound;
+	sfx.voices[voice].position = 0;
+	SDL_UnlockAudio();
+}
+void SFX_quit(void) {
+	if (sfx_thread_started) {
+		pthread_join(sfx_thread, NULL);
+		sfx_thread_started = 0;
+	}
+	if (!sfx.own_device) return;
+	for (int waited=0; waited<200; waited+=10) { // eg. the confirm sound when a game is launched
+		int playing = 0;
+		for (int v=0; v<SFX_VOICES; v++) if (sfx.voices[v].sound>=0) playing = 1;
+		if (!playing) break;
+		SDL_Delay(10);
+	}
+	SDL_PauseAudio(1);
+	SDL_CloseAudio();
+	sfx.own_device = 0;
+	sfx.rate = 0;
+}
+
+///////////////////////////////
+
 LID_Context lid = {
 	.has_lid = 0,
 	.is_open = 1,
 };
+
+FALLBACK_IMPLEMENTATION void PLAT_setCPUSpeedAsync(int speed) { PLAT_setCPUSpeed(speed); }
 
 FALLBACK_IMPLEMENTATION void PLAT_initLid(void) {  }
 FALLBACK_IMPLEMENTATION int PLAT_lidChanged(int* state) { return 0; }
@@ -1399,6 +1782,7 @@ int PAD_tappedMenu(uint32_t now) {
 	else if (PAD_isPressed(BTN_MENU) && BTN_MOD_BRIGHTNESS==BTN_MENU && (PAD_justPressed(BTN_MOD_PLUS) || PAD_justPressed(BTN_MOD_MINUS))) {
 		ignore_menu = 1;
 	}
+	else if (PAD_isPressed(BTN_MENU) && PAD_justPressed(BTN_ANY)) ignore_menu = 1; // part of a combo (eg. MENU + X), not a tap
 	return (!ignore_menu && PAD_justReleased(BTN_MENU) && now-menu_start<MENU_DELAY);
 }
 

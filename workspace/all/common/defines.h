@@ -22,6 +22,10 @@
 #define FAVORITES_PATH SHARED_USERDATA_PATH "/.minui/favorites.txt"
 #define POWER_PATH SHARED_USERDATA_PATH "/.minui/power.txt"
 #define PLAYTIME_PATH SHARED_USERDATA_PATH "/.minui/playtime.txt"
+#define SWITCHER_PATH SHARED_USERDATA_PATH "/.minui/switcher.txt" // games picked for the game switcher, paths without SDCARD_PATH
+#define SWITCHER_MAX 10
+#define SWITCHER_OPEN_PATH "/tmp/open_switcher" // left by minarch so the launcher opens straight into the switcher
+#define SWITCHER_HOLD_MS 500 // holding MENU this long opens the game switcher
 #define SIMPLE_MODE_PATH SHARED_USERDATA_PATH "/enable-simple-mode"
 #define AUTO_RESUME_PATH SHARED_USERDATA_PATH "/.minui/auto_resume.txt"
 #define AUTO_RESUME_SLOT 9
@@ -29,6 +33,7 @@
 #define FAUX_RECENT_PATH SDCARD_PATH "/Recently Played"
 #define FAUX_FAVORITES_PATH SDCARD_PATH "/Favorites"
 #define FAUX_MOSTPLAYED_PATH SDCARD_PATH "/Most Played" // opened from the info screen, not listed in the root
+#define FAUX_SWITCHER_PATH SDCARD_PATH "/Game Switcher" // opened by holding MENU, not listed in the root
 #define COLLECTIONS_PATH SDCARD_PATH "/Collections"
 #define BORDERS_PATH SDCARD_PATH "/Borders"
 
@@ -46,12 +51,16 @@
 #define TRIAD_LIGHT_TEXT 	0xcc,0xcc,0xcc
 #define TRIAD_DARK_TEXT 	0x66,0x66,0x66
 
-#define COLOR_WHITE			(SDL_Color){TRIAD_WHITE}
-#define COLOR_GRAY			(SDL_Color){TRIAD_GRAY}
+// the light colors follow the chosen theme (see GFX_setTheme), black never changes
+#define COLOR_WHITE			theme_colors.white
+#define COLOR_GRAY			theme_colors.gray
 #define COLOR_BLACK			(SDL_Color){TRIAD_BLACK}
-#define COLOR_LIGHT_TEXT	(SDL_Color){TRIAD_LIGHT_TEXT}
-#define COLOR_DARK_TEXT		(SDL_Color){TRIAD_DARK_TEXT}
-#define COLOR_BUTTON_TEXT	(SDL_Color){TRIAD_GRAY}
+#define COLOR_LIGHT_TEXT	theme_colors.light_text
+#define COLOR_DARK_TEXT		theme_colors.dark_text
+#define COLOR_BUTTON_TEXT	theme_colors.gray
+
+#define THEME_PATH SHARED_USERDATA_PATH "/.minui/theme.txt" // the theme's name
+#define MENU_SOUNDS_PATH SHARED_USERDATA_PATH "/.minui/menu_sounds.txt" // 0 turns menu sounds off
 
 // all before scale
 #define PILL_SIZE 30
@@ -203,6 +212,7 @@ enum {
 	BTN_ANALOG_DOWN	= 1 << BTN_ID_ANALOG_DOWN,
 	BTN_ANALOG_LEFT	= 1 << BTN_ID_ANALOG_LEFT,
 	BTN_ANALOG_RIGHT= 1 << BTN_ID_ANALOG_RIGHT,
+	BTN_ANY			= ((1 << BTN_ID_COUNT) - 1) & ~(1 << BTN_ID_MENU), // every button but MENU, for telling combos from MENU presses
 	
 	BTN_UP 		= BTN_DPAD_UP | BTN_ANALOG_UP,
 	BTN_DOWN 	= BTN_DPAD_DOWN | BTN_ANALOG_DOWN,

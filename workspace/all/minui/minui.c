@@ -1,11 +1,17 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <math.h>
 #include <msettings.h>
 #include <sys/types.h>
+#include <sys/stat.h>
 #include <dirent.h>
 #include <ctype.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include <signal.h>
+#if defined(__arm__) && defined(__linux__)
+#include <ucontext.h>
+#endif
 
 #include "defines.h"
 #include "api.h"
@@ -240,10 +246,35 @@ static char* favorites_sort_labels[FAVORITES_SORT_COUNT] = { "Sorted A-Z", "Sort
 #define FAVORITES_SORT_PATH SHARED_USERDATA_PATH "/.minui/favorites_sort.txt"
 static int favorites_sort = FAVORITES_SORT_NAME;
 
+// game folders show as a list or a carousel of box art, switched with SELECT
+#define VIEW_LIST 0
+#define VIEW_CAROUSEL 1
+#define VIEW_MODE_PATH SHARED_USERDATA_PATH "/.minui/view.txt"
+static int view_mode = VIEW_LIST;
+
+
+// plain game folders can be re-sorted with L2/R2 (Favorites cycles its own sorts)
+enum {
+	FOLDER_SORT_AZ,
+	FOLDER_SORT_ZA,
+	FOLDER_SORT_RECENT, // last played first, never played after (A-Z)
+	FOLDER_SORT_FAVORITES, // favorites first, each group A-Z
+	FOLDER_SORT_COUNT,
+};
+static char* folder_sort_labels[FOLDER_SORT_COUNT] = { "Sorted A-Z", "Sorted Z-A", "Last played first", "Favorites first" };
+#define FOLDER_SORT_PATH SHARED_USERDATA_PATH "/.minui/folder_sort.txt"
+static int folder_sort = FOLDER_SORT_AZ;
+
+static int isSortableFolder(char* path) { // a folder of games read from disk (not Tools, or one of the faux lists)
+	return prefixMatch(ROMS_PATH, path) && !suffixMatch(".m3u", path);
+}
+static void Directory_sort(Directory* self);
+
 static void Directory_index(Directory* self) {
 	int is_collection = prefixMatch(COLLECTIONS_PATH, self->path);
 	int is_unsorted_favorites = exactMatch(FAUX_FAVORITES_PATH, self->path) && favorites_sort!=FAVORITES_SORT_NAME;
-	int skip_index = exactMatch(FAUX_RECENT_PATH, self->path) || exactMatch(FAUX_MOSTPLAYED_PATH, self->path) || is_collection || is_unsorted_favorites; // not alphabetized
+	int is_unsorted_folder = isSortableFolder(self->path) && folder_sort>=FOLDER_SORT_RECENT; // letters are scattered, L1/R1 has nothing to jump between
+	int skip_index = exactMatch(FAUX_RECENT_PATH, self->path) || exactMatch(FAUX_MOSTPLAYED_PATH, self->path) || exactMatch(FAUX_SWITCHER_PATH, self->path) || is_collection || is_unsorted_favorites || is_unsorted_folder; // not alphabetized
 	
 	Hash* map = NULL;
 	char map_path[256];
@@ -296,7 +327,10 @@ static void Directory_index(Directory* self) {
 				Array_free(self->entries); // not EntryArray_free because we've just moved the entries from the original to the filtered one!
 				self->entries = entries;
 			}
-			if (resort) EntryArray_sort(self->entries);
+			if (resort) {
+				if (isSortableFolder(self->path)) Directory_sort(self);
+				else EntryArray_sort(self->entries);
+			}
 		}
 	}
 	
@@ -355,6 +389,9 @@ static Array* getRoot(void);
 static Array* getRecents(void);
 static Array* getFavorites(void);
 static Array* getMostPlayed(void);
+static Array* getSwitcher(void);
+static void Directory_loadLastPlayed(Directory* self);
+static int EntryArray_sortByLastPlayed(const void* a, const void* b);
 static void Directory_markFavorites(Directory* self);
 static Array* getCollection(char* path);
 static Array* getDiscs(char* path);
@@ -379,6 +416,9 @@ static Directory* Directory_new(char* path, int selected) {
 	else if (exactMatch(path, FAUX_MOSTPLAYED_PATH)) {
 		self->entries = getMostPlayed();
 	}
+	else if (exactMatch(path, FAUX_SWITCHER_PATH)) {
+		self->entries = getSwitcher();
+	}
 	else if (!exactMatch(path, COLLECTIONS_PATH) && prefixMatch(COLLECTIONS_PATH, path) && suffixMatch(".txt", path)) {
 		self->entries = getCollection(path);
 	}
@@ -390,8 +430,13 @@ static Directory* Directory_new(char* path, int selected) {
 	}
 	self->alphas = IntArray_new();
 	self->selected = selected;
+	if (exactMatch(path, FAUX_SWITCHER_PATH)) { // the game you were just in comes first
+		Directory_loadLastPlayed(self);
+		qsort(self->entries->items, self->entries->count, sizeof(void*), EntryArray_sortByLastPlayed);
+	}
+	Directory_markFavorites(self); // before sorting, which can put favorites first
+	if (isSortableFolder(path)) Directory_sort(self);
 	Directory_index(self);
-	Directory_markFavorites(self);
 	return self;
 }
 static void Directory_reindex(Directory* self) { // after adding, removing, or re-sorting entries
@@ -479,6 +524,20 @@ static void RecentArray_free(Array* self) {
 
 static Directory* top;
 static Array* stack; // DirectoryArray
+
+// the game switcher: holding MENU shows the games pinned to it, as screenshots from where each was left off
+static int inSwitcher(void) {
+	return top && exactMatch(top->path, FAUX_SWITCHER_PATH);
+}
+// lists of games can switch to the carousel; the main menu and Tools are always lists
+static int canCarousel(void) {
+	if (!top || stack->count<2) return 0;
+	return prefixMatch(ROMS_PATH, top->path) || prefixMatch(COLLECTIONS_PATH, top->path)
+		|| exactMatch(top->path, FAUX_RECENT_PATH) || exactMatch(top->path, FAUX_FAVORITES_PATH) || exactMatch(top->path, FAUX_MOSTPLAYED_PATH);
+}
+static int showsCarousel(void) {
+	return inSwitcher() || (view_mode==VIEW_CAROUSEL && canCarousel());
+}
 static Array* recents; // RecentArray
 static Array* favorites; // RecentArray
 
@@ -487,6 +546,7 @@ static int can_resume = 0;
 static int should_resume = 0; // set to 1 on BTN_RESUME but only if can_resume==1
 static int simple_mode = 0;
 static char slot_path[256];
+static int resume_slot = -1; // overrides the slot in slot_path when resuming, -1 to use it
 
 static int restore_depth = -1;
 static int restore_relative = -1;
@@ -535,12 +595,24 @@ static void addRecent(char* path, char* alias) {
 }
 
 static int hasEmu(char* emu_name) {
+	// asked for every recent, favorite and system on each start, so each answer is remembered
+	#define EMU_CACHE_SIZE 32
+	static struct { char name[64]; int has; } known[EMU_CACHE_SIZE];
+	static int known_count = 0;
+	for (int i=0; i<known_count; i++) if (exactMatch(known[i].name, emu_name)) return known[i].has;
+
 	char pak_path[256];
 	sprintf(pak_path, "%s/Emus/%s.pak/launch.sh", PAKS_PATH, emu_name);
-	if (exists(pak_path)) return 1;
-
-	sprintf(pak_path, "%s/Emus/%s/%s.pak/launch.sh", SDCARD_PATH, PLATFORM, emu_name);
-	return exists(pak_path);
+	int has = exists(pak_path);
+	if (!has) {
+		sprintf(pak_path, "%s/Emus/%s/%s.pak/launch.sh", SDCARD_PATH, PLATFORM, emu_name);
+		has = exists(pak_path);
+	}
+	if (known_count<EMU_CACHE_SIZE && strlen(emu_name)<sizeof(known[0].name)) {
+		strcpy(known[known_count].name, emu_name);
+		known[known_count++].has = has;
+	}
+	return has;
 }
 static int hasCue(char* dir_path, char* cue_path) { // NOTE: dir_path not rom_path
 	char* tmp = strrchr(dir_path, '/') + 1; // folder name
@@ -810,6 +882,68 @@ static Array* getFavorites(void) {
 	else if (favorites_sort==FAVORITES_SORT_SYSTEM) qsort(entries->items, entries->count, sizeof(void*), EntryArray_sortBySystem);
 	return entries;
 }
+static int EntryArray_sortReverse(const void* a, const void* b) {
+	return EntryArray_sortEntry(b, a);
+}
+static int EntryArray_sortByLastPlayed(const void* a, const void* b) {
+	Entry* item1 = *(Entry**)a;
+	Entry* item2 = *(Entry**)b;
+	if (item1->play.last_played!=item2->play.last_played) return item1->play.last_played<item2->play.last_played ? 1 : -1;
+	return strcasecmp(item1->name, item2->name);
+}
+static int EntryArray_sortFavoritesFirst(const void* a, const void* b) {
+	Entry* item1 = *(Entry**)a;
+	Entry* item2 = *(Entry**)b;
+	if (item1->favorite!=item2->favorite) return item2->favorite - item1->favorite;
+	return strcasecmp(item1->name, item2->name);
+}
+// fills each entry's play.last_played from play time, falling back to its place in Recently Played
+static void Directory_loadLastPlayed(Directory* self) {
+	Hash* last = Hash_new();
+	FILE* file = fopen(PLAYTIME_PATH, "r");
+	if (file) {
+		char line[MAX_PATH];
+		while (fgets(line, sizeof(line), file)) {
+			char* path;
+			PlayTime time;
+			if (!parsePlayTimeLine(line, &path, &time) || !time.last_played) continue;
+			char value[16];
+			sprintf(value, "%d", time.last_played);
+			Hash_set(last, path, value);
+		}
+		fclose(file);
+	}
+	int sd_len = strlen(SDCARD_PATH);
+	for (int i=0; i<self->entries->count; i++) {
+		Entry* entry = self->entries->items[i];
+		char* path = entry->path + sd_len; // play time and recents leave off SDCARD_PATH
+		char* value = Hash_get(last, path);
+		entry->play.last_played = value ? atoi(value) : 0;
+		if (!entry->play.last_played) {
+			int r = RecentArray_indexOf(recents, path); // played before play time was tracked
+			if (r!=-1) entry->play.last_played = recents->count - r; // tiny, so after anything with a real time
+		}
+	}
+	Hash_free(last);
+}
+static void Directory_sort(Directory* self) {
+	switch (folder_sort) {
+		case FOLDER_SORT_ZA:
+			qsort(self->entries->items, self->entries->count, sizeof(void*), EntryArray_sortReverse);
+			break;
+		case FOLDER_SORT_RECENT:
+			Directory_loadLastPlayed(self);
+			qsort(self->entries->items, self->entries->count, sizeof(void*), EntryArray_sortByLastPlayed);
+			break;
+		case FOLDER_SORT_FAVORITES:
+			qsort(self->entries->items, self->entries->count, sizeof(void*), EntryArray_sortFavoritesFirst);
+			break;
+		default:
+			EntryArray_sort(self->entries);
+			break;
+	}
+}
+
 static void Directory_markFavorites(Directory* self) {
 	if (exactMatch(self->path, SDCARD_PATH) || exactMatch(self->path, FAUX_FAVORITES_PATH)) return;
 
@@ -950,6 +1084,49 @@ static int hasRoms(char* dir_name) {
 	// if (!has) printf("No roms for %s!\n", dir_name);
 	return has;
 }
+static Array* getSwitcher(void) {
+	Array* entries = Array_new();
+	char paths[SWITCHER_MAX][MAX_PATH];
+	int count = Switcher_load(paths);
+	for (int i=0; i<count; i++) {
+		char sd_path[MAX_PATH];
+		sprintf(sd_path, "%s%s", SDCARD_PATH, paths[i]);
+		if (!exists(sd_path)) continue;
+		char emu_name[256];
+		getEmuName(sd_path, emu_name);
+		if (!hasEmu(emu_name)) continue;
+		Entry* entry = Entry_new(sd_path, ENTRY_ROM);
+		// use the name it was launched or favorited under (map.txt aliases) when there is one
+		Recent* named = NULL;
+		int r = RecentArray_indexOf(recents, paths[i]);
+		if (r!=-1) named = recents->items[r];
+		if (!named || !named->alias) {
+			r = RecentArray_indexOf(favorites, paths[i]);
+			if (r!=-1) named = favorites->items[r];
+		}
+		if (named && named->alias) {
+			free(entry->name);
+			entry->name = strdup(named->alias);
+		}
+		Array_push(entries, entry);
+	}
+	return entries;
+}
+// the path an entry is pinned to the switcher under, relative to SDCARD_PATH, returns 0 if it can't be pinned
+static int getSwitcherPath(Entry* entry, char* path) {
+	if (!prefixMatch(ROMS_PATH, entry->path)) return 0;
+	char sd_path[MAX_PATH];
+	strcpy(sd_path, entry->path);
+	if (entry->type==ENTRY_DIR) { // a multi-disc folder pins its m3u, like minarch does
+		char* name = strrchr(entry->path, '/');
+		sprintf(sd_path, "%s%s.m3u", entry->path, name);
+		if (!exists(sd_path)) return 0;
+	}
+	else if (entry->type!=ENTRY_ROM) return 0;
+	strcpy(path, sd_path + strlen(SDCARD_PATH));
+	return 1;
+}
+
 static Array* getRoot(void) {
 	Array* root = Array_new();
 	
@@ -1301,20 +1478,21 @@ static char* escapeSingleQuotes(char* str) {
 
 ///////////////////////////////////////
 
-static void readyResumePath(char* rom_path, int type) {
+// where minarch notes a game's last used save slot, returns whether there is one
+static int getSlotPath(char* rom_path, int type, char* slot_path) {
 	char* tmp;
-	can_resume = 0;
+	slot_path[0] = '\0';
 	char path[256];
 	strcpy(path, rom_path);
 	
-	if (!prefixMatch(ROMS_PATH, path)) return;
+	if (!prefixMatch(ROMS_PATH, path)) return 0;
 	
 	char auto_path[256];
 	if (type==ENTRY_DIR) {
 		if (!hasCue(path, auto_path)) { // no cue?
 			tmp = strrchr(auto_path, '.') + 1; // extension
 			strcpy(tmp, "m3u"); // replace with m3u
-			if (!exists(auto_path)) return; // no m3u
+			if (!exists(auto_path)) return 0; // no m3u
 		}
 		strcpy(path, auto_path); // cue or m3u if one exists
 	}
@@ -1336,7 +1514,10 @@ static void readyResumePath(char* rom_path, int type) {
 	
 	sprintf(slot_path, "%s/.minui/%s/%s.txt", SHARED_USERDATA_PATH, emu_name, rom_file); // /.userdata/.minui/<EMU>/<romname>.ext.txt
 	
-	can_resume = exists(slot_path);
+	return exists(slot_path);
+}
+static void readyResumePath(char* rom_path, int type) {
+	can_resume = getSlotPath(rom_path, type, slot_path);
 }
 static void readyResume(Entry* entry) {
 	readyResumePath(entry->path, entry->type);
@@ -1411,7 +1592,9 @@ static void openRom(char* path, char* last) {
 
 	if (should_resume) {
 		char slot[16];
-		getFile(slot_path, slot, 16);
+		if (resume_slot>=0) sprintf(slot, "%d", resume_slot); // the switcher picked a specific save
+		else getFile(slot_path, slot, 16);
+		resume_slot = -1;
 		putFile(RESUME_SLOT_PATH, slot);
 		should_resume = 0;
 
@@ -1613,13 +1796,346 @@ static void loadLast(void) { // call after loading root directory
 
 ///////////////////////////////////////
 
+// multi-disc fix: games split into "Name (Disc 1)", "Name (Disc 2)"... get a folder and an m3u so they show
+// (and save) as one game. Runs at startup, only touching folders that need it.
+
+#define DISC_MAX 9
+static const char* disc_exts[] = { ".cue", ".ccd", ".chd", ".pbp", ".iso", ".img", ".bin", NULL }; // what an m3u lists, best first
+
+// finds "(Disc N)", "(Disk N)" or "(CD N)" (any case, "of M" allowed): copies the name before it into base, returns N or 0
+static int getDiscNumber(char* name, char* base) {
+	char* lower = strdup(name);
+	for (char* c=lower; *c; c++) *c = tolower(*c);
+	int number = 0;
+	char* at = NULL;
+	char* starts[] = { "(disc", "(disk", "(cd", NULL };
+	for (int i=0; starts[i] && !number; i++) {
+		char* hit = lower;
+		while ((hit = strstr(hit, starts[i]))) {
+			char* digits = hit + strlen(starts[i]);
+			while (*digits==' ') digits++;
+			if (*digits>='1' && *digits<='9') {
+				number = atoi(digits);
+				at = hit;
+				break;
+			}
+			hit += 1;
+		}
+	}
+	if (number>0 && number<=DISC_MAX && at>lower) {
+		int len = at - lower;
+		strncpy(base, name, len);
+		base[len] = '\0';
+		while (len>0 && base[len-1]==' ') base[--len] = '\0';
+	}
+	else number = 0;
+	free(lower);
+	return number;
+}
+static int discExtRank(char* name) { // lower is better, -1 when it's not a disc image
+	for (int i=0; disc_exts[i]; i++) if (suffixMatch((char*)disc_exts[i], name)) return i;
+	return -1;
+}
+static void copyFileIfMissing(char* from, char* to) {
+	if (!exists(from) || exists(to)) return;
+	FILE* in = fopen(from, "rb");
+	if (!in) return;
+	FILE* out = fopen(to, "wb");
+	if (out) {
+		char buffer[16384];
+		size_t n;
+		while ((n = fread(buffer, 1, sizeof(buffer), in))>0) fwrite(buffer, 1, n, out);
+		fclose(out);
+	}
+	fclose(in);
+}
+static time_t modifiedAt(char* path) {
+	struct stat st;
+	return stat(path, &st)==0 ? st.st_mtime : 0;
+}
+// replaces lines starting with old_path (followed by a tab or the end) with new_path in a list file
+// when new_path is already listed the old line is just dropped, so several discs of one game become one entry
+static void replaceListPath(char* list_path, char* old_path, char* new_path) {
+	static char before[64*1024];
+	FILE* file = fopen(list_path, "r");
+	if (!file) return;
+	size_t size = fread(before, 1, sizeof(before)-1, file);
+	before[size] = '\0';
+	fclose(file);
+
+	int len = strlen(old_path);
+	char listed_mid[MAX_PATH+2];
+	sprintf(listed_mid, "\n%s", new_path);
+	int listed = prefixMatch(new_path, before) || strstr(before, listed_mid)!=NULL;
+
+	static char out[64*1024];
+	out[0] = '\0';
+	int changed = 0;
+	char* line = before;
+	while (*line) {
+		char* end = strchr(line, '\n');
+		int line_len = end ? end - line + 1 : (int)strlen(line);
+		char text[MAX_PATH*2];
+		snprintf(text, sizeof(text), "%.*s", line_len, line);
+		line += line_len;
+		if (!strncmp(text, old_path, len) && (text[len]=='\t' || text[len]=='\n' || text[len]=='\0')) {
+			changed = 1;
+			if (listed) continue;
+			listed = 1;
+			char fixed[MAX_PATH*2];
+			snprintf(fixed, sizeof(fixed), "%s%s", new_path, text+len);
+			strcpy(text, fixed);
+		}
+		if (strlen(out)+strlen(text)<sizeof(out)) strcat(out, text);
+	}
+	if (changed) putFile(list_path, out);
+}
+
+// copies the progress kept under each disc's name to the m3u's, without touching the originals
+// discs are filenames inside dir, m3u_name is the m3u's filename
+static void moveDiscSaves(char* dir, char discs[DISC_MAX][MAX_PATH], int count, char* m3u_name) {
+	char probe[MAX_PATH];
+	sprintf(probe, "%s/%s", dir, discs[0]);
+	char tag[MAX_PATH];
+	getEmuName(probe, tag);
+
+	// memory card (and clock): the newest one, that's where the player got to
+	char* exts[] = { ".sav", ".rtc", NULL };
+	for (int e=0; exts[e]; e++) {
+		char newest[MAX_PATH] = "";
+		time_t newest_at = 0;
+		for (int d=0; d<count; d++) {
+			char path[MAX_PATH];
+			sprintf(path, "%s/Saves/%s/%s%s", SDCARD_PATH, tag, discs[d], exts[e]);
+			time_t at = modifiedAt(path);
+			if (at>newest_at) { newest_at = at; strcpy(newest, path); }
+		}
+		if (newest[0]) {
+			char to[MAX_PATH];
+			sprintf(to, "%s/Saves/%s/%s%s", SDCARD_PATH, tag, m3u_name, exts[e]);
+			copyFileIfMissing(newest, to);
+		}
+	}
+
+	// save states (in every core's folder for this system) with their screenshots, each noting which disc it was on
+	DIR* dh = opendir(SHARED_USERDATA_PATH);
+	if (!dh) return;
+	char prefix[MAX_PATH];
+	sprintf(prefix, "%s-", tag);
+	struct dirent* dp;
+	while ((dp = readdir(dh))) {
+		if (!prefixMatch(prefix, dp->d_name)) continue;
+		for (int slot=0; slot<=AUTO_RESUME_SLOT; slot++) {
+			char to[MAX_PATH];
+			sprintf(to, "%s/%s/%s.st%i", SHARED_USERDATA_PATH, dp->d_name, m3u_name, slot);
+			if (exists(to)) continue;
+			int best = -1;
+			time_t best_at = 0;
+			for (int d=0; d<count; d++) {
+				char from[MAX_PATH];
+				sprintf(from, "%s/%s/%s.st%i", SHARED_USERDATA_PATH, dp->d_name, discs[d], slot);
+				time_t at = modifiedAt(from);
+				if (at>best_at) { best_at = at; best = d; }
+			}
+			if (best==-1) continue;
+			char from[MAX_PATH];
+			sprintf(from, "%s/%s/%s.st%i", SHARED_USERDATA_PATH, dp->d_name, discs[best], slot);
+			copyFileIfMissing(from, to);
+
+			char minui_dir[MAX_PATH];
+			sprintf(minui_dir, "%s/.minui/%s", SHARED_USERDATA_PATH, tag);
+			char bmp_from[MAX_PATH], bmp_to[MAX_PATH], disc_txt[MAX_PATH];
+			sprintf(bmp_from, "%s/%s.%i.bmp", minui_dir, discs[best], slot);
+			sprintf(bmp_to, "%s/%s.%i.bmp", minui_dir, m3u_name, slot);
+			copyFileIfMissing(bmp_from, bmp_to);
+			sprintf(disc_txt, "%s/%s.%i.txt", minui_dir, m3u_name, slot);
+			if (!exists(disc_txt)) {
+				mkdir(minui_dir, 0755);
+				putFile(disc_txt, discs[best]); // loading this state starts the right disc
+			}
+		}
+	}
+	closedir(dh);
+}
+
+// writes folder/<folder name>.m3u listing the best image of each disc (names relative to folder)
+static void writeDiscPlaylist(char* folder, char discs[DISC_MAX][MAX_PATH], int count) {
+	char* name = strrchr(folder, '/') + 1;
+	char m3u_path[MAX_PATH];
+	sprintf(m3u_path, "%s/%s.m3u", folder, name);
+	char text[DISC_MAX*MAX_PATH] = "";
+	for (int d=0; d<count; d++) {
+		strcat(text, discs[d]);
+		strcat(text, "\n");
+	}
+	putFile(m3u_path, text);
+}
+
+// groups a folder's disc images by game: discs[game][disc number-1] = filename, returns how many games have 2+ discs
+typedef struct DiscGroup {
+	char base[MAX_PATH];
+	char discs[DISC_MAX][MAX_PATH]; // best image per disc number, "" when missing
+	int ranks[DISC_MAX];
+	int count; // discs found
+} DiscGroup;
+#define DISC_GROUP_MAX 64
+static int findDiscGroups(char* dir, DiscGroup* groups) {
+	int group_count = 0;
+	DIR* dh = opendir(dir);
+	if (!dh) return 0;
+	struct dirent* dp;
+	while ((dp = readdir(dh))) {
+		if (dp->d_name[0]=='.' || dp->d_type==DT_DIR) continue;
+		int rank = discExtRank(dp->d_name);
+		if (rank<0) continue;
+		char base[MAX_PATH];
+		int number = getDiscNumber(dp->d_name, base);
+		if (!number) continue;
+		DiscGroup* group = NULL;
+		for (int g=0; g<group_count; g++) if (exactMatch(groups[g].base, base)) group = &groups[g];
+		if (!group) {
+			if (group_count==DISC_GROUP_MAX) continue;
+			group = &groups[group_count++];
+			memset(group, 0, sizeof(DiscGroup));
+			strcpy(group->base, base);
+		}
+		int i = number - 1;
+		if (!group->discs[i][0] || rank<group->ranks[i]) {
+			if (!group->discs[i][0]) group->count += 1;
+			strcpy(group->discs[i], dp->d_name);
+			group->ranks[i] = rank;
+		}
+	}
+	closedir(dh);
+	return group_count;
+}
+// the discs in order with gaps closed up, returns how many
+static int orderedDiscs(DiscGroup* group, char discs[DISC_MAX][MAX_PATH]) {
+	int count = 0;
+	for (int i=0; i<DISC_MAX; i++) if (group->discs[i][0]) strcpy(discs[count++], group->discs[i]);
+	return count;
+}
+
+static void fixDiscFolder(char* system_dir) {
+	DiscGroup* groups = calloc(DISC_GROUP_MAX, sizeof(DiscGroup));
+
+	// loose discs: into a folder of their own, with every file that belongs to them (eg. a cue's bin tracks)
+	int group_count = findDiscGroups(system_dir, groups);
+	for (int g=0; g<group_count; g++) {
+		DiscGroup* group = &groups[g];
+		if (group->count<2) continue;
+		char folder[MAX_PATH];
+		sprintf(folder, "%s/%s", system_dir, group->base);
+		char m3u_check[MAX_PATH];
+		sprintf(m3u_check, "%s/%s.m3u", folder, group->base);
+		if (exists(m3u_check)) continue; // already set up, leave the loose copies alone
+		mkdir(folder, 0755);
+
+		char discs[DISC_MAX][MAX_PATH];
+		int count = orderedDiscs(group, discs);
+		DIR* dh = opendir(system_dir);
+		if (!dh) continue;
+		struct dirent* dp;
+		while ((dp = readdir(dh))) {
+			if (dp->d_name[0]=='.' || dp->d_type==DT_DIR) continue;
+			char base[MAX_PATH];
+			if (!getDiscNumber(dp->d_name, base) || !exactMatch(base, group->base)) continue;
+			char from[MAX_PATH], to[MAX_PATH];
+			sprintf(from, "%s/%s", system_dir, dp->d_name);
+			sprintf(to, "%s/%s", folder, dp->d_name);
+			rename(from, to);
+			// lists that pointed at a moved disc follow it to the m3u
+			char m3u_rel[MAX_PATH];
+			sprintf(m3u_rel, "%s/%s.m3u", folder + strlen(SDCARD_PATH), group->base);
+			char* old_rel = from + strlen(SDCARD_PATH);
+			replaceListPath(RECENT_PATH, old_rel, m3u_rel);
+			replaceListPath(FAVORITES_PATH, old_rel, m3u_rel);
+			replaceListPath(SWITCHER_PATH, old_rel, m3u_rel);
+		}
+		closedir(dh);
+		writeDiscPlaylist(folder, discs, count);
+		char m3u_name[MAX_PATH];
+		sprintf(m3u_name, "%s.m3u", group->base);
+		moveDiscSaves(folder, discs, count, m3u_name);
+		LOG_info("multi-disc: grouped %i discs into %s\n", count, folder);
+	}
+
+	// disc folders without an m3u
+	DIR* dh = opendir(system_dir);
+	if (dh) {
+		struct dirent* dp;
+		while ((dp = readdir(dh))) {
+			if (dp->d_name[0]=='.' || dp->d_type!=DT_DIR || hide(dp->d_name)) continue;
+			char folder[MAX_PATH];
+			sprintf(folder, "%s/%s", system_dir, dp->d_name);
+			char m3u_check[MAX_PATH];
+			sprintf(m3u_check, "%s/%s.m3u", folder, dp->d_name);
+			if (exists(m3u_check)) continue;
+			int count_here = findDiscGroups(folder, groups);
+			if (count_here!=1 || groups[0].count<2) continue; // one game's discs, nothing ambiguous
+			char discs[DISC_MAX][MAX_PATH];
+			int count = orderedDiscs(&groups[0], discs);
+			writeDiscPlaylist(folder, discs, count);
+			char m3u_name[MAX_PATH];
+			sprintf(m3u_name, "%s.m3u", dp->d_name);
+			moveDiscSaves(folder, discs, count, m3u_name);
+			LOG_info("multi-disc: added %s\n", m3u_check);
+		}
+		closedir(dh);
+	}
+	free(groups);
+}
+#define DISC_CHECK_PATH "/tmp/minui_disc_check.txt" // the system folders' modified times at the last check this boot
+static void getDiscStamp(char* stamp, size_t size) { // each system folder's name and modified time
+	stamp[0] = '\0';
+	DIR* dh = opendir(ROMS_PATH);
+	if (!dh) return;
+	struct dirent* dp;
+	while ((dp = readdir(dh))) {
+		if (dp->d_name[0]=='.' || dp->d_type!=DT_DIR) continue;
+		char system_dir[MAX_PATH], line[MAX_PATH+32];
+		sprintf(system_dir, "%s/%s", ROMS_PATH, dp->d_name);
+		snprintf(line, sizeof(line), "%s %ld\n", dp->d_name, (long)modifiedAt(system_dir));
+		if (strlen(stamp)+strlen(line)<size) strcat(stamp, line);
+	}
+	closedir(dh);
+}
+static void fixMultiDisc(void) {
+	// minui restarts after every game: only look again when a system folder changed (a file added, moved or removed)
+	char stamp[4096], last[4096] = "";
+	getDiscStamp(stamp, sizeof(stamp));
+	if (exists(DISC_CHECK_PATH)) getFile(DISC_CHECK_PATH, last, sizeof(last));
+	if (exactMatch(stamp, last)) return;
+
+	DIR* dh = opendir(ROMS_PATH);
+	if (!dh) return;
+	struct dirent* dp;
+	while ((dp = readdir(dh))) {
+		if (dp->d_name[0]=='.' || dp->d_type!=DT_DIR) continue;
+		char system_dir[MAX_PATH];
+		sprintf(system_dir, "%s/%s", ROMS_PATH, dp->d_name);
+		fixDiscFolder(system_dir);
+	}
+	closedir(dh);
+	sync();
+
+	getDiscStamp(stamp, sizeof(stamp)); // after fixing, which may itself have changed folders
+	putFile(DISC_CHECK_PATH, stamp);
+}
+
+///////////////////////////////////////
+
 static void Menu_init(void) {
+	fixMultiDisc(); // before anything reads folders or the lists it might update
 	stack = Array_new(); // array of open Directories
 	recents = Array_new();
 	favorites = Array_new();
 	loadFavorites();
 	favorites_sort = getInt(FAVORITES_SORT_PATH);
 	if (favorites_sort<0 || favorites_sort>=FAVORITES_SORT_COUNT) favorites_sort = FAVORITES_SORT_NAME;
+	folder_sort = getInt(FOLDER_SORT_PATH);
+	if (folder_sort<0 || folder_sort>=FOLDER_SORT_COUNT) folder_sort = FOLDER_SORT_AZ;
+	view_mode = getInt(VIEW_MODE_PATH)==VIEW_CAROUSEL ? VIEW_CAROUSEL : VIEW_LIST;
 
 	openDirectory(SDCARD_PATH, 0);
 	loadLast(); // restore state when available
@@ -1634,57 +2150,926 @@ static void Menu_quit(void) {
 
 // the selected entry's art, decoded once and pre-flattened onto black in
 // the screen's format so redraws are a straight copy instead of a PNG decode
-static char thumb_path[MAX_PATH];
-static SDL_Surface* thumb = NULL;
-static SDL_Surface* getThumb(Entry* entry, SDL_Surface* screen) {
-	char res_path[MAX_PATH];
+// the list's art: the last few decoded (missing art too), so moving back and forth doesn't decode again
+#define THUMB_CACHE_SIZE 8
+static struct { char path[MAX_PATH]; SDL_Surface* art; uint32_t used; int loaded; } thumbs[THUMB_CACHE_SIZE];
+static uint32_t thumb_clock = 0;
+static void getResPath(Entry* entry, char* res_path) {
 	char res_root[MAX_PATH];
 	strcpy(res_root, entry->path);
 	char* res_name = strrchr(entry->path, '/') + 1;
 	char* tmp = strrchr(res_root, '/');
 	tmp[0] = '\0';
 	sprintf(res_path, "%s/.res/%s.png", res_root, res_name);
-
-	if (exactMatch(res_path, thumb_path)) return thumb; // also caches missing art
-	strcpy(thumb_path, res_path);
-
-	if (thumb) SDL_FreeSurface(thumb);
-	thumb = NULL;
-
+}
+// decodes art flattened onto black in the screen's format, NULL when there's none
+static SDL_Surface* loadArt(char* res_path, SDL_Surface* screen) {
 	SDL_Surface* image = exists(res_path) ? IMG_Load(res_path) : NULL;
-	if (image) {
-		// screen is cleared to black before art is drawn so this matches blending at draw time
-		thumb = SDL_CreateRGBSurface(0, image->w, image->h, screen->format->BitsPerPixel, screen->format->Rmask, screen->format->Gmask, screen->format->Bmask, screen->format->Amask);
-		SDL_FillRect(thumb, NULL, 0);
-		SDL_BlitSurface(image, NULL, thumb, NULL);
-		SDL_FreeSurface(image);
+	if (!image) return NULL;
+	// screen is cleared to black before art is drawn so this matches blending at draw time
+	SDL_Surface* art = SDL_CreateRGBSurface(0, image->w, image->h, screen->format->BitsPerPixel, screen->format->Rmask, screen->format->Gmask, screen->format->Bmask, screen->format->Amask);
+	if (art) {
+		SDL_FillRect(art, NULL, 0);
+		SDL_BlitSurface(image, NULL, art, NULL);
 	}
-	return thumb;
+	SDL_FreeSurface(image);
+	return art;
+}
+static SDL_Surface* getThumb(Entry* entry, SDL_Surface* screen) {
+	char res_path[MAX_PATH];
+	getResPath(entry, res_path);
+
+	int oldest = 0;
+	for (int i=0; i<THUMB_CACHE_SIZE; i++) {
+		if (thumbs[i].loaded && exactMatch(thumbs[i].path, res_path)) {
+			thumbs[i].used = ++thumb_clock;
+			return thumbs[i].art;
+		}
+		if (!thumbs[i].loaded || (thumbs[oldest].loaded && thumbs[i].used<thumbs[oldest].used)) oldest = i;
+	}
+	if (thumbs[oldest].art) SDL_FreeSurface(thumbs[oldest].art);
+	strcpy(thumbs[oldest].path, res_path);
+	thumbs[oldest].art = loadArt(res_path, screen);
+	thumbs[oldest].loaded = 1;
+	thumbs[oldest].used = ++thumb_clock;
+	return thumbs[oldest].art;
+}
+static int hasThumb(Entry* entry) { // decoded already (or known to be missing)
+	char res_path[MAX_PATH];
+	getResPath(entry, res_path);
+	for (int i=0; i<THUMB_CACHE_SIZE; i++) if (thumbs[i].loaded && exactMatch(thumbs[i].path, res_path)) return 1;
+	return 0;
+}
+// while idle in the list, decodes the art for the rows next to the selected one, one per call
+static int preloadThumbs(Directory* dir, SDL_Surface* screen) {
+	int total = dir->entries->count;
+	for (int place=1; place<=2; place++) {
+		for (int side=1; side>=-1; side-=2) {
+			int i = dir->selected + side * place;
+			if (i<0 || i>=total || hasThumb(dir->entries->items[i])) continue;
+			Entry* selected = dir->entries->items[dir->selected];
+			getThumb(dir->entries->items[i], screen);
+			getThumb(selected, screen); // keeps the shown one newest
+			return 1;
+		}
+	}
+	return 0;
+}
+static void freeThumbs(void) {
+	for (int i=0; i<THUMB_CACHE_SIZE; i++) {
+		if (thumbs[i].art) SDL_FreeSurface(thumbs[i].art);
+		memset(&thumbs[i], 0, sizeof(thumbs[i]));
+	}
 }
 
-// a short message centered over the list: the current letter while jumping with L1/R1, or the favorites sort
-#define FLASH_LETTER_MS 600
+///////////////////////////////////////
+
+// carousel view: the selected game's art large in the middle, two smaller and darker on each side
+#define CAROUSEL_LEVELS 3 // selected, next to it, outermost
+static const int carousel_scale[CAROUSEL_LEVELS] = { 100, 60, 40 }; // percent of the selected art's size
+static const int carousel_shade[CAROUSEL_LEVELS] = { 256, 170, 110 }; // brightness out of 256
+static const int carousel_color[CAROUSEL_LEVELS] = { 256, 150, 80 }; // saturation out of 256, the rest goes grey
+#define CAROUSEL_TUCK 35 // percent of each side art's width hidden behind its nearer neighbor
+#define CAROUSEL_ART_WIDTH 160 // unscaled box the selected art is fit into
+#define CAROUSEL_ART_HEIGHT 135
+#define CAROUSEL_ART_BOTTOM 156 // unscaled baseline every art stands on, just above the name
+
+#define CAROUSEL_CACHE_SIZE 16 // the five shown, the ones being preloaded either side, and a few behind
+typedef struct {
+	char path[MAX_PATH];
+	SDL_Surface* art; // decoded, NULL when missing
+	SDL_Surface* sized[CAROUSEL_LEVELS]; // software drawing
+	GFX_Texture* color; // GPU drawing: the art as is, and greyed
+	GFX_Texture* grey;
+	GFX_Texture* label; // GPU drawing, no art: the name for its card
+	int label_w, label_h;
+	int fit_w, fit_h; // the art's size as the selected one
+	int loaded;
+	uint32_t used;
+} CarouselArt;
+static CarouselArt carousel_cache[CAROUSEL_CACHE_SIZE];
+static uint32_t carousel_clock = 0;
+
+static void CarouselArt_clear(CarouselArt* slot) {
+	if (slot->art) SDL_FreeSurface(slot->art);
+	for (int i=0; i<CAROUSEL_LEVELS; i++) {
+		if (slot->sized[i]) SDL_FreeSurface(slot->sized[i]);
+	}
+	PLAT_destroyTexture(slot->color);
+	PLAT_destroyTexture(slot->grey);
+	PLAT_destroyTexture(slot->label);
+	memset(slot, 0, sizeof(CarouselArt));
+}
+static void Carousel_quit(void) {
+	for (int i=0; i<CAROUSEL_CACHE_SIZE; i++) CarouselArt_clear(&carousel_cache[i]);
+}
+
+// bilinear resize, then faded toward grey (color/256 saturation) and darkened (shade/256)
+// handles 16-bit RGB565 and any 32-bit format (where only darkening applies)
+static SDL_Surface* scaleArt(SDL_Surface* src, int dw, int dh, int shade, int color) {
+	if (dw>1024) dw = 1024; // the column tables below
+	SDL_Surface* dst = SDL_CreateRGBSurface(0, dw, dh, src->format->BitsPerPixel, src->format->Rmask, src->format->Gmask, src->format->Bmask, src->format->Amask);
+	if (!dst) return NULL;
+	int bpp = src->format->BytesPerPixel;
+	// each column's two source columns and blend, worked out once (divisions are slow on the device's CPU)
+	static int col0[1024], col1[1024], colf[1024];
+	for (int x=0; x<dw; x++) {
+		// 16.16 fixed point source position of this pixel's center (64-bit: the shift overflows 32)
+		int sx = (int)(((int64_t)(x * 2 + 1) * src->w << 15) / dw) - (1 << 15);
+		if (sx<0) sx = 0;
+		col0[x] = sx >> 16;
+		col1[x] = col0[x] + 1 < src->w ? col0[x] + 1 : col0[x];
+		colf[x] = (sx >> 8) & 0xFF;
+	}
+	for (int y=0; y<dh; y++) {
+		int sy = (int)(((int64_t)(y * 2 + 1) * src->h << 15) / dh) - (1 << 15);
+		if (sy<0) sy = 0;
+		int y0 = sy >> 16;
+		int y1 = y0 + 1 < src->h ? y0 + 1 : y0;
+		int fy = (sy >> 8) & 0xFF;
+		uint8_t* row0 = (uint8_t*)src->pixels + y0 * src->pitch;
+		uint8_t* row1 = (uint8_t*)src->pixels + y1 * src->pitch;
+		uint8_t* out = (uint8_t*)dst->pixels + y * dst->pitch;
+		for (int x=0; x<dw; x++) {
+			int x0 = col0[x];
+			int x1 = col1[x];
+			int fx = colf[x];
+			if (bpp==2) {
+				uint16_t p[4] = { ((uint16_t*)row0)[x0], ((uint16_t*)row0)[x1], ((uint16_t*)row1)[x0], ((uint16_t*)row1)[x1] };
+				int c[3];
+				int shifts[3] = { 11, 5, 0 };
+				int masks[3] = { 0x1F, 0x3F, 0x1F };
+				for (int k=0; k<3; k++) {
+					int a = (p[0] >> shifts[k]) & masks[k];
+					int b = (p[1] >> shifts[k]) & masks[k];
+					int d = (p[2] >> shifts[k]) & masks[k];
+					int e = (p[3] >> shifts[k]) & masks[k];
+					int top = a * (256 - fx) + b * fx;
+					int bottom = d * (256 - fx) + e * fx;
+					c[k] = (top * (256 - fy) + bottom * fy) >> 16;
+				}
+				if (color<256 || shade<256) {
+					int r = c[0] << 3, g = c[1] << 2, b = c[2] << 3; // 8-bit
+					int grey = (r * 77 + g * 151 + b * 28) >> 8;
+					r = ((r * color + grey * (256 - color)) >> 8) * shade >> 8;
+					g = ((g * color + grey * (256 - color)) >> 8) * shade >> 8;
+					b = ((b * color + grey * (256 - color)) >> 8) * shade >> 8;
+					c[0] = r >> 3; c[1] = g >> 2; c[2] = b >> 3;
+				}
+				((uint16_t*)out)[x] = (c[0] << 11) | (c[1] << 5) | c[2];
+			}
+			else {
+				for (int k=0; k<bpp; k++) {
+					int top = row0[x0*bpp+k] * (256 - fx) + row0[x1*bpp+k] * fx;
+					int bottom = row1[x0*bpp+k] * (256 - fx) + row1[x1*bpp+k] * fx;
+					out[x*bpp+k] = ((top * (256 - fy) + bottom * fy) >> 16) * shade >> 8;
+				}
+			}
+		}
+	}
+	return dst;
+}
+
+static int getSlotPath(char* rom_path, int type, char* slot_path);
+// the newer of the switcher's quick save and the game's last manual save: its screenshot and slot
+// returns 0 when there's neither. Remembered per game while the switcher is open, it's asked every frame
+#define SWITCHER_SAVE_CACHE (SWITCHER_MAX+2)
+static struct { char path[MAX_PATH]; char preview[256]; int slot; int found; } switcher_saves[SWITCHER_SAVE_CACHE];
+static int switcher_save_count = 0;
+static void forgetSwitcherSaves(void) {
+	switcher_save_count = 0;
+}
+static int lookUpSwitcherSave(Entry* entry, char* preview_path, int* slot);
+static int getSwitcherSave(Entry* entry, char* preview_path, int* slot) {
+	for (int i=0; i<switcher_save_count; i++) {
+		if (!exactMatch(switcher_saves[i].path, entry->path)) continue;
+		if (!switcher_saves[i].found) return 0;
+		strcpy(preview_path, switcher_saves[i].preview);
+		*slot = switcher_saves[i].slot;
+		return 1;
+	}
+	int found = lookUpSwitcherSave(entry, preview_path, slot);
+	if (switcher_save_count<SWITCHER_SAVE_CACHE) {
+		int i = switcher_save_count++;
+		strcpy(switcher_saves[i].path, entry->path);
+		switcher_saves[i].found = found;
+		if (found) {
+			strcpy(switcher_saves[i].preview, preview_path);
+			switcher_saves[i].slot = *slot;
+		}
+	}
+	return found;
+}
+static int lookUpSwitcherSave(Entry* entry, char* preview_path, int* slot) {
+	char slot_txt[256];
+	int has_manual = getSlotPath(entry->path, entry->type, slot_txt);
+	if (!slot_txt[0]) return 0;
+	char base[256]; // .../<rom>.ext without the .txt
+	strcpy(base, slot_txt);
+	base[strlen(base) - strlen(".txt")] = '\0';
+
+	char quick_path[256];
+	sprintf(quick_path, "%s.%d.bmp", base, AUTO_RESUME_SLOT);
+	struct stat quick_stat;
+	int has_quick = stat(quick_path, &quick_stat)==0;
+
+	char manual_path[256] = "";
+	struct stat manual_stat;
+	int manual_slot = has_manual ? getInt(slot_txt) : -1;
+	if (has_manual) {
+		sprintf(manual_path, "%s.%d.bmp", base, manual_slot);
+		if (stat(manual_path, &manual_stat)!=0) has_manual = 0;
+	}
+
+	if (has_quick && (!has_manual || quick_stat.st_mtime>=manual_stat.st_mtime)) {
+		strcpy(preview_path, quick_path);
+		*slot = AUTO_RESUME_SLOT;
+		return 1;
+	}
+	if (has_manual) {
+		strcpy(preview_path, manual_path);
+		*slot = manual_slot;
+		return 1;
+	}
+	return 0;
+}
+// the art for entry at a carousel level, sized and shaded; NULL when there's none (or it can't be decoded yet)
+static SDL_Surface* getCarouselArt(Entry* entry, int level, SDL_Surface* screen, int can_decode) {
+	char res_path[MAX_PATH];
+	if (inSwitcher()) {
+		int slot;
+		if (!getSwitcherSave(entry, res_path, &slot)) return NULL; // a card with its name, not box art
+	}
+	else getResPath(entry, res_path);
+
+	CarouselArt* slot = NULL;
+	CarouselArt* oldest = &carousel_cache[0];
+	for (int i=0; i<CAROUSEL_CACHE_SIZE; i++) {
+		CarouselArt* it = &carousel_cache[i];
+		if (it->loaded && exactMatch(it->path, res_path)) {
+			slot = it;
+			break;
+		}
+		if (!it->loaded || (oldest->loaded && it->used<oldest->used)) oldest = it;
+	}
+	if (!slot) {
+		if (!can_decode) return NULL;
+		slot = oldest;
+		CarouselArt_clear(slot);
+		strcpy(slot->path, res_path);
+		slot->art = loadArt(res_path, screen);
+		slot->loaded = 1;
+	}
+	slot->used = ++carousel_clock;
+	if (!slot->art) return NULL;
+
+	if (!slot->sized[level]) {
+		int box_w = SCALE1(CAROUSEL_ART_WIDTH) * carousel_scale[level] / 100;
+		int box_h = SCALE1(CAROUSEL_ART_HEIGHT) * carousel_scale[level] / 100;
+		// fit inside the box, keeping the art's shape
+		int w = box_w;
+		int h = slot->art->h * box_w / slot->art->w;
+		if (h>box_h) {
+			h = box_h;
+			w = slot->art->w * box_h / slot->art->h;
+		}
+		if (w<1) w = 1; // very thin art would otherwise scale to nothing (and divide by zero)
+		if (h<1) h = 1;
+		slot->sized[level] = scaleArt(slot->art, w, h, carousel_shade[level], carousel_color[level]);
+	}
+	return slot->sized[level];
+}
+
+// nearest neighbor stretch of src into rect on dst, clipped to dst: for the in-between frames of a slide
+// (SDL_BlitScaled on the device's SDL can misbehave with art hanging off the screen's edges)
+static void blitStretched(SDL_Surface* src, SDL_Surface* dst, SDL_Rect* rect) {
+	if (rect->w<=0 || rect->h<=0 || src->format->BytesPerPixel!=dst->format->BytesPerPixel) return;
+	int bpp = dst->format->BytesPerPixel;
+	int x0 = MAX(rect->x, 0), x1 = MIN(rect->x + rect->w, dst->w);
+	int y0 = MAX(rect->y, 0), y1 = MIN(rect->y + rect->h, dst->h);
+	if (x0>=x1 || y0>=y1) return;
+	static int columns[1024]; // source column for each destination one
+	if (x1-x0>1024) return;
+	for (int x=x0; x<x1; x++) {
+		int sx = (x - rect->x) * src->w / rect->w;
+		columns[x-x0] = MIN(sx, src->w-1) * bpp;
+	}
+	for (int y=y0; y<y1; y++) {
+		int sy = MIN((y - rect->y) * src->h / rect->h, src->h-1);
+		uint8_t* in = (uint8_t*)src->pixels + sy * src->pitch;
+		uint8_t* out = (uint8_t*)dst->pixels + y * dst->pitch + x0 * bpp;
+		if (bpp==2) for (int x=0; x<x1-x0; x++) ((uint16_t*)out)[x] = *(uint16_t*)(in + columns[x]);
+		else if (bpp==4) for (int x=0; x<x1-x0; x++) ((uint32_t*)out)[x] = *(uint32_t*)(in + columns[x]);
+		else for (int x=0; x<x1-x0; x++) memcpy(out + x*bpp, in + columns[x], bpp);
+	}
+}
+
+// whether an entry's art at a level is already decoded and sized (or known to be missing), without doing either
+static int Carousel_isReady(Entry* entry, int level) {
+	char res_path[MAX_PATH];
+	if (inSwitcher()) {
+		int slot;
+		if (!getSwitcherSave(entry, res_path, &slot)) return 1; // a card, nothing to load
+	}
+	else getResPath(entry, res_path);
+	for (int i=0; i<CAROUSEL_CACHE_SIZE; i++) {
+		CarouselArt* it = &carousel_cache[i];
+		if (it->loaded && exactMatch(it->path, res_path)) return !it->art || it->sized[level];
+	}
+	return 0;
+}
+// while idle, gets the art one step ahead ready: each neighbor at the size it'll be after a step towards it,
+// and the next ones out decoded. Does one piece per call so input stays responsive, returns whether it did any
+static int Carousel_preload(Directory* dir, SDL_Surface* screen) {
+	int total = dir->entries->count;
+	for (int place=1; place<=CAROUSEL_LEVELS+1; place++) {
+		int level = MIN(place-1, CAROUSEL_LEVELS-1); // one closer than it is now
+		for (int side=1; side>=-1; side-=2) {
+			int i = dir->selected + side * place;
+			if (i<0 || i>=total) continue;
+			Entry* entry = dir->entries->items[i];
+			if (Carousel_isReady(entry, level)) continue;
+			getCarouselArt(entry, level, screen, 1);
+			return 1;
+		}
+	}
+	return 0;
+}
+
+// stepping slides the art over instead of jumping, easing out over CAROUSEL_SLIDE_MS
+#define CAROUSEL_SLIDE_MS 90 // quick, so flicking through a long list stays snappy
+static float carousel_slide_from = 0; // places the art started from, 0 when still
+static uint32_t carousel_slide_at = 0;
+static float Carousel_shift(uint32_t now) {
+	if (!carousel_slide_from) return 0;
+	float t = (float)(now - carousel_slide_at) / CAROUSEL_SLIDE_MS;
+	if (t>=1) return 0;
+	float left = 1 - t;
+	return carousel_slide_from * left * left * left;
+}
+static void Carousel_slide(int step, uint32_t now) { // after moving one place, step is -1 or 1
+	float from = Carousel_shift(now) + step; // a step mid-slide carries on from where the art is
+	if (from>2) from = 2;
+	if (from<-2) from = -2;
+	carousel_slide_from = from;
+	carousel_slide_at = now;
+}
+
+// shift slides everything by that many places (0 at rest), for the scroll animation
+static void blitCarousel(SDL_Surface* screen, Directory* dir, int can_decode, float shift) {
+	int total = dir->entries->count;
+	int cx = screen->w / 2;
+	int bottom = SCALE1(CAROUSEL_ART_BOTTOM);
+
+	// art (or a card size when there's none) for the selected game and three either side, index 0 is the leftmost
+	// the third ones are only seen sliding in or out while animating
+	#define CAROUSEL_REACH CAROUSEL_LEVELS // places either side, one past the last level shown at rest
+	#define CAROUSEL_SLOTS (CAROUSEL_REACH*2+1)
+	static const int reach_scale = 25; // the place past the outermost level
+	int mid = CAROUSEL_REACH;
+	SDL_Surface* arts[CAROUSEL_SLOTS];
+	int widths[CAROUSEL_SLOTS];
+	int scales[CAROUSEL_SLOTS]; // percent the art in each slot is shown at
+	int xs[CAROUSEL_SLOTS]; // centers at rest
+	for (int n=0; n<CAROUSEL_SLOTS; n++) {
+		int i = dir->selected + n - mid;
+		int place = abs(n - mid);
+		int level = MIN(place, CAROUSEL_LEVELS-1);
+		scales[n] = place<CAROUSEL_LEVELS ? carousel_scale[place] : reach_scale;
+		arts[n] = NULL;
+		widths[n] = 0;
+		if (i<0 || i>=total) continue;
+		if (place>=CAROUSEL_LEVELS && !shift) continue;
+		arts[n] = getCarouselArt(dir->entries->items[i], level, screen, can_decode);
+		int level_w = arts[n] ? arts[n]->w : SCALE1(CAROUSEL_ART_HEIGHT) * carousel_scale[level] / 100;
+		widths[n] = level_w * scales[n] / carousel_scale[level];
+	}
+	// each side art tucks partly behind the one nearer the middle, so spacing follows the art's shape
+	// empty places still get a spot so art sliding through them has somewhere to go
+	xs[mid] = cx;
+	for (int side=-1; side<=1; side+=2) {
+		int edge = cx + side * widths[mid] / 2;
+		for (int place=1; place<=CAROUSEL_REACH; place++) {
+			int n = mid + side * place;
+			int w = widths[n] ? widths[n] : SCALE1(CAROUSEL_ART_HEIGHT) * scales[n] / 100;
+			xs[n] = edge + side * w * (50 - CAROUSEL_TUCK) / 100;
+			edge = xs[n] + side * w / 2;
+		}
+	}
+
+	// where each art is right now: between its old place and its new one while sliding
+	typedef struct { int n; float place; } Shown;
+	Shown order[CAROUSEL_SLOTS];
+	int count = 0;
+	for (int n=0; n<CAROUSEL_SLOTS; n++) {
+		if (!widths[n]) continue;
+		float place = (n - mid) + shift;
+		if (place<=-CAROUSEL_REACH || place>=CAROUSEL_REACH) continue;
+		if (!shift && abs(n - mid)>=CAROUSEL_LEVELS) continue;
+		order[count++] = (Shown){ n, place };
+	}
+	// outermost first so nearer art overlaps it
+	for (int a=0; a<count; a++) {
+		for (int b=a+1; b<count; b++) {
+			if (fabsf(order[b].place)>fabsf(order[a].place)) {
+				Shown tmp = order[a];
+				order[a] = order[b];
+				order[b] = tmp;
+			}
+		}
+	}
+
+	for (int k=0; k<count; k++) {
+		int n = order[k].n;
+		float place = order[k].place;
+		float distance = fabsf(place);
+		int near = (int)distance; // the two places it's between
+		int far = MIN(near + 1, CAROUSEL_REACH);
+		float t = distance - near;
+		int near_n = mid + (place<0 ? -near : near);
+		int far_n = mid + (place<0 ? -far : far);
+		int x = xs[near_n] + (xs[far_n] - xs[near_n]) * t;
+		float scale = scales[near_n] + (scales[far_n] - scales[near_n]) * t;
+		int level = MIN((int)(distance + 0.5f), CAROUSEL_LEVELS-1); // the closest look for its shading
+
+		Entry* entry = dir->entries->items[dir->selected + n - mid];
+		int rest_level = MIN(abs(n - mid), CAROUSEL_LEVELS-1); // what arts[n] was fetched at
+		SDL_Surface* art = level==rest_level ? arts[n] : getCarouselArt(entry, level, screen, can_decode);
+		if (art) {
+			int w = art->w * scale / carousel_scale[level] + 0.5f;
+			int h = art->h * scale / carousel_scale[level] + 0.5f;
+			SDL_Rect rect = { x - w/2, bottom - h, w, h };
+			if (w==art->w && h==art->h) SDL_BlitSurface(art, NULL, screen, &rect);
+			else blitStretched(art, screen, &rect); // only mid-slide, the resting frame is the smooth one
+		}
+		else {
+			// no art: a card with the name on it
+			int size = SCALE1(CAROUSEL_ART_HEIGHT) * scale / 100;
+			SDL_Rect card = { x - size/2, bottom - size, size, size };
+			GFX_blitRect(ASSET_DARK_GRAY_PILL, screen, &card);
+			if (shift) continue; // text can't keep up mid-slide
+			if (!level && !inSwitcher()) continue; // the selected game's name is already under it
+			char* name = entry->name;
+			trimSortingMeta(&name);
+			if (!level) name = "No screenshot yet"; // switcher: one appears after leaving the game by holding MENU
+			char label[256];
+			GFX_truncateText(font.small, name, label, size - SCALE1(BUTTON_PADDING), 0);
+			SDL_Surface* text = label[0] ? TTF_RenderUTF8_Blended(font.small, label, COLOR_DARK_TEXT) : NULL; // NULL for "", eg. when nothing fits
+			if (!text) continue;
+			SDL_BlitSurface(text, NULL, screen, &(SDL_Rect){ x - text->w/2, bottom - size/2 - text->h/2 });
+			SDL_FreeSurface(text);
+		}
+	}
+
+	// the selected game's name under its art
+	Entry* entry = dir->entries->items[dir->selected];
+	char* name = entry->unique ? entry->unique : entry->name;
+	trimSortingMeta(&name);
+	int dot_width = 0;
+	if (entry->favorite) TTF_SizeUTF8(font.large, FAVORITE_DOT, &dot_width, NULL);
+	char shown[256];
+	GFX_truncateText(font.large, name, shown, screen->w - SCALE1(PADDING*4) - dot_width, 0);
+	if (entry->favorite) strcat(shown, FAVORITE_DOT);
+	SDL_Surface* text = shown[0] ? TTF_RenderUTF8_Blended(font.large, shown, COLOR_WHITE) : NULL;
+	if (text) {
+		SDL_BlitSurface(text, NULL, screen, &(SDL_Rect){ cx - text->w/2, bottom + SCALE1(8) });
+		SDL_FreeSurface(text);
+	}
+}
+
+// list text that hasn't changed since the last frame isn't measured or rendered again
+#define TEXT_CACHE_SIZE 32
+static struct { TTF_Font* font; uint32_t color; char text[256]; SDL_Surface* surface; uint32_t used; } text_cache[TEXT_CACHE_SIZE];
+static struct { TTF_Font* font; int max_width; int padding; char text[256]; char shown[256]; int width; uint32_t used; } fit_cache[TEXT_CACHE_SIZE];
+static uint32_t text_clock = 0;
+// rendered text, owned by the cache (don't free it), NULL for ""
+static SDL_Surface* renderText(TTF_Font* font, const char* text, SDL_Color color) {
+	if (!text[0]) return NULL;
+	uint32_t key = (color.r<<24) | (color.g<<16) | (color.b<<8) | color.a;
+	int oldest = 0;
+	for (int i=0; i<TEXT_CACHE_SIZE; i++) {
+		if (text_cache[i].surface && text_cache[i].font==font && text_cache[i].color==key && exactMatch(text_cache[i].text, (char*)text)) {
+			text_cache[i].used = ++text_clock;
+			return text_cache[i].surface;
+		}
+		if (!text_cache[i].surface || (text_cache[oldest].surface && text_cache[i].used<text_cache[oldest].used)) oldest = i;
+	}
+	if (text_cache[oldest].surface) SDL_FreeSurface(text_cache[oldest].surface);
+	text_cache[oldest].font = font;
+	text_cache[oldest].color = key;
+	snprintf(text_cache[oldest].text, sizeof(text_cache[oldest].text), "%s", text);
+	text_cache[oldest].surface = TTF_RenderUTF8_Blended(font, text, color);
+	text_cache[oldest].used = ++text_clock;
+	return text_cache[oldest].surface;
+}
+// GFX_truncateText, remembered
+static int fitText(TTF_Font* font, const char* text, char* shown, int max_width, int padding) {
+	int oldest = 0;
+	for (int i=0; i<TEXT_CACHE_SIZE; i++) {
+		if (fit_cache[i].font==font && fit_cache[i].max_width==max_width && fit_cache[i].padding==padding && exactMatch(fit_cache[i].text, (char*)text)) {
+			fit_cache[i].used = ++text_clock;
+			strcpy(shown, fit_cache[i].shown);
+			return fit_cache[i].width;
+		}
+		if (!fit_cache[i].font || (fit_cache[oldest].font && fit_cache[i].used<fit_cache[oldest].used)) oldest = i;
+	}
+	int width = GFX_truncateText(font, (char*)text, shown, max_width, padding);
+	if (strlen(text)<sizeof(fit_cache[0].text)) {
+		fit_cache[oldest].font = font;
+		fit_cache[oldest].max_width = max_width;
+		fit_cache[oldest].padding = padding;
+		strcpy(fit_cache[oldest].text, text);
+		snprintf(fit_cache[oldest].shown, sizeof(fit_cache[oldest].shown), "%s", shown);
+		fit_cache[oldest].width = width;
+		fit_cache[oldest].used = ++text_clock;
+	}
+	return width;
+}
+static void freeTextCache(void) {
+	for (int i=0; i<TEXT_CACHE_SIZE; i++) if (text_cache[i].surface) SDL_FreeSurface(text_cache[i].surface);
+	memset(text_cache, 0, sizeof(text_cache));
+	memset(fit_cache, 0, sizeof(fit_cache));
+}
+
+///////////////////////////////////////
+
+// the carousel on the GPU: each art is uploaded once (as is, and greyed) and the GPU draws it at any size,
+// darkness and greyness, so sliding is smooth and nothing is scaled in software. Used when the platform has a GPU path
+static int carousel_gpu = -1; // not tried yet
+static int Carousel_useGPU(void) {
+	if (carousel_gpu==-1) {
+		SDL_Surface* probe = SDL_CreateRGBSurface(0, 1, 1, 32, 0x00FF0000,0x0000FF00,0x000000FF,0xFF000000);
+		GFX_Texture* texture = PLAT_createTexture(probe);
+		carousel_gpu = texture!=NULL;
+		PLAT_destroyTexture(texture);
+		SDL_FreeSurface(probe);
+	}
+	return carousel_gpu;
+}
+
+// a rounded rectangle in rgb with transparent corners, eg. a card, for the GPU to draw over art
+static SDL_Surface* roundedSurface(int w, int h, int r, Uint8 cr, Uint8 cg, Uint8 cb) {
+	SDL_Surface* surface = SDL_CreateRGBSurface(0, w, h, 32, 0x00FF0000,0x0000FF00,0x000000FF,0xFF000000);
+	if (!surface) return NULL;
+	for (int y=0; y<h; y++) {
+		uint32_t* row = (uint32_t*)((uint8_t*)surface->pixels + y * surface->pitch);
+		for (int x=0; x<w; x++) {
+			int dx = x<r ? r-x : (x>=w-r ? x-(w-r-1) : 0);
+			int dy = y<r ? r-y : (y>=h-r ? y-(h-r-1) : 0);
+			row[x] = dx*dx + dy*dy > r*r ? 0 : SDL_MapRGBA(surface->format, cr,cg,cb,255);
+		}
+	}
+	return surface;
+}
+// the brightness/volume pill, already drawn top right, lifted onto the GPU so the carousel's art can't cover it
+static GFX_Texture* setting_texture = NULL;
+static void queueHardwareGroup(SDL_Surface* screen, int ow) {
+	SDL_Rect rect = { screen->w - SCALE1(PADDING) - ow, SCALE1(PADDING), ow, SCALE1(PILL_SIZE) };
+	SDL_Surface* pill = SDL_CreateRGBSurface(0, rect.w, rect.h, 32, 0x00FF0000,0x0000FF00,0x000000FF,0xFF000000);
+	if (!pill) return;
+	SDL_BlitSurface(screen, &rect, pill, NULL); // opaque, then the corners cut away
+	int r = rect.h / 2;
+	for (int y=0; y<rect.h; y++) {
+		uint32_t* row = (uint32_t*)((uint8_t*)pill->pixels + y * pill->pitch);
+		for (int x=0; x<rect.w; x++) {
+			int dx = x<r ? r-x : (x>=rect.w-r ? x-(rect.w-r-1) : 0);
+			int dy = y<r ? r-y : (y>=rect.h-r ? y-(rect.h-r-1) : 0);
+			if (dx*dx + dy*dy > r*r) row[x] = 0;
+		}
+	}
+	PLAT_destroyTexture(setting_texture);
+	setting_texture = PLAT_createTexture(pill);
+	SDL_FreeSurface(pill);
+	if (setting_texture) PLAT_queueTexture(setting_texture, &rect, 255, 255);
+}
+static void darkGray(SDL_Surface* screen, Uint8* r, Uint8* g, Uint8* b) { // the theme's card color
+	SDL_GetRGB(RGB_DARK_GRAY, screen->format, r, g, b);
+}
+// a greyscale copy of RGB565 art, for fading the side art to grey on the GPU
+static SDL_Surface* greySurface(SDL_Surface* src) {
+	SDL_Surface* dst = SDL_ConvertSurface(src, src->format, 0);
+	if (!dst || dst->format->BytesPerPixel!=2) return dst;
+	for (int y=0; y<dst->h; y++) {
+		uint16_t* row = (uint16_t*)((uint8_t*)dst->pixels + y * dst->pitch);
+		for (int x=0; x<dst->w; x++) {
+			uint16_t p = row[x];
+			int r = (p >> 11) << 3, g = ((p >> 5) & 0x3F) << 2, b = (p & 0x1F) << 3;
+			int grey = (r * 77 + g * 151 + b * 28) >> 8;
+			row[x] = ((grey >> 3) << 11) | ((grey >> 2) << 5) | (grey >> 3);
+		}
+	}
+	return dst;
+}
+
+// the cache slot for an entry with its textures ready (art NULL means a card), NULL when it can't be decoded yet
+static CarouselArt* getCarouselSlot(Entry* entry, SDL_Surface* screen, int can_decode) {
+	char res_path[MAX_PATH];
+	if (inSwitcher()) {
+		int slot;
+		if (!getSwitcherSave(entry, res_path, &slot)) sprintf(res_path, "card:%s", entry->path);
+	}
+	else getResPath(entry, res_path);
+
+	CarouselArt* slot = NULL;
+	CarouselArt* oldest = &carousel_cache[0];
+	for (int i=0; i<CAROUSEL_CACHE_SIZE; i++) {
+		CarouselArt* it = &carousel_cache[i];
+		if (it->loaded && exactMatch(it->path, res_path)) {
+			slot = it;
+			break;
+		}
+		if (!it->loaded || (oldest->loaded && it->used<oldest->used)) oldest = it;
+	}
+	if (!slot) {
+		if (!can_decode) return NULL;
+		slot = oldest;
+		CarouselArt_clear(slot);
+		strcpy(slot->path, res_path);
+		slot->art = prefixMatch("card:", res_path) ? NULL : loadArt(res_path, screen);
+		slot->loaded = 1;
+	}
+	slot->used = ++carousel_clock;
+	if (slot->art && !slot->color) {
+		if (!can_decode) return NULL;
+		slot->color = PLAT_createTexture(slot->art);
+		SDL_Surface* grey = greySurface(slot->art);
+		slot->grey = PLAT_createTexture(grey);
+		if (grey) SDL_FreeSurface(grey);
+		// fit the selected size, keeping the art's shape
+		int box_w = SCALE1(CAROUSEL_ART_WIDTH), box_h = SCALE1(CAROUSEL_ART_HEIGHT);
+		slot->fit_w = box_w;
+		slot->fit_h = slot->art->h * box_w / slot->art->w;
+		if (slot->fit_h>box_h) {
+			slot->fit_h = box_h;
+			slot->fit_w = slot->art->w * box_h / slot->art->h;
+		}
+		if (slot->fit_w<1) slot->fit_w = 1;
+		if (slot->fit_h<1) slot->fit_h = 1;
+	}
+	if (!slot->art && !slot->label) {
+		// a card: the name to put on it
+		char* name = entry->name;
+		trimSortingMeta(&name);
+		char label[256];
+		int card = SCALE1(CAROUSEL_ART_HEIGHT) * carousel_scale[1] / 100;
+		GFX_truncateText(font.small, name, label, card - SCALE1(BUTTON_PADDING), 0);
+		SDL_Surface* text = label[0] ? TTF_RenderUTF8_Blended(font.small, label, COLOR_DARK_TEXT) : NULL;
+		slot->label = PLAT_createTexture(text);
+		if (text) {
+			slot->label_w = text->w;
+			slot->label_h = text->h;
+			SDL_FreeSurface(text);
+		}
+		slot->fit_w = slot->fit_h = SCALE1(CAROUSEL_ART_HEIGHT);
+	}
+	return slot;
+}
+
+static GFX_Texture* card_texture = NULL; // shared by every card, redone if the theme changes
+static int card_theme = -1;
+static GFX_Texture* no_shot_texture = NULL; // the switcher's selected card
+static int no_shot_w, no_shot_h;
+static void Carousel_freeGPU(void) {
+	PLAT_destroyTexture(card_texture);
+	PLAT_destroyTexture(no_shot_texture);
+	card_texture = no_shot_texture = NULL;
+}
+
+#define CAROUSEL_SCROLL_DECODES 2 // art loaded per frame while a direction is held, the rest wait a frame as cards
+// decodes is how many art it may load this frame (the GPU makes the rest cheap, so even while scrolling fast)
+static void blitCarouselGPU(SDL_Surface* screen, Directory* dir, int decodes, float shift) {
+	int total = dir->entries->count;
+	int cx = screen->w / 2;
+	int bottom = SCALE1(CAROUSEL_ART_BOTTOM);
+	int mid = CAROUSEL_REACH;
+	static const int reach_scale = 25;
+
+	if (!card_texture || card_theme!=GFX_getTheme()) {
+		PLAT_destroyTexture(card_texture);
+		Uint8 r,g,b;
+		darkGray(screen, &r,&g,&b);
+		int size = SCALE1(CAROUSEL_ART_HEIGHT);
+		SDL_Surface* card = roundedSurface(size, size, SCALE1(15), r,g,b);
+		card_texture = PLAT_createTexture(card);
+		if (card) SDL_FreeSurface(card);
+		card_theme = GFX_getTheme();
+	}
+	if (!no_shot_texture) {
+		SDL_Surface* text = TTF_RenderUTF8_Blended(font.small, "No screenshot yet", COLOR_DARK_TEXT);
+		no_shot_texture = PLAT_createTexture(text);
+		if (text) {
+			no_shot_w = text->w;
+			no_shot_h = text->h;
+			SDL_FreeSurface(text);
+		}
+	}
+
+	// each place's art, and where places sit at rest (spacing follows the art's shape, like the software carousel)
+	CarouselArt* slots[CAROUSEL_SLOTS];
+	int scales[CAROUSEL_SLOTS], widths[CAROUSEL_SLOTS], xs[CAROUSEL_SLOTS];
+	for (int k=0; k<CAROUSEL_SLOTS; k++) { // middle first, then outwards, so what loads this frame is what matters most
+		int place = (k + 1) / 2;
+		int n = mid + (k%2 ? -place : place);
+		int i = dir->selected + n - mid;
+		scales[n] = place<CAROUSEL_LEVELS ? carousel_scale[place] : reach_scale;
+		slots[n] = NULL;
+		widths[n] = 0;
+		if (i<0 || i>=total) continue;
+		if (place>=CAROUSEL_LEVELS && !shift) continue;
+		Entry* entry = dir->entries->items[i];
+		slots[n] = getCarouselSlot(entry, screen, 0);
+		if (!slots[n] && decodes>0) {
+			slots[n] = getCarouselSlot(entry, screen, 1);
+			decodes -= 1;
+		}
+		int fit_w = slots[n] ? slots[n]->fit_w : SCALE1(CAROUSEL_ART_HEIGHT);
+		widths[n] = fit_w * scales[n] / 100;
+	}
+	xs[mid] = cx;
+	for (int side=-1; side<=1; side+=2) {
+		int edge = cx + side * widths[mid] / 2;
+		for (int place=1; place<=CAROUSEL_REACH; place++) {
+			int n = mid + side * place;
+			int w = widths[n] ? widths[n] : SCALE1(CAROUSEL_ART_HEIGHT) * scales[n] / 100;
+			xs[n] = edge + side * w * (50 - CAROUSEL_TUCK) / 100;
+			edge = xs[n] + side * w / 2;
+		}
+	}
+
+	typedef struct { int n; float place; } Shown;
+	Shown order[CAROUSEL_SLOTS];
+	int count = 0;
+	for (int n=0; n<CAROUSEL_SLOTS; n++) {
+		if (!widths[n]) continue;
+		float place = (n - mid) + shift;
+		if (place<=-CAROUSEL_REACH || place>=CAROUSEL_REACH) continue;
+		if (!shift && abs(n - mid)>=CAROUSEL_LEVELS) continue;
+		order[count++] = (Shown){ n, place };
+	}
+	for (int a=0; a<count; a++) { // outermost first so nearer art overlaps it
+		for (int b=a+1; b<count; b++) {
+			if (fabsf(order[b].place)>fabsf(order[a].place)) {
+				Shown tmp = order[a];
+				order[a] = order[b];
+				order[b] = tmp;
+			}
+		}
+	}
+
+	for (int k=0; k<count; k++) {
+		int n = order[k].n;
+		float place = order[k].place;
+		float distance = fabsf(place);
+		int near = (int)distance;
+		int far = MIN(near + 1, CAROUSEL_REACH);
+		float t = distance - near;
+		int near_n = mid + (place<0 ? -near : near);
+		int far_n = mid + (place<0 ? -far : far);
+		int x = xs[near_n] + (xs[far_n] - xs[near_n]) * t;
+		float scale = scales[near_n] + (scales[far_n] - scales[near_n]) * t;
+		// darkness and greyness blend smoothly with distance too (the place past the last level looks like the last)
+		int near_level = MIN(near, CAROUSEL_LEVELS-1), far_level = MIN(far, CAROUSEL_LEVELS-1);
+		float shade = carousel_shade[near_level] + (carousel_shade[far_level] - carousel_shade[near_level]) * t;
+		float color = carousel_color[near_level] + (carousel_color[far_level] - carousel_color[near_level]) * t;
+		int gpu_shade = MIN((int)(shade * 255 / 256), 255);
+		int grey_alpha = MIN((int)((256 - color) * 255 / 256), 255);
+
+		CarouselArt* slot = slots[n];
+		if (slot && slot->art) {
+			int w = slot->fit_w * scale / 100 + 0.5f;
+			int h = slot->fit_h * scale / 100 + 0.5f;
+			SDL_Rect rect = { x - w/2, bottom - h, w, h };
+			PLAT_queueTexture(slot->color, &rect, 255, gpu_shade);
+			if (grey_alpha>0) PLAT_queueTexture(slot->grey, &rect, grey_alpha, gpu_shade);
+		}
+		else {
+			// no art (or not decoded yet while passing through): a card, with the name on the side ones
+			int size = SCALE1(CAROUSEL_ART_HEIGHT) * scale / 100;
+			SDL_Rect card = { x - size/2, bottom - size, size, size };
+			PLAT_queueTexture(card_texture, &card, 255, gpu_shade);
+			GFX_Texture* label = NULL;
+			int lw = 0, lh = 0;
+			if (distance>=0.5f && slot) { label = slot->label; lw = slot->label_w; lh = slot->label_h; }
+			else if (inSwitcher() && slot) { label = no_shot_texture; lw = no_shot_w; lh = no_shot_h; }
+			if (label) {
+				SDL_Rect text = { x - lw/2, bottom - size/2 - lh/2, lw, lh };
+				PLAT_queueTexture(label, &text, 255, 255);
+			}
+		}
+	}
+
+	// the selected game's name under its art, drawn with the rest of the menu
+	Entry* entry = dir->entries->items[dir->selected];
+	char* name = entry->unique ? entry->unique : entry->name;
+	trimSortingMeta(&name);
+	int dot_width = 0;
+	if (entry->favorite) TTF_SizeUTF8(font.large, FAVORITE_DOT, &dot_width, NULL);
+	char shown[256];
+	fitText(font.large, name, shown, screen->w - SCALE1(PADDING*4) - dot_width, 0);
+	if (entry->favorite) strcat(shown, FAVORITE_DOT);
+	SDL_Surface* text = renderText(font.large, shown, COLOR_WHITE);
+	if (text) SDL_BlitSurface(text, NULL, screen, &(SDL_Rect){ cx - text->w/2, bottom + SCALE1(8) });
+}
+// GPU version of Carousel_preload: decodes and uploads the art either side, one per call
+static int Carousel_preloadGPU(Directory* dir, SDL_Surface* screen) {
+	int total = dir->entries->count;
+	for (int place=1; place<=CAROUSEL_LEVELS+1; place++) {
+		for (int side=1; side>=-1; side-=2) {
+			int i = dir->selected + side * place;
+			if (i<0 || i>=total) continue;
+			Entry* entry = dir->entries->items[i];
+			CarouselArt* slot = getCarouselSlot(entry, screen, 0); // what's there already
+			if (slot) continue;
+			getCarouselSlot(entry, screen, 1);
+			return 1;
+		}
+	}
+	return 0;
+}
+
+// a selected name too long for the space left of its art scrolls back and forth instead of covering the art
+#define MARQUEE_PAUSE_MS 700 // still at each end
+#define MARQUEE_SPEED 70 // unscaled pixels a second
+#define MARQUEE_FRAME_MS 33
+#define MARQUEE_ONLY 2 // a dirty value: only the scrolling name needs redrawing
+static char marquee_key[MAX_PATH];
+static uint32_t marquee_start = 0;
+static int marquee_active = 0; // the last frame drew a scrolling name, so keep redrawing
+static uint32_t marquee_drawn_at = 0;
+// so a frame that only moves the name doesn't redraw the whole list: everything else, and the name and where it goes
+static SDL_Surface* marquee_base = NULL;
+static SDL_Surface* marquee_text = NULL;
+static SDL_Rect marquee_dst; // w is the visible width
+static int marquee_overflow = 0;
+static int marqueeOffset(char* key, int overflow, uint32_t now);
+static void blitMarquee(SDL_Surface* screen, uint32_t now) {
+	SDL_BlitSurface(marquee_text, &(SDL_Rect){ marqueeOffset(marquee_key, marquee_overflow, now), 0, marquee_dst.w, marquee_text->h }, screen, &(SDL_Rect){ marquee_dst.x, marquee_dst.y });
+}
+static int marqueeOffset(char* key, int overflow, uint32_t now) {
+	if (!exactMatch(key, marquee_key)) {
+		strcpy(marquee_key, key);
+		marquee_start = now;
+	}
+	marquee_active = 1;
+	int scroll_ms = overflow * 1000 / SCALE1(MARQUEE_SPEED);
+	int cycle = MARQUEE_PAUSE_MS + scroll_ms + MARQUEE_PAUSE_MS;
+	int t = (now - marquee_start) % cycle;
+	if (t<MARQUEE_PAUSE_MS) return 0;
+	if (t<MARQUEE_PAUSE_MS+scroll_ms) return (t - MARQUEE_PAUSE_MS) * overflow / scroll_ms;
+	return overflow;
+}
+
+// a short message centered over the list: the current letter while jumping with L1/R1, a new sort or view, pinning
+// timed from when it's first on screen, not from the press, since loading new art can hold up that first frame
+#define FLASH_LETTER_MS 900
 #define FLASH_TEXT_MS 1000
+#define FLASH_WAITING UINT32_MAX // shown, but not drawn yet
 static char flash_text[64];
 static int flash_big = 0;
 static uint32_t flash_until = 0;
 static TTF_Font* flash_font = NULL; // opened on first use
+static int flash_gpu = 0; // drawn as a GPU texture this frame (eg. over the carousel)
+static GFX_Texture* flash_texture = NULL;
+static char flash_texture_text[64];
+static int flash_texture_theme = -1;
 static void showFlash(char* text, int big) {
-	strcpy(flash_text, text);
+	snprintf(flash_text, sizeof(flash_text), "%s", text);
 	flash_big = big;
-	flash_until = SDL_GetTicks() + (big ? FLASH_LETTER_MS : FLASH_TEXT_MS);
+	flash_until = FLASH_WAITING;
 }
 static void blitFlash(SDL_Surface* screen) {
 	if (!flash_until) return;
+	if (flash_until==FLASH_WAITING) flash_until = SDL_GetTicks() + (flash_big ? FLASH_LETTER_MS : FLASH_TEXT_MS);
 	if (flash_big && !flash_font) flash_font = TTF_OpenFont(FONT_PATH, SCALE1(FONT_LARGE*3));
 	TTF_Font* f = flash_big && flash_font ? flash_font : font.large;
 	
 	SDL_Surface* text = TTF_RenderUTF8_Blended(f, flash_text, COLOR_WHITE);
+	if (!text) return;
 	int pad = SCALE1(flash_big ? PADDING*2 : BUTTON_PADDING*2);
 	int w = text->w + pad*2;
 	int h = text->h + pad*(flash_big ? 2 : 1);
 	if (flash_big && w<h) w = h; // square for single letters
 	SDL_Rect rect = { (screen->w-w)/2, (screen->h-h)/2, w, h };
+	if (flash_big && showsCarousel()) rect.y = SCALE1(CAROUSEL_ART_BOTTOM - CAROUSEL_ART_HEIGHT/2) - h/2; // over the art, clear of the name under it
+	if (flash_gpu) {
+		// made once per message and drawn by the GPU on top of everything
+		if (!flash_texture || !exactMatch(flash_texture_text, flash_text) || flash_texture_theme!=GFX_getTheme()) {
+			PLAT_destroyTexture(flash_texture);
+			Uint8 r,g,b;
+			SDL_GetRGB(RGB_DARK_GRAY, screen->format, &r,&g,&b);
+			SDL_Surface* box = roundedSurface(w, h, SCALE1(PILL_SIZE)/2, r,g,b);
+			if (box) {
+				SDL_BlitSurface(text, NULL, box, &(SDL_Rect){ (w-text->w)/2, (h-text->h)/2 });
+				flash_texture = PLAT_createTexture(box);
+				SDL_FreeSurface(box);
+			}
+			strcpy(flash_texture_text, flash_text);
+			flash_texture_theme = GFX_getTheme();
+		}
+		PLAT_queueTexture(flash_texture, &rect, 255, 255);
+		SDL_FreeSurface(text);
+		return;
+	}
 	GFX_blitRect(ASSET_DARK_GRAY_PILL, screen, &rect);
 	SDL_BlitSurface(text, NULL, screen, &(SDL_Rect){ rect.x + (w-text->w)/2, rect.y + (h-text->h)/2 });
 	SDL_FreeSurface(text);
@@ -1696,14 +3081,289 @@ static void showLetter(Entry* entry) {
 }
 
 // select and start double as volume/brightness modifiers on some devices
-#define CAN_RANDOM (BTN_MOD_VOLUME!=BTN_SELECT && BTN_MOD_BRIGHTNESS!=BTN_SELECT)
-#define CAN_SORT (BTN_MOD_VOLUME!=BTN_START && BTN_MOD_BRIGHTNESS!=BTN_START)
+#define CAN_SWITCH_VIEW (BTN_MOD_VOLUME!=BTN_SELECT && BTN_MOD_BRIGHTNESS!=BTN_SELECT)
+#define CAN_START (BTN_MOD_VOLUME!=BTN_START && BTN_MOD_BRIGHTNESS!=BTN_START) // picks a random game
+
+// keeps the list's visible rows around selected, so switching back from the carousel lands in the right place
+static void centerRows(Directory* dir, int selected) {
+	int total = dir->entries->count;
+	dir->start = selected - MAIN_ROW_COUNT/2;
+	if (dir->start>total-MAIN_ROW_COUNT) dir->start = total-MAIN_ROW_COUNT;
+	if (dir->start<0) dir->start = 0;
+	dir->end = MIN(total, dir->start + MAIN_ROW_COUNT);
+}
+// deleting a game (MENU + X in a system's list): asks first, then whether its saves and box art go too
+
+// a yes/no screen, 1 for A and 0 for B
+static int askDelete(SDL_Surface* screen, char* title, char* detail, char* yes, char* no) {
+	int dirty = 1;
+	int result = -1;
+	while (result<0) {
+		GFX_startFrame();
+		PAD_poll();
+		if (PAD_justPressed(BTN_A)) result = 1;
+		else if (PAD_justPressed(BTN_B)) result = 0;
+		PWR_update(&dirty, NULL, NULL, NULL);
+		if (dirty) {
+			GFX_clear(screen);
+			char shown[256];
+			GFX_truncateText(font.large, title, shown, screen->w - SCALE1(PADDING*4), 0);
+			SDL_Surface* big = TTF_RenderUTF8_Blended(font.large, shown, COLOR_WHITE);
+			SDL_Surface* small = detail && detail[0] ? TTF_RenderUTF8_Blended(font.small, detail, COLOR_LIGHT_TEXT) : NULL;
+			int h = big->h + (small ? SCALE1(4) + small->h : 0);
+			int y = (screen->h - SCALE1(PILL_SIZE+PADDING) - h) / 2;
+			SDL_BlitSurface(big, NULL, screen, &(SDL_Rect){ (screen->w - big->w) / 2, y });
+			if (small) SDL_BlitSurface(small, NULL, screen, &(SDL_Rect){ (screen->w - small->w) / 2, y + big->h + SCALE1(4) });
+			SDL_FreeSurface(big);
+			if (small) SDL_FreeSurface(small);
+			GFX_blitButtonGroup((char*[]){ "B",no, "A",yes, NULL }, 1, screen, 1);
+			GFX_flip(screen);
+			dirty = 0;
+		}
+		else GFX_sync();
+	}
+	SFX_play(result ? SFX_CONFIRM : SFX_BACK);
+	return result;
+}
+
+// a file of game name: the name, then '.' or '-' (eg. "Zelda.gb.sav", "Zelda.gb-a30.cfg" but not "Zelda.gbc.sav")
+static int isFileOf(const char* file, const char* name) {
+	int len = strlen(name);
+	return !strncmp(file, name, len) && (file[len]=='.' || file[len]=='-');
+}
+#define DELETE_MAX 128
+static char delete_saves[DELETE_MAX][MAX_PATH];
+static int delete_save_count = 0;
+static void findSaves(char* dir, char names[][MAX_PATH], int name_count, int only_cfg) {
+	DIR* d = opendir(dir);
+	if (!d) return;
+	struct dirent* e;
+	while ((e = readdir(d)) && delete_save_count<DELETE_MAX) {
+		if (e->d_name[0]=='.' || e->d_type==DT_DIR) continue;
+		if (only_cfg && !suffixMatch(".cfg", e->d_name)) continue;
+		for (int i=0; i<name_count; i++) {
+			if (!isFileOf(e->d_name, names[i])) continue;
+			snprintf(delete_saves[delete_save_count++], MAX_PATH, "%s/%s", dir, e->d_name);
+			break;
+		}
+	}
+	closedir(d);
+}
+// every <tag>-<core> folder under root (states live in one per core)
+static void findCoreSaves(char* root, char* tag, char names[][MAX_PATH], int name_count, int only_cfg) {
+	DIR* d = opendir(root);
+	if (!d) return;
+	struct dirent* e;
+	char prefix[MAX_PATH];
+	snprintf(prefix, sizeof(prefix), "%s-", tag);
+	while ((e = readdir(d))) {
+		if (e->d_type!=DT_DIR || !prefixMatch(prefix, e->d_name)) continue;
+		char dir[MAX_PATH];
+		snprintf(dir, sizeof(dir), "%s/%s", root, e->d_name);
+		findSaves(dir, names, name_count, only_cfg);
+	}
+	closedir(d);
+}
+// a multi-disc game's folder and everything in it
+static void removeTree(char* path) {
+	DIR* d = opendir(path);
+	if (d) {
+		struct dirent* e;
+		while ((e = readdir(d))) {
+			if (exactMatch(e->d_name, ".") || exactMatch(e->d_name, "..")) continue;
+			char child[MAX_PATH];
+			snprintf(child, sizeof(child), "%s/%s", path, e->d_name);
+			if (e->d_type==DT_DIR) removeTree(child);
+			else unlink(child);
+		}
+		closedir(d);
+		rmdir(path);
+	}
+	else unlink(path);
+}
+// a .cue's own tracks (FILE "x.bin" lines), which sit next to it
+static void removeCueTracks(char* cue_path) {
+	FILE* file = fopen(cue_path, "r");
+	if (!file) return;
+	char dir[MAX_PATH];
+	strcpy(dir, cue_path);
+	*strrchr(dir, '/') = '\0';
+	char line[MAX_PATH];
+	while (fgets(line, sizeof(line), file)) {
+		char* start = strstr(line, "FILE \"");
+		if (!start) continue;
+		start += 6;
+		char* end = strchr(start, '"');
+		if (!end || end==start || memchr(start, '/', end-start)) continue; // only files beside the cue
+		char track[MAX_PATH];
+		snprintf(track, sizeof(track), "%s/%.*s", dir, (int)(end-start), start);
+		unlink(track);
+	}
+	fclose(file);
+}
+static void removeFromRecents(Array* list, char* path) {
+	int i = RecentArray_indexOf(list, path);
+	if (i>=0) Recent_free(Array_remove(list, i));
+}
+static void deleteSelected(SDL_Surface* screen) {
+	if (!isSortableFolder(top->path) || !top->entries->count) return; // a system's own list, not Recents etc.
+	Entry* entry = top->entries->items[top->selected];
+	char rel_path[MAX_PATH]; // what recents, favorites, play time and the switcher know it by
+	if (entry->type==ENTRY_PAK || !getFavoritePath(entry, rel_path)) {
+		showFlash("Only games can be deleted", 0);
+		return;
+	}
+	char launch_path[MAX_PATH];
+	snprintf(launch_path, sizeof(launch_path), "%s%s", SDCARD_PATH, rel_path);
+
+	char title[256];
+	snprintf(title, sizeof(title), "Delete %s?", entry->name);
+	if (!askDelete(screen, title, "This can't be undone.", "DELETE", "CANCEL")) return;
+
+	// its saves go by the name it's launched by (the .m3u for multi-disc), and by each disc's own name
+	char names[DISC_MAX+1][MAX_PATH];
+	int name_count = 0;
+	strcpy(names[name_count++], strrchr(launch_path, '/')+1);
+	if (entry->type==ENTRY_DIR) {
+		DIR* d = opendir(entry->path);
+		struct dirent* e;
+		while (d && (e = readdir(d)) && name_count<DISC_MAX+1) {
+			if (e->d_name[0]=='.' || e->d_type==DT_DIR || exactMatch(e->d_name, names[0])) continue;
+			strcpy(names[name_count++], e->d_name);
+		}
+		if (d) closedir(d);
+	}
+	char tag[MAX_PATH];
+	getEmuName(entry->path, tag);
+	char dir[MAX_PATH];
+	delete_save_count = 0;
+	snprintf(dir, sizeof(dir), "%s/Saves/%s", SDCARD_PATH, tag);
+	findSaves(dir, names, name_count, 0); // in-game saves, clock
+	int game_saves = delete_save_count;
+	findCoreSaves(SHARED_USERDATA_PATH, tag, names, name_count, 0); // save states
+	int states = 0;
+	for (int i=game_saves; i<delete_save_count; i++) if (strstr(strrchr(delete_saves[i], '/'), ".st")) states += 1;
+	snprintf(dir, sizeof(dir), "%s/.minui/%s", SHARED_USERDATA_PATH, tag);
+	findSaves(dir, names, name_count, 0); // save state pictures, last slot used
+	findCoreSaves(USERDATA_PATH, tag, names, name_count, 1); // this game's own settings
+
+	int drop_saves = 0;
+	if (delete_save_count) {
+		char detail[128];
+		if (game_saves && states) snprintf(detail, sizeof(detail), "%i save file%s and %i save state%s", game_saves, game_saves==1?"":"s", states, states==1?"":"s");
+		else if (states) snprintf(detail, sizeof(detail), "%i save state%s", states, states==1?"":"s");
+		else if (game_saves) snprintf(detail, sizeof(detail), "%i save file%s", game_saves, game_saves==1?"":"s");
+		else snprintf(detail, sizeof(detail), "Its settings");
+		drop_saves = askDelete(screen, "Also delete its saves?", detail, "DELETE", "KEEP");
+	}
+
+	char art_path[MAX_PATH];
+	getResPath(entry, art_path);
+	char border_path[MAX_PATH];
+	snprintf(border_path, sizeof(border_path), "%s/%s/%s.png", BORDERS_PATH, tag, names[0]);
+	int drop_art = 0;
+	if (exists(art_path) || exists(border_path)) drop_art = askDelete(screen, "Also delete its box art?", NULL, "DELETE", "KEEP");
+
+	// the game itself
+	if (entry->type==ENTRY_DIR) removeTree(entry->path);
+	else {
+		if (suffixMatch(".cue", entry->path)) removeCueTracks(entry->path);
+		unlink(entry->path);
+	}
+	if (drop_saves) for (int i=0; i<delete_save_count; i++) unlink(delete_saves[i]);
+	if (drop_art) {
+		unlink(art_path);
+		unlink(border_path);
+	}
+
+	// and every list that points at it
+	removeFromRecents(recents, rel_path);
+	saveRecents();
+	if (RecentArray_indexOf(favorites, rel_path)>=0) {
+		removeFromRecents(favorites, rel_path);
+		saveFavorites();
+		updateRootFavorites();
+	}
+	Switcher_remove(rel_path);
+	removePlayTime(rel_path);
+	sync();
+
+	Entry_free(Array_remove(top->entries, top->selected));
+	if (top->selected>=top->entries->count) top->selected = top->entries->count - 1;
+	if (top->selected<0) top->selected = 0;
+	Directory_reindex(top);
+	centerRows(top, top->selected);
+
+	// the system's last game: back to the main menu, which (like at startup) no longer lists it
+	if (!top->entries->count && stack->count==2) {
+		char system_path[MAX_PATH];
+		strcpy(system_path, top->path);
+		closeDirectory();
+		int i = EntryArray_indexOf(top->entries, system_path);
+		if (i>=0) {
+			Entry_free(Array_remove(top->entries, i));
+			if (top->selected>=top->entries->count) top->selected = top->entries->count - 1;
+			if (top->selected<0) top->selected = 0;
+			Directory_reindex(top);
+			centerRows(top, top->selected);
+		}
+	}
+	showFlash("Deleted", 0);
+}
+
+static void openSwitcher(void) {
+	forgetSwitcherSaves(); // a game may have been saved since
+	openDirectory(FAUX_SWITCHER_PATH, 0);
+	top->selected = 0; // the game played most recently
+	centerRows(top, 0);
+	carousel_slide_from = 0;
+	if (top->entries->count>0) readyResume(top->entries->items[0]);
+}
+static int select_held = 0; // this SELECT press already pinned, so its release doesn't also switch views
+
+// on a crash, logs where it happened (and where minui is loaded) to minui.txt, so it can be traced to a line
+static void crashHandler(int signal, siginfo_t* info, void* context) {
+	char line[160];
+	int len;
+#if defined(__arm__) && defined(__linux__)
+	ucontext_t* uc = context;
+	len = snprintf(line, sizeof(line), "crash: signal %i at pc %08lx lr %08lx address %p\n", signal, (unsigned long)uc->uc_mcontext.arm_pc, (unsigned long)uc->uc_mcontext.arm_lr, info->si_addr);
+#else
+	len = snprintf(line, sizeof(line), "crash: signal %i address %p\n", signal, info->si_addr);
+#endif
+	// minui.txt is replaced when minui restarts, so this goes to its own file too
+	int out = open(USERDATA_PATH "/logs/minui-crash.txt", O_WRONLY|O_CREAT|O_APPEND, 0644);
+	write(STDERR_FILENO, line, len);
+	if (out>=0) write(out, line, len);
+	int maps = open("/proc/self/maps", O_RDONLY);
+	if (maps>=0) {
+		char buffer[4096];
+		int got;
+		while ((got = read(maps, buffer, sizeof(buffer)))>0) {
+			write(STDERR_FILENO, buffer, got);
+			if (out>=0) write(out, buffer, got);
+		}
+		close(maps);
+	}
+	if (out>=0) close(out);
+	_exit(1);
+}
 
 int main (int argc, char *argv[]) {
+	struct sigaction crash = {0};
+	crash.sa_sigaction = crashHandler;
+	crash.sa_flags = SA_SIGINFO;
+	sigaction(SIGSEGV, &crash, NULL);
+	sigaction(SIGBUS, &crash, NULL);
+	sigaction(SIGFPE, &crash, NULL);
+	sigaction(SIGILL, &crash, NULL);
+	sigaction(SIGABRT, &crash, NULL);
+
 	// LOG_info("time from launch to:\n");
 	// unsigned long main_begin = SDL_GetTicks();
 	// unsigned long first_draw = 0;
 	
+	uint64_t main_begin = getMicroseconds(); // for the startup timings in minui.txt
 	if (autoResume()) return 0; // nothing to do
 	
 	simple_mode = exists(SIMPLE_MODE_PATH);
@@ -1725,19 +3385,40 @@ int main (int argc, char *argv[]) {
 	SDL_Surface* version = NULL;
 	
 	Menu_init();
+	if (exists(SWITCHER_OPEN_PATH)) { // left a game by holding MENU
+		unlink(SWITCHER_OPEN_PATH);
+		openSwitcher();
+	}
 	// LOG_info("- menu init: %lu\n", SDL_GetTicks() - main_begin);
 	
-	// now that (most of) the heavy lifting is done, take a load off
-	PWR_setCPUSpeed(CPU_SPEED_MENU);
+	// the menu runs on one slow core to save battery, except:
+	// - for a while after boot, when Wi-Fi and the system's own startup are still busy (both cores at full speed)
+	// - while buttons are being pressed, so new art decodes quickly (one core, faster)
+	#define BOOT_STAMP_PATH "/tmp/minui_booted"
+	#define BOOT_BOOST_MS 10000
+	#define NAV_BOOST_MS 2500
+	uint32_t boot_boost_until = 0;
+	if (!exists(BOOT_STAMP_PATH)) {
+		touch(BOOT_STAMP_PATH);
+		boot_boost_until = SDL_GetTicks() + BOOT_BOOST_MS;
+	}
+	int cpu_speed = boot_boost_until ? CPU_SPEED_NORMAL : CPU_SPEED_MENU;
+	PWR_setCPUSpeed(cpu_speed);
+	uint32_t last_input_at = 0;
 	GFX_setVsync(VSYNC_STRICT);
+	SFX_warmUp(); // the first tick shouldn't have to wait for the audio device
 
 	PAD_reset();
 	int dirty = 1;
 	int scrolling = 0;
 	int show_version = 0;
 	#define INFO_ROW_MOST_PLAYED 0 // then one row per power timer
-	#define INFO_ROW_COUNT (1 + PWR_TIMER_COUNT)
+	#define INFO_ROW_THEME (1 + PWR_TIMER_COUNT)
+	#define INFO_ROW_SOUNDS (2 + PWR_TIMER_COUNT)
+	#define INFO_ROW_COUNT (3 + PWR_TIMER_COUNT)
 	int info_row = 0; // selected row on the version screen
+	uint32_t clear_armed_at = 0; // first X press on Most played, a second one within CLEAR_CONFIRM_MS clears
+	#define CLEAR_CONFIRM_MS 3000
 	int show_setting = 0; // 1=brightness,2=volume
 	int was_online = PLAT_isOnline();
 	
@@ -1746,29 +3427,96 @@ int main (int argc, char *argv[]) {
 		GFX_startFrame();
 		unsigned long now = SDL_GetTicks();
 		
+		// a slow frame (eg. decoding art nobody could preload) would eat the slide, so it starts again after it
+		static uint32_t last_frame_at = 0;
+		uint32_t frame_gap = now - last_frame_at;
+		if (carousel_slide_from && last_frame_at && frame_gap>40) carousel_slide_at += frame_gap - 16;
+		// the first seconds' hiccups go in minui.txt, to see what a fresh boot is waiting on
+		if (last_frame_at && frame_gap>=100 && (getMicroseconds()-main_begin)<20*1000000) {
+			LOG_info("slow frame: %ums, %llums after start\n", frame_gap, (unsigned long long)(getMicroseconds()-main_begin)/1000);
+		}
+		last_frame_at = now;
+		
 		PAD_poll();
+		
+		if (PAD_isPressed(BTN_ANY|BTN_MENU) || PAD_justReleased(BTN_ANY|BTN_MENU)) last_input_at = now;
+		int wanted_speed = CPU_SPEED_MENU;
+		if (boot_boost_until && (int32_t)(boot_boost_until-now)>0) wanted_speed = CPU_SPEED_NORMAL;
+		else if (last_input_at && now-last_input_at<NAV_BOOST_MS) wanted_speed = CPU_SPEED_POWERSAVE;
+		if (wanted_speed!=cpu_speed) {
+			cpu_speed = wanted_speed;
+			PWR_setCPUSpeedAsync(cpu_speed);
+		}
 			
 		int selected = top->selected;
 		int total = top->entries->count;
 		
 		PWR_update(&dirty, &show_setting, NULL, NULL);
 		
+		// a long MENU press (anywhere) opens the game switcher when it's let go, a tap still opens the info screen
+		// any other button pressed meanwhile makes it a combo instead (eg. MENU + volume for brightness)
+		static uint32_t menu_down_at = 0;
+		static int menu_combo = 0;
+		if (PAD_justPressed(BTN_MENU)) {
+			menu_down_at = now;
+			menu_combo = 0;
+		}
+		else if (PAD_isPressed(BTN_MENU) && PAD_justPressed(BTN_ANY)) menu_combo = 1;
+		if (PAD_justReleased(BTN_MENU) && !menu_combo && now-menu_down_at>=SWITCHER_HOLD_MS) {
+			if (show_version) {
+				show_version = 0;
+				if (!HAS_POWER_BUTTON && !simple_mode) PWR_disableSleep();
+			}
+			if (!inSwitcher()) {
+				openSwitcher();
+				SFX_play(SFX_CONFIRM);
+			}
+			selected = top->selected;
+			total = top->entries->count;
+			dirty = 1;
+		}
+		
 		int is_online = PLAT_isOnline();
 		if (was_online!=is_online) dirty = 1;
 		was_online = is_online;
 		
 		if (show_version) {
+			if (clear_armed_at && (now-clear_armed_at>=CLEAR_CONFIRM_MS || info_row!=INFO_ROW_MOST_PLAYED)) {
+				clear_armed_at = 0;
+				dirty = 1;
+			}
 			if (PAD_justPressed(BTN_B) || PAD_tappedMenu(now)) {
 				show_version = 0;
 				dirty = 1;
 				if (!HAS_POWER_BUTTON && !simple_mode) PWR_disableSleep();
+				SFX_play(SFX_BACK);
 			}
 			else if (PAD_justRepeated(BTN_UP) && info_row>0) {
 				info_row -= 1;
 				dirty = 1;
+				SFX_play(SFX_TICK);
 			}
 			else if (PAD_justRepeated(BTN_DOWN) && info_row<INFO_ROW_COUNT-1) {
 				info_row += 1;
+				dirty = 1;
+				SFX_play(SFX_TICK);
+			}
+			else if (info_row==INFO_ROW_SOUNDS && (PAD_justPressed(BTN_A) || PAD_justPressed(BTN_LEFT) || PAD_justPressed(BTN_RIGHT))) {
+				SFX_setMenuSounds(!SFX_menuSoundsEnabled());
+				SFX_play(SFX_CONFIRM); // heard when turning them on
+				dirty = 1;
+			}
+			else if (info_row==INFO_ROW_MOST_PLAYED && PAD_justPressed(BTN_X) && info_top_name[0]) {
+				if (clear_armed_at && now-clear_armed_at<CLEAR_CONFIRM_MS) {
+					// kept as a backup rather than deleted so a mistaken clear can be undone by hand
+					rename(PLAYTIME_PATH, PLAYTIME_PATH ".bak");
+					sync();
+					clear_armed_at = 0;
+					info_top_name[0] = '\0';
+					if (version) SDL_FreeSurface(version);
+					version = NULL; // rebuilt with the cleared play time
+				}
+				else clear_armed_at = now;
 				dirty = 1;
 			}
 			else if (info_row==INFO_ROW_MOST_PLAYED && PAD_justPressed(BTN_A) && info_top_name[0]) {
@@ -1779,13 +3527,24 @@ int main (int argc, char *argv[]) {
 				if (top->entries->count>0) readyResume(top->entries->items[top->selected]);
 				dirty = 1;
 			}
-			else if (info_row>INFO_ROW_MOST_PLAYED && (PAD_justRepeated(BTN_LEFT) || PAD_justRepeated(BTN_RIGHT))) {
+			else if (info_row==INFO_ROW_THEME && (PAD_justRepeated(BTN_LEFT) || PAD_justRepeated(BTN_RIGHT))) {
+				// wraps, there's no wrong end to land on
+				int count = GFX_getThemeCount();
+				GFX_setTheme((GFX_getTheme() + (PAD_justRepeated(BTN_RIGHT) ? 1 : -1) + count) % count);
+				SFX_play(SFX_TICK);
+				Carousel_quit(); // its cards' text is in the theme's colors
+				if (version) SDL_FreeSurface(version);
+				version = NULL; // its text is drawn in the theme's colors
+				dirty = 1;
+			}
+			else if (info_row>INFO_ROW_MOST_PLAYED && info_row<INFO_ROW_THEME && (PAD_justRepeated(BTN_LEFT) || PAD_justRepeated(BTN_RIGHT))) { // power timers
 				// clamped rather than wrapped so holding left/right can't jump to Never by accident
 				int timer = info_row - 1;
 				int index = PWR_getTimer(timer) + (PAD_justRepeated(BTN_RIGHT) ? 1 : -1);
 				if (index>=0 && index<PWR_getTimerCount(timer)) {
 					PWR_setTimer(timer, index);
 					dirty = 1;
+					SFX_play(SFX_TICK);
 				}
 			}
 		}
@@ -1793,7 +3552,26 @@ int main (int argc, char *argv[]) {
 			if (PAD_tappedMenu(now)) {
 				show_version = 1;
 				dirty = 1;
+				SFX_play(SFX_CONFIRM);
 				if (!HAS_POWER_BUTTON && !simple_mode) PWR_enableSleep();
+			}
+			else if (total>0 && showsCarousel()) {
+				// left/right (and up/down) step one game, wrapping only on a fresh press like the list does
+				int step = 0;
+				if (PAD_justRepeated(BTN_LEFT) || PAD_justRepeated(BTN_UP)) step = -1;
+				else if (PAD_justRepeated(BTN_RIGHT) || PAD_justRepeated(BTN_DOWN)) step = 1;
+				if (step) {
+					int fresh = PAD_justPressed(BTN_LEFT|BTN_RIGHT|BTN_UP|BTN_DOWN);
+					int next = selected + step;
+					if (next<0) next = fresh ? total-1 : 0;
+					else if (next>=total) next = fresh ? 0 : total-1;
+					if (next!=selected) {
+						if (next==selected+step) Carousel_slide(step, now);
+						else carousel_slide_from = 0; // wrapped around, nothing to slide from
+						selected = next;
+						centerRows(top, selected);
+					}
+				}
 			}
 			else if (total>0) {
 				if (PAD_justRepeated(BTN_UP)) {
@@ -1892,19 +3670,44 @@ int main (int argc, char *argv[]) {
 				}
 			}
 	
-			if (CAN_RANDOM && PAD_justPressed(BTN_SELECT) && stack->count>1 && total>1) {
+			// holding SELECT on a game pins it to (or unpins it from) the game switcher
+			static uint32_t select_down_at = 0;
+			if (PAD_justPressed(BTN_SELECT)) {
+				select_down_at = now;
+				select_held = 0;
+			}
+			if (CAN_SWITCH_VIEW && !select_held && PAD_isPressed(BTN_SELECT) && now-select_down_at>=SWITCHER_HOLD_MS && stack->count>1 && !inSwitcher() && total>0) {
+				select_held = 1;
+				char pin_path[MAX_PATH];
+				if (!getSwitcherPath(top->entries->items[selected], pin_path)) showFlash("Only games can be pinned", 0);
+				else if (Switcher_has(pin_path)) {
+					Switcher_remove(pin_path);
+					showFlash("Unpinned from game switcher", 0);
+				}
+				else if (Switcher_add(pin_path)==-1) showFlash("Game switcher is full (10)", 0);
+				else showFlash("Pinned to game switcher", 0);
+				SFX_play(SFX_CONFIRM);
+				dirty = 1;
+			}
+
+			if (CAN_START && PAD_justPressed(BTN_START) && canCarousel() && total>1) { // game lists only
 				int i = rand() % (total-1);
 				selected = i>=selected ? i+1 : i; // never the game you're already on
-				// center it when possible
-				top->start = selected - MAIN_ROW_COUNT/2;
-				if (top->start>total-MAIN_ROW_COUNT) top->start = total-MAIN_ROW_COUNT;
-				if (top->start<0) top->start = 0;
-				top->end = MIN(total, top->start + MAIN_ROW_COUNT);
+				centerRows(top, selected);
+			}
+			else if (CAN_SWITCH_VIEW && PAD_justReleased(BTN_SELECT) && !select_held && canCarousel()) { // a tap, holding pins instead
+				view_mode = view_mode==VIEW_CAROUSEL ? VIEW_LIST : VIEW_CAROUSEL;
+				putInt(VIEW_MODE_PATH, view_mode);
+				centerRows(top, selected);
+				showFlash(view_mode==VIEW_CAROUSEL ? "Carousel" : "List", 0);
+				SFX_play(SFX_CONFIRM);
+				dirty = 1;
 			}
 
 			if (selected!=top->selected) {
 				top->selected = selected;
 				dirty = 1;
+				SFX_play(SFX_TICK);
 			}
 
 			// holding a direction: skip art and resume lookups until it's released
@@ -1912,17 +3715,63 @@ int main (int argc, char *argv[]) {
 			scrolling = PAD_isPressed(nav_buttons) && !PAD_justPressed(nav_buttons);
 			if (PAD_justReleased(nav_buttons)) dirty = 1;
 
+			// the save files can't change while minui is running, so only look when the selection does
+			static Entry* resume_checked = NULL;
 			if (dirty && total>0) {
-				if (scrolling) can_resume = 0;
-				else readyResume(top->entries->items[top->selected]);
+				Entry* entry = top->entries->items[top->selected];
+				if (scrolling) {
+					can_resume = 0;
+					resume_checked = NULL;
+				}
+				else if (entry!=resume_checked) {
+					readyResume(entry);
+					resume_checked = entry;
+				}
 			}
 
-			if (total>0 && can_resume && PAD_justReleased(BTN_RESUME)) {
+			if (total>0 && PAD_isPressed(BTN_MENU) && PAD_justPressed(BTN_X) && isSortableFolder(top->path)) {
+				deleteSelected(screen);
+				total = top->entries->count;
+				can_resume = 0;
+				if (total>0) readyResume(top->entries->items[top->selected]);
+				dirty = 1;
+			}
+			else if (total>0 && inSwitcher() && PAD_justPressed(BTN_X)) {
+				// unpin the highlighted game, staying in the switcher
+				char pin_path[MAX_PATH];
+				if (getSwitcherPath(top->entries->items[top->selected], pin_path)) Switcher_remove(pin_path);
+				int at = top->selected;
+				EntryArray_free(top->entries);
+				Directory* fresh = Directory_new(FAUX_SWITCHER_PATH, 0);
+				top->entries = fresh->entries;
+				fresh->entries = Array_new(); // moved, not freed with the rest
+				Directory_free(fresh);
+				top->selected = MIN(at, top->entries->count-1);
+				if (top->selected<0) top->selected = 0;
+				Directory_reindex(top);
+				carousel_slide_from = 0;
+				showFlash("Unpinned from game switcher", 0);
+				SFX_play(SFX_CONFIRM);
+				total = top->entries->count;
+				if (total>0) readyResume(top->entries->items[top->selected]);
+				dirty = 1;
+			}
+			else if (total>0 && can_resume && PAD_justReleased(BTN_RESUME) && !inSwitcher()) {
+				SFX_play(SFX_CONFIRM);
 				should_resume = 1;
 				Entry_open(top->entries->items[top->selected]);
 				dirty = 1;
 			}
 			else if (total>0 && PAD_justPressed(BTN_A)) {
+				SFX_play(SFX_CONFIRM);
+				if (inSwitcher()) { // the switcher picks up from the newer of its quick save and the last manual save
+					char preview[256];
+					int slot;
+					if (getSwitcherSave(top->entries->items[top->selected], preview, &slot)) {
+						should_resume = 1;
+						resume_slot = slot;
+					}
+				}
 				Entry_open(top->entries->items[top->selected]);
 				total = top->entries->count;
 				dirty = 1;
@@ -1930,6 +3779,7 @@ int main (int argc, char *argv[]) {
 				if (total>0) readyResume(top->entries->items[top->selected]);
 			}
 			else if (PAD_justPressed(BTN_B) && stack->count>1) {
+				SFX_play(SFX_BACK);
 				int from_most_played = exactMatch(top->path, FAUX_MOSTPLAYED_PATH);
 				closeDirectory();
 				if (from_most_played && most_played_from_info) {
@@ -1942,24 +3792,38 @@ int main (int argc, char *argv[]) {
 				// can_resume = 0;
 				if (total>0) readyResume(top->entries->items[top->selected]);
 			}
-			else if (CAN_SORT && total>0 && PAD_justPressed(BTN_START) && exactMatch(top->path, FAUX_FAVORITES_PATH)) {
+			else if (total>1 && (PAD_justPressed(BTN_L2) || PAD_justPressed(BTN_R2)) && !PWR_ignoreSettingInput(PAD_justPressed(BTN_R2) ? BTN_R2 : BTN_L2, show_setting)
+					&& (exactMatch(top->path, FAUX_FAVORITES_PATH) || isSortableFolder(top->path))) {
+				// stay on the same game in its new place
 				char selected_path[MAX_PATH];
 				strcpy(selected_path, ((Entry*)top->entries->items[top->selected])->path);
-				
-				favorites_sort = (favorites_sort + 1) % FAVORITES_SORT_COUNT;
-				putInt(FAVORITES_SORT_PATH, favorites_sort);
-				
-				EntryArray_free(top->entries);
-				top->entries = getFavorites();
+				int step = PAD_justPressed(BTN_R2) ? 1 : -1;
+				char* label;
+				if (exactMatch(top->path, FAUX_FAVORITES_PATH)) {
+					favorites_sort = (favorites_sort + step + FAVORITES_SORT_COUNT) % FAVORITES_SORT_COUNT;
+					putInt(FAVORITES_SORT_PATH, favorites_sort);
+					EntryArray_free(top->entries);
+					top->entries = getFavorites();
+					label = favorites_sort_labels[favorites_sort];
+				}
+				else {
+					folder_sort = (folder_sort + step + FOLDER_SORT_COUNT) % FOLDER_SORT_COUNT;
+					putInt(FOLDER_SORT_PATH, folder_sort);
+					Directory_sort(top);
+					label = folder_sort_labels[folder_sort];
+				}
 				int i = EntryArray_indexOf(top->entries, selected_path);
 				top->selected = i>=0 ? i : 0;
 				Directory_reindex(top);
+				centerRows(top, top->selected);
 				
-				showFlash(favorites_sort_labels[favorites_sort], 0);
+				showFlash(label, 0);
+				SFX_play(SFX_CONFIRM);
 				total = top->entries->count;
 				dirty = 1;
 			}
 			else if (total>0 && PAD_justPressed(BTN_Y)) {
+				SFX_play(SFX_CONFIRM);
 				toggleFavorite();
 				total = top->entries->count;
 				dirty = 1;
@@ -1972,9 +3836,26 @@ int main (int argc, char *argv[]) {
 			flash_until = 0;
 			dirty = 1;
 		}
+		if (carousel_slide_from) {
+			if (!Carousel_shift(now)) carousel_slide_from = 0; // one last still frame
+			dirty = 1;
+		}
+		if (marquee_active && now-marquee_drawn_at>=MARQUEE_FRAME_MS && !dirty) dirty = MARQUEE_ONLY;
 		
-		if (dirty) {
+		if (dirty==MARQUEE_ONLY && marquee_base && marquee_text && !flash_until) {
+			// just the scrolling name moved
+			SDL_BlitSurface(marquee_base, NULL, screen, NULL);
+			blitMarquee(screen, now);
+			marquee_drawn_at = now;
+			GFX_flip(screen);
+			dirty = 0;
+		}
+		else if (dirty) {
 			GFX_clear(screen);
+			marquee_active = 0; // set again if this frame scrolls a name
+			marquee_drawn_at = now;
+			if (marquee_text) SDL_FreeSurface(marquee_text);
+			marquee_text = NULL;
 			
 			int ox;
 			int oy;
@@ -1982,7 +3863,8 @@ int main (int argc, char *argv[]) {
 			// simple thumbnail support a thumbnail for a file or folder named NAME.EXT needs a corresponding /.res/NAME.EXT.png
 			// that is no bigger than platform FIXED_HEIGHT x FIXED_HEIGHT
 			int had_thumb = 0;
-			if (!show_version && total>0 && !scrolling) { // skip decoding art for rows we're just passing through
+			int carousel = showsCarousel() && total>0;
+			if (!show_version && total>0 && !carousel && (!scrolling || hasThumb(top->entries->items[top->selected]))) { // passing through: only art that's already decoded
 				SDL_Surface* art = getThumb(top->entries->items[top->selected], screen);
 				if (art) {
 					had_thumb = 1;
@@ -2018,9 +3900,9 @@ int main (int argc, char *argv[]) {
 					
 					// TODO: not sure if I want bare PLAT_* calls here
 					// the commit in version.txt is the stock release's, not this build's, so it's left out
-					char* keys[] = { "Release", "Model", "Play time" };
-					char* values[] = { release, PLAT_getModel(), played };
-					int line_count = 3;
+					char* keys[] = { "Play time" }; // release and model left off to make room for the settings rows
+					char* values[] = { played };
+					int line_count = 1;
 					
 					int l_width = 0;
 					for (int i=0; i<line_count; i++) {
@@ -2042,9 +3924,9 @@ int main (int argc, char *argv[]) {
 						if (val_txts[i]->w>r_width) r_width = val_txts[i]->w;
 					}
 					
-					#define VERSION_LINE_HEIGHT 20
+					#define VERSION_LINE_HEIGHT 18 // two lines plus four rows fill the space between the top and bottom bars
 					int w = x + r_width;
-					int h = SCALE1(VERSION_LINE_HEIGHT*line_count);
+					int h = SCALE1(VERSION_LINE_HEIGHT*(line_count-1)) + val_txts[line_count-1]->h; // room for the last line's descenders
 					version = SDL_CreateRGBSurface(0,w,h,16,0,0,0,0);
 					for (int i=0; i<line_count; i++) {
 						SDL_BlitSurface(key_txts[i], NULL, version, &(SDL_Rect){0,SCALE1(VERSION_LINE_HEIGHT*i)});
@@ -2055,10 +3937,10 @@ int main (int argc, char *argv[]) {
 				}
 				// most played and the power timers sit under the version info, the whole block centered
 				int rows_w = MAX(version->w, SCALE1(260));
-				int rows_gap = SCALE1(VERSION_LINE_HEIGHT/2);
+				int rows_gap = SCALE1(4);
 				int rows_h = rows_gap + SCALE1(PILL_SIZE) * INFO_ROW_COUNT;
-				int top = SCALE1(PADDING + PILL_SIZE); // below the hardware group
-				int bottom = screen->h - SCALE1(PADDING + PILL_SIZE); // above the button hints
+				int top = SCALE1(PADDING); // the hardware group is on the right, the text starts left of it
+				int bottom = screen->h - SCALE1(PADDING + PILL_SIZE + 6); // clear of the button hints
 				int block_y = top + (bottom - top - version->h - rows_h) / 2;
 				int block_x = (screen->w - rows_w) / 2;
 				SDL_BlitSurface(version, NULL, screen, &(SDL_Rect){block_x, block_y});
@@ -2078,7 +3960,16 @@ int main (int argc, char *argv[]) {
 						name = "Most played";
 						int name_w;
 						TTF_SizeUTF8(font.large, name, &name_w, NULL);
-						GFX_truncateText(font.large, info_top_name[0] ? info_top_name : "None yet", value, rows_w - name_w - SCALE1(BUTTON_PADDING*2), 0);
+						char* shown = clear_armed_at ? "Press X again" : (info_top_name[0] ? info_top_name : "None yet");
+						GFX_truncateText(font.large, shown, value, rows_w - name_w - SCALE1(BUTTON_PADDING*2), 0);
+					}
+					else if (i==INFO_ROW_THEME) {
+						name = "Theme";
+						strcpy(value, GFX_getThemeName(GFX_getTheme()));
+					}
+					else if (i==INFO_ROW_SOUNDS) {
+						name = "Menu sounds";
+						strcpy(value, SFX_menuSoundsEnabled() ? "On" : "Off");
 					}
 					else {
 						char* timer_names[PWR_TIMER_COUNT] = { "Sleep after", "Power off after" };
@@ -2096,6 +3987,7 @@ int main (int argc, char *argv[]) {
 
 				// buttons (duped and trimmed from below)
 				if (show_setting && !GetHDMI()) GFX_blitHardwareHints(screen, show_setting);
+				else if (info_row==INFO_ROW_MOST_PLAYED && info_top_name[0]) GFX_blitButtonGroup((char*[]){ "X","CLEAR", NULL }, 0, screen, 0);
 				else GFX_blitButtonGroup((char*[]){ BTN_SLEEP==BTN_POWER?"POWER":"MENU","SLEEP",  NULL }, 0, screen, 0);
 				
 				if (info_row==INFO_ROW_MOST_PLAYED && info_top_name[0]) GFX_blitButtonGroup((char*[]){ "B","BACK", "A","VIEW", NULL }, 1, screen, 1);
@@ -2103,14 +3995,19 @@ int main (int argc, char *argv[]) {
 			}
 			else {
 				// list
-				if (total>0) {
+				if (carousel) {
+					// passing through: only art that's already decoded
+					if (Carousel_useGPU()) blitCarouselGPU(screen, top, scrolling ? CAROUSEL_SCROLL_DECODES : CAROUSEL_SLOTS, Carousel_shift(now));
+					else blitCarousel(screen, top, !scrolling, Carousel_shift(now));
+				}
+				else if (total>0) {
 					int selected_row = top->selected - top->start;
 					for (int i=top->start,j=0; i<top->end; i++,j++) {
 						Entry* entry = top->entries->items[i];
 						char* entry_name = entry->name;
 						char* entry_unique = entry->unique;
-						int available_width = (had_thumb && j!=selected_row ? ox : screen->w) - SCALE1(PADDING * 2);
-						if (i==top->start && !(had_thumb && j!=selected_row)) available_width -= ow; // 
+						int available_width = (had_thumb ? ox : screen->w) - SCALE1(PADDING * 2); // every row stays clear of the art
+						if (i==top->start && !had_thumb) available_width -= ow; // 
 					
 						SDL_Color text_color = COLOR_WHITE;
 					
@@ -2121,12 +4018,35 @@ int main (int argc, char *argv[]) {
 						if (entry->favorite) TTF_SizeUTF8(font.large, FAVORITE_DOT, &dot_width, NULL);
 
 						char display_name[256];
-						int text_width = GFX_truncateText(font.large, entry_unique ? entry_unique : entry_name, display_name, available_width-dot_width, SCALE1(BUTTON_PADDING*2));
+						int text_width = fitText(font.large, entry_unique ? entry_unique : entry_name, display_name, available_width-dot_width, SCALE1(BUTTON_PADDING*2));
 						if (entry->favorite) {
 							strcat(display_name, FAVORITE_DOT);
 							text_width += dot_width;
 						}
 						int max_width = MIN(available_width, text_width);
+						if (j==selected_row && had_thumb) {
+							// too long to fit beside the art: show it all by scrolling within the space
+							char full_name[256];
+							snprintf(full_name, sizeof(full_name), "%s%s", entry_unique ? entry_unique : entry_name, entry->favorite ? FAVORITE_DOT : "");
+							int full_width;
+							TTF_SizeUTF8(font.large, full_name, &full_width, NULL);
+							int room = available_width - SCALE1(BUTTON_PADDING*2);
+							if (full_width>room) {
+								GFX_blitPill(ASSET_WHITE_PILL, screen, &(SDL_Rect){
+									SCALE1(PADDING),
+									SCALE1(PADDING+(j*PILL_SIZE)),
+									available_width,
+									SCALE1(PILL_SIZE)
+								});
+								// drawn last, once the rest of the frame is kept for the frames that only move it
+								if (marquee_text) SDL_FreeSurface(marquee_text);
+								marquee_text = TTF_RenderUTF8_Blended(font.large, full_name, COLOR_BLACK);
+								marquee_dst = (SDL_Rect){ SCALE1(PADDING+BUTTON_PADDING), SCALE1(PADDING+(j*PILL_SIZE)+4), room, 0 };
+								marquee_overflow = full_width - room;
+								marqueeOffset(entry->path, marquee_overflow, now); // starts it over for a new name
+								continue;
+							}
+						}
 						if (j==selected_row) {
 							GFX_blitPill(ASSET_WHITE_PILL, screen, &(SDL_Rect){
 								SCALE1(PADDING),
@@ -2139,10 +4059,10 @@ int main (int argc, char *argv[]) {
 						else if (entry->unique) {
 							trimSortingMeta(&entry_unique);
 							char unique_name[256];
-							GFX_truncateText(font.large, entry_unique, unique_name, available_width, SCALE1(BUTTON_PADDING*2));
+							fitText(font.large, entry_unique, unique_name, available_width, SCALE1(BUTTON_PADDING*2));
 						
-							SDL_Surface* text = TTF_RenderUTF8_Blended(font.large, unique_name, COLOR_DARK_TEXT);
-							SDL_BlitSurface(text, &(SDL_Rect){
+							SDL_Surface* text = renderText(font.large, unique_name, COLOR_DARK_TEXT);
+							if (text) SDL_BlitSurface(text, &(SDL_Rect){
 								0,
 								0,
 								max_width-SCALE1(BUTTON_PADDING*2),
@@ -2151,13 +4071,12 @@ int main (int argc, char *argv[]) {
 								SCALE1(PADDING+BUTTON_PADDING),
 								SCALE1(PADDING+(j*PILL_SIZE)+4)
 							});
-							SDL_FreeSurface(text);
 
-							GFX_truncateText(font.large, entry_name, display_name, available_width-dot_width, SCALE1(BUTTON_PADDING*2));
+							fitText(font.large, entry_name, display_name, available_width-dot_width, SCALE1(BUTTON_PADDING*2));
 							if (entry->favorite) strcat(display_name, FAVORITE_DOT);
 						}
-						SDL_Surface* text = TTF_RenderUTF8_Blended(font.large, display_name, text_color);
-						SDL_BlitSurface(text, &(SDL_Rect){
+						SDL_Surface* text = renderText(font.large, display_name, text_color);
+						if (text) SDL_BlitSurface(text, &(SDL_Rect){
 							0,
 							0,
 							max_width-SCALE1(BUTTON_PADDING*2),
@@ -2166,20 +4085,23 @@ int main (int argc, char *argv[]) {
 							SCALE1(PADDING+BUTTON_PADDING),
 							SCALE1(PADDING+(j*PILL_SIZE)+4)
 						});
-						SDL_FreeSurface(text);
 					}
 				}
 				else {
 					// TODO: for some reason screen's dimensions end up being 0x0 in GFX_blitMessage...
-					GFX_blitMessage(font.large, "Empty folder", screen, &(SDL_Rect){0,0,screen->w,screen->h}); //, NULL);
+					if (inSwitcher()) GFX_blitMessage(font.small, "No games pinned yet\n\nHold SELECT on a game in a list,\nor press X in a game's menu", screen, &(SDL_Rect){0,0,screen->w,screen->h});
+					else GFX_blitMessage(font.large, "Empty folder", screen, &(SDL_Rect){0,0,screen->w,screen->h}); //, NULL);
 				}
 			
+				flash_gpu = carousel && Carousel_useGPU(); // over the carousel's art, which the GPU draws after the menu
 				blitFlash(screen);
+				if (flash_gpu && show_setting && !GetHDMI()) queueHardwareGroup(screen, ow); // brightness/volume on top too
 				
 				// buttons
 				char fav_path[256];
 				char* fav_button = (total>0 && getFavoritePath(top->entries->items[top->selected], fav_path)) ? "Y" : NULL; // NULL ends the group early
 				if (show_setting && !GetHDMI()) GFX_blitHardwareHints(screen, show_setting);
+				else if (inSwitcher()) GFX_blitButtonGroup((char*[]){ total>0 ? "X" : NULL,"REMOVE", NULL }, 0, screen, 0);
 				else if (total>0 && exactMatch(top->path, FAUX_MOSTPLAYED_PATH)) { // stats matter more than resume/fav hints here
 					Entry* entry = top->entries->items[top->selected];
 					char total_str[32], average_str[32];
@@ -2188,7 +4110,6 @@ int main (int argc, char *argv[]) {
 					GFX_blitButtonGroup((char*[]){ total_str,"ALL", average_str,"AVG", NULL }, 0, screen, 0);
 				}
 				else if (can_resume) GFX_blitButtonGroup((char*[]){ "X","RESUME", fav_button,"FAV", NULL }, 0, screen, 0);
-				else if (CAN_SORT && total>0 && exactMatch(top->path, FAUX_FAVORITES_PATH)) GFX_blitButtonGroup((char*[]){ "START","SORT", fav_button,"FAV", NULL }, 0, screen, 0);
 				else GFX_blitButtonGroup((char*[]){
 					BTN_SLEEP==BTN_POWER?"POWER":"MENU",
 					BTN_SLEEP==BTN_POWER||simple_mode?"SLEEP":"INFO",
@@ -2202,7 +4123,10 @@ int main (int argc, char *argv[]) {
 				}
 				else {
 					if (stack->count>1) {
-						GFX_blitButtonGroup((char*[]){ "B","BACK", "A","OPEN", NULL }, 1, screen, 1);
+						char preview[256];
+						int slot;
+						int resumable = inSwitcher() && getSwitcherSave(top->entries->items[top->selected], preview, &slot);
+						GFX_blitButtonGroup((char*[]){ "B","BACK", "A",resumable ? "RESUME" : "OPEN", NULL }, 1, screen, 1);
 					}
 					else {
 						GFX_blitButtonGroup((char*[]){ "A","OPEN", NULL }, 0, screen, 1);
@@ -2210,10 +4134,33 @@ int main (int argc, char *argv[]) {
 				}
 			}
 
+			if (marquee_text) {
+				// keep everything but the scrolling name for the frames that only move it
+				if (!marquee_base || marquee_base->w!=screen->w || marquee_base->h!=screen->h) {
+					if (marquee_base) SDL_FreeSurface(marquee_base);
+					marquee_base = SDL_CreateRGBSurface(0, screen->w, screen->h, screen->format->BitsPerPixel, screen->format->Rmask, screen->format->Gmask, screen->format->Bmask, screen->format->Amask);
+				}
+				if (marquee_base) SDL_BlitSurface(screen, NULL, marquee_base, NULL);
+				blitMarquee(screen, now);
+				if (flash_until && !flash_gpu && !show_version) blitFlash(screen); // a popup stays over the scrolling name
+			}
+
 			GFX_flip(screen);
 			dirty = 0;
+			static int first_frame = 1;
+			if (first_frame) {
+				first_frame = 0;
+				LOG_info("first frame: %llums after start%s\n", (unsigned long long)(getMicroseconds()-main_begin)/1000, boot_boost_until ? " (fresh boot)" : "");
+			}
 		}
-		else GFX_sync();
+		else {
+			// idle: get the art for the next move ready (one piece a frame), otherwise just wait for the next frame
+			int idle = total>0 && !show_version && !carousel_slide_from && !PAD_isPressed(BTN_ANY|BTN_MENU);
+			int worked = 0;
+			if (idle && showsCarousel()) worked = Carousel_useGPU() ? Carousel_preloadGPU(top, screen) : Carousel_preload(top, screen);
+			else if (idle) worked = preloadThumbs(top, screen);
+			if (!worked) GFX_sync();
+		}
 		
 		// if (!first_draw) {
 		// 	first_draw = SDL_GetTicks();
@@ -2236,9 +4183,16 @@ int main (int argc, char *argv[]) {
 	}
 	
 	if (version) SDL_FreeSurface(version);
-	if (thumb) SDL_FreeSurface(thumb);
+	freeThumbs();
+	freeTextCache();
+	if (marquee_base) SDL_FreeSurface(marquee_base);
+	if (marquee_text) SDL_FreeSurface(marquee_text);
+	Carousel_quit();
+	Carousel_freeGPU();
+	PLAT_destroyTexture(flash_texture);
 	if (flash_font) TTF_CloseFont(flash_font);
 
+	SFX_quit(); // lets the confirm sound for a launched game finish
 	Menu_quit();
 	PWR_quit();
 	PAD_quit();
