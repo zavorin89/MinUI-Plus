@@ -310,8 +310,10 @@ static void clearVideo(void) {
 	}
 }
 
+static void freeMenuTextures(void);
 void PLAT_quitVideo(void) {
 	// clearVideo();
+	freeMenuTextures();
 
 	SDL_FreeSurface(vid.screen);
 	SDL_FreeSurface(vid.buffer);
@@ -622,12 +624,27 @@ void PLAT_blitRenderer(GFX_Renderer* renderer) {
 	resizeVideo(vid.blit->true_w,vid.blit->true_h,vid.blit->src_p);
 }
 
+// the menus' screen goes up into one of a few textures in turn: rewriting the one the GPU is still drawing the
+// last frame from makes the Mali driver wait for that frame to reach the display, which held menus to 20fps
+#define MENU_TEXTURES 3
+static SDL_Texture* menu_textures[MENU_TEXTURES];
+static int menu_texture_next = 0;
+static void freeMenuTextures(void) {
+	for (int i=0; i<MENU_TEXTURES; i++) {
+		if (menu_textures[i]) SDL_DestroyTexture(menu_textures[i]);
+		menu_textures[i] = NULL;
+	}
+}
 void PLAT_flip(SDL_Surface* IGNORED, int ignored) {
 	if (!vid.blit) {
 		resizeVideo(device_width,device_height,FIXED_PITCH); // !!!???
-		SDL_UpdateTexture(vid.texture,NULL,vid.screen->pixels,vid.screen->pitch);
-		if (rotate) SDL_RenderCopyEx(vid.renderer,vid.texture,NULL,&(SDL_Rect){0,device_width,device_width,device_height},rotate*90,&(SDL_Point){0,0},SDL_FLIP_NONE);
-		else SDL_RenderCopy(vid.renderer, vid.texture, NULL,NULL);
+		SDL_Texture* texture = menu_textures[menu_texture_next];
+		if (!texture) texture = menu_textures[menu_texture_next] = SDL_CreateTexture(vid.renderer,SDL_PIXELFORMAT_RGB565, SDL_TEXTUREACCESS_STREAMING, device_width,device_height);
+		if (!texture) texture = vid.texture;
+		else menu_texture_next = (menu_texture_next + 1) % MENU_TEXTURES;
+		SDL_UpdateTexture(texture,NULL,vid.screen->pixels,vid.screen->pitch);
+		if (rotate) SDL_RenderCopyEx(vid.renderer,texture,NULL,&(SDL_Rect){0,device_width,device_width,device_height},rotate*90,&(SDL_Point){0,0},SDL_FLIP_NONE);
+		else SDL_RenderCopy(vid.renderer, texture, NULL,NULL);
 		drawTextureQueue(); // eg. the carousel's art, over the menu
 		SDL_RenderPresent(vid.renderer);
 		return;
