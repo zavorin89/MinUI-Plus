@@ -31,6 +31,7 @@ static Page pages[] = {
 		{ "Hold Select",	"Pin to the game switcher" },
 		{ "Start",			"Pick a random game" },
 		{ "Menu + X",		"Delete the game" },
+		{ "Menu + Y",		"Choose the game's core" },
 	}},
 	{ "Anywhere in MinUI", {
 		{ "Menu",			"Settings and play time" },

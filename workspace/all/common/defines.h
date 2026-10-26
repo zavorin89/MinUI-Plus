@@ -22,6 +22,7 @@
 #define FAVORITES_PATH SHARED_USERDATA_PATH "/.minui/favorites.txt"
 #define POWER_PATH SHARED_USERDATA_PATH "/.minui/power.txt"
 #define PLAYTIME_PATH SHARED_USERDATA_PATH "/.minui/playtime.txt"
+#define GAME_CORES_PATH SHARED_USERDATA_PATH "/.minui/cores.txt" // "<game path>\t<pak tag>" for games not on their system's own core
 #define SWITCHER_PATH SHARED_USERDATA_PATH "/.minui/switcher.txt" // games picked for the game switcher, paths without SDCARD_PATH
 #define SWITCHER_MAX 10
 #define SWITCHER_OPEN_PATH "/tmp/open_switcher" // left by minarch so the launcher opens straight into the switcher

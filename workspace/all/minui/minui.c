@@ -5,6 +5,7 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <dirent.h>
+#include <strings.h>
 #include <ctype.h>
 #include <unistd.h>
 #include <fcntl.h>
@@ -1526,6 +1527,7 @@ static void readyResume(Entry* entry) {
 static void saveLast(char* path);
 static void loadLast(void);
 
+static int getGameCore(char* sd_path, char* tag);
 static int autoResume(void) {
 	// NOTE: bypasses recents
 
@@ -1546,7 +1548,8 @@ static int autoResume(void) {
 	getEmuName(sd_path, emu_name);
 	
 	char emu_path[256];
-	getEmuPath(emu_name, emu_path);
+	char core_tag[64];
+	getEmuPath(getGameCore(sd_path, core_tag) ? core_tag : emu_name, emu_path);
 	
 	if (!exists(emu_path)) return 0;
 	
@@ -1571,6 +1574,169 @@ static void openPak(char* path) {
 	sprintf(cmd, "'%s/launch.sh'", escapeSingleQuotes(path));
 	queueNext(cmd);
 }
+// per-game cores: a pak with an alternate.txt naming a system's tag (eg. SFC10.pak/alternate.txt: "SFC") can run
+// that system's games too, and GAME_CORES_PATH remembers which games use one instead of their folder's own pak
+
+// the game's chosen pak tag, if it has one (and that pak is still there)
+static int getGameCore(char* sd_path, char* tag) {
+	char rel[MAX_PATH];
+	snprintf(rel, sizeof(rel), "%s", sd_path + (prefixMatch(SDCARD_PATH, sd_path) ? strlen(SDCARD_PATH) : 0));
+	char m3u_path[MAX_PATH];
+	char m3u_rel[MAX_PATH] = "";
+	if (!suffixMatch(".m3u", rel) && hasM3u(sd_path, m3u_path)) snprintf(m3u_rel, sizeof(m3u_rel), "%s", m3u_path + strlen(SDCARD_PATH)); // a disc of a multi-disc game
+
+	FILE* file = fopen(GAME_CORES_PATH, "r");
+	if (!file) return 0;
+	int found = 0;
+	char line[MAX_PATH+64];
+	while (!found && fgets(line, sizeof(line), file)) {
+		normalizeNewline(line);
+		trimTrailingNewlines(line);
+		char* tab = strrchr(line, '\t');
+		if (!tab) continue;
+		*tab = '\0';
+		if (!exactMatch(line, rel) && !(m3u_rel[0] && exactMatch(line, m3u_rel))) continue;
+		char pak[MAX_PATH];
+		getEmuPath(tab+1, pak);
+		if (exists(pak)) {
+			strcpy(tag, tab+1);
+			found = 1;
+		}
+	}
+	fclose(file);
+	return found;
+}
+// tag NULL goes back to the system's own core
+static void setGameCore(char* rel_path, char* tag) {
+	static char out[32*1024];
+	out[0] = '\0';
+	FILE* file = fopen(GAME_CORES_PATH, "r");
+	if (file) {
+		char line[MAX_PATH+64];
+		while (fgets(line, sizeof(line), file)) {
+			char copy[MAX_PATH+64];
+			strcpy(copy, line);
+			normalizeNewline(copy);
+			trimTrailingNewlines(copy);
+			char* tab = strrchr(copy, '\t');
+			if (!tab) continue;
+			*tab = '\0';
+			if (exactMatch(copy, rel_path)) continue; // replaced below
+			*tab = '\t';
+			if (strlen(out)+strlen(copy)+2<sizeof(out)) { strcat(out, copy); strcat(out, "\n"); }
+		}
+		fclose(file);
+	}
+	if (tag) {
+		char line[MAX_PATH+64];
+		snprintf(line, sizeof(line), "%s\t%s\n", rel_path, tag);
+		if (strlen(out)+strlen(line)<sizeof(out)) strcat(out, line);
+	}
+	putFile(GAME_CORES_PATH, out);
+	sync();
+}
+
+typedef struct Core {
+	char tag[64]; // the pak's
+	char name[64]; // shown
+	const char* about; // a line or two on what it's good at, for the known ones
+} Core;
+#define CORE_MAX 8
+// the core a pak's launch.sh runs, by a friendlier name when it's a known one
+static void getCoreName(char* tag, char* name, const char** about) {
+	snprintf(name, 64, "%s", tag);
+	*about = NULL;
+	char pak[MAX_PATH];
+	getEmuPath(tag, pak);
+	FILE* file = fopen(pak, "r");
+	if (!file) return;
+	char line[256];
+	char exe[64] = "";
+	while (fgets(line, sizeof(line), file)) {
+		if (!prefixMatch("EMU_EXE=", line)) continue;
+		trimTrailingNewlines(line);
+		snprintf(exe, sizeof(exe), "%s", line + 8);
+		break;
+	}
+	fclose(file);
+	if (!exe[0]) return;
+	static const char* known[][3] = {
+		{"snes9x2005_plus","Snes9x 2005 Plus",	"The fastest. Runs nearly every game at full speed,\nwith a few accuracy fixes over the original 2005."},
+		{"snes9x2005","Snes9x 2005",			"Very fast, made for low-powered handhelds."},
+		{"snes9x2010","Snes9x 2010",			"More accurate than 2005, a little slower.\nA good pick when a game glitches on the default."},
+		{"snes9x","Snes9x",						"The latest Snes9x: the most accurate and compatible,\nand the most demanding."},
+		{"mednafen_supafaust","Supafaust",		"Accurate, Mednafen-based, and uses both CPU cores.\nGood for games with special chips."},
+		{"gpsp","gpSP",							"The fastest, made for low-powered handhelds.\nSome games and rom hacks have glitches."},
+		{"mgba","mGBA",							"Accurate, with the best compatibility (rom hacks too).\nSlower than gpSP."},
+		{"gambatte","Gambatte",					"Accurate Game Boy and Game Boy Color emulation."},
+		{"fceumm","FCEUmm",						"Fast NES emulation that runs almost every cartridge."},
+		{"picodrive","PicoDrive",				"Fast Genesis, Master System and Game Gear emulation."},
+		{"pcsx_rearmed","PCSX ReARMed",			"PlayStation emulation tuned for ARM handhelds."},
+		{"mednafen_pce_fast","Beetle PCE Fast",	"Fast, accurate PC Engine / TurboGrafx-16 emulation."},
+	};
+	for (int i=0; i<(int)(sizeof(known)/sizeof(known[0])); i++) {
+		if (exactMatch((char*)known[i][0], exe)) {
+			snprintf(name, 64, "%s", known[i][1]);
+			*about = known[i][2];
+			return;
+		}
+	}
+	snprintf(name, 64, "%s", exe);
+}
+// paks in dir whose alternate.txt names system_tag
+static void findAlternates(char* dir, char* system_tag, Core* cores, int* count) {
+	DIR* d = opendir(dir);
+	if (!d) return;
+	struct dirent* e;
+	while ((e = readdir(d)) && *count<CORE_MAX) {
+		if (!suffixMatch(".pak", e->d_name)) continue;
+		char alt_path[MAX_PATH];
+		snprintf(alt_path, sizeof(alt_path), "%s/%s/alternate.txt", dir, e->d_name);
+		FILE* file = fopen(alt_path, "r");
+		if (!file) continue;
+		char line[64];
+		int match = 0;
+		while (!match && fgets(line, sizeof(line), file)) {
+			normalizeNewline(line);
+			trimTrailingNewlines(line);
+			match = exactMatch(line, system_tag);
+		}
+		fclose(file);
+		if (!match) continue;
+		char tag[64];
+		snprintf(tag, sizeof(tag), "%.*s", (int)(strlen(e->d_name)-4), e->d_name);
+		int seen = 0;
+		for (int i=0; i<*count; i++) if (exactMatch(cores[i].tag, tag)) seen = 1;
+		if (seen) continue;
+		strcpy(cores[*count].tag, tag);
+		getCoreName(tag, cores[*count].name, &cores[*count].about);
+		*count += 1;
+	}
+	closedir(d);
+}
+static int compareCores(const void* a, const void* b) {
+	return strcasecmp(((Core*)a)->name, ((Core*)b)->name);
+}
+// every core that can run a system's games, its own first
+static int getCores(char* system_tag, Core* cores) {
+	int count = 0;
+	char pak[MAX_PATH];
+	getEmuPath(system_tag, pak);
+	if (exists(pak)) {
+		strcpy(cores[count].tag, system_tag);
+		getCoreName(system_tag, cores[count].name, &cores[count].about);
+		count += 1;
+	}
+	char dir[MAX_PATH];
+	snprintf(dir, sizeof(dir), "%s/Emus/%s", SDCARD_PATH, PLATFORM);
+	findAlternates(dir, system_tag, cores, &count);
+	snprintf(dir, sizeof(dir), "%s/Emus", PAKS_PATH);
+	findAlternates(dir, system_tag, cores, &count);
+	int first = exists(pak) ? 1 : 0; // the system's own stays on top, the rest by name
+	if (count-first>1) qsort(cores+first, count-first, sizeof(Core), compareCores);
+	return count;
+}
+
 static void openRom(char* path, char* last) {
 	LOG_info("openRom(%s,%s)\n", path, last);
 	
@@ -1622,7 +1788,8 @@ static void openRom(char* path, char* last) {
 	else putInt(RESUME_SLOT_PATH,8); // resume hidden default state
 	
 	char emu_path[256];
-	getEmuPath(emu_name, emu_path);
+	char core_tag[64];
+	getEmuPath(getGameCore(sd_path, core_tag) ? core_tag : emu_name, emu_path); // the game's own choice of core, if it has one
 	
 	// NOTE: escapeSingleQuotes() modifies the passed string 
 	// so we need to save the path before we call that
@@ -3311,6 +3478,82 @@ static void deleteSelected(SDL_Surface* screen) {
 	showFlash("Deleted", 0);
 }
 
+// choosing a game's core (MENU + Y): a list of every core that can run it
+static void pickCore(SDL_Surface* screen) {
+	Entry* entry = top->entries->items[top->selected];
+	char rel_path[MAX_PATH];
+	if (entry->type==ENTRY_PAK || !getFavoritePath(entry, rel_path)) return;
+	char sd_path[MAX_PATH];
+	snprintf(sd_path, sizeof(sd_path), "%s%s", SDCARD_PATH, rel_path);
+	char system_tag[MAX_PATH];
+	getEmuName(sd_path, system_tag);
+
+	Core cores[CORE_MAX];
+	int count = getCores(system_tag, cores);
+	if (count<2) {
+		showFlash(count ? "This system has one core" : "No core for this game", 0);
+		return;
+	}
+	char current_tag[64];
+	if (!getGameCore(sd_path, current_tag)) strcpy(current_tag, system_tag);
+	int current = 0;
+	for (int i=0; i<count; i++) if (exactMatch(cores[i].tag, current_tag)) current = i;
+
+	int selected = current;
+	int dirty = 1;
+	int result = -1; // -1 still choosing, 0 cancelled, 1 chosen
+	while (result<0) {
+		GFX_startFrame();
+		PAD_poll();
+		if (PAD_justPressed(BTN_B)) result = 0;
+		else if (PAD_justPressed(BTN_A)) result = 1;
+		else if (PAD_justRepeated(BTN_UP)) { selected = (selected + count - 1) % count; SFX_play(SFX_TICK); dirty = 1; }
+		else if (PAD_justRepeated(BTN_DOWN)) { selected = (selected + 1) % count; SFX_play(SFX_TICK); dirty = 1; }
+		PWR_update(&dirty, NULL, NULL, NULL);
+		if (dirty) {
+			GFX_clear(screen);
+			char title[256];
+			char shown[256];
+			snprintf(title, sizeof(title), "Core for %s", entry->name);
+			GFX_truncateText(font.large, title, shown, screen->w - SCALE1(PADDING*4), 0);
+			SDL_Surface* text = TTF_RenderUTF8_Blended(font.large, shown, COLOR_WHITE);
+			int rows_h = SCALE1(PILL_SIZE) * count + SCALE1(PADDING + 32); // and two lines about the highlighted core
+			int y = (screen->h - SCALE1(PILL_SIZE+PADDING) - text->h - SCALE1(PADDING) - rows_h) / 2;
+			SDL_BlitSurface(text, NULL, screen, &(SDL_Rect){ (screen->w - text->w) / 2, y });
+			y += text->h + SCALE1(PADDING);
+			SDL_FreeSurface(text);
+			int rows_w = SCALE1(260);
+			int x = (screen->w - rows_w) / 2;
+			for (int i=0; i<count; i++) {
+				int is_selected = i==selected;
+				if (is_selected) GFX_blitPill(ASSET_WHITE_PILL, screen, &(SDL_Rect){ x - SCALE1(BUTTON_PADDING), y, rows_w + SCALE1(BUTTON_PADDING*2), SCALE1(PILL_SIZE) });
+				SDL_Surface* name = TTF_RenderUTF8_Blended(font.large, cores[i].name, is_selected ? COLOR_BLACK : COLOR_WHITE);
+				SDL_BlitSurface(name, NULL, screen, &(SDL_Rect){ x, y + (SCALE1(PILL_SIZE) - name->h) / 2 });
+				SDL_FreeSurface(name);
+				if (i==current || i==0) {
+					SDL_Surface* note = TTF_RenderUTF8_Blended(font.small, i==current ? "IN USE" : "DEFAULT", is_selected ? COLOR_BLACK : COLOR_DARK_TEXT);
+					SDL_BlitSurface(note, NULL, screen, &(SDL_Rect){ x + rows_w - note->w, y + (SCALE1(PILL_SIZE) - note->h) / 2 });
+					SDL_FreeSurface(note);
+				}
+				y += SCALE1(PILL_SIZE);
+			}
+			if (cores[selected].about) { // what the highlighted one is good at, under the list
+				int w,h;
+				GFX_sizeText(font.small, (char*)cores[selected].about, SCALE1(16), &w,&h);
+				GFX_blitText(font.small, (char*)cores[selected].about, SCALE1(16), COLOR_LIGHT_TEXT, screen, &(SDL_Rect){ 0, y + SCALE1(PADDING), screen->w, h });
+			}
+			GFX_blitButtonGroup((char*[]){ "B","CANCEL", "A","USE", NULL }, 1, screen, 1);
+			GFX_flip(screen);
+			dirty = 0;
+		}
+		else GFX_sync();
+	}
+	SFX_play(result ? SFX_CONFIRM : SFX_BACK);
+	if (!result || selected==current) return;
+	setGameCore(rel_path, selected==0 ? NULL : cores[selected].tag); // the system's own core needs no entry
+	showFlash(cores[selected].name, 0);
+}
+
 static void openSwitcher(void) {
 	forgetSwitcherSaves(); // a game may have been saved since
 	openDirectory(FAUX_SWITCHER_PATH, 0);
@@ -3729,7 +3972,13 @@ int main (int argc, char *argv[]) {
 				}
 			}
 
-			if (total>0 && PAD_isPressed(BTN_MENU) && PAD_justPressed(BTN_X) && isSortableFolder(top->path)) {
+			if (total>0 && PAD_isPressed(BTN_MENU) && PAD_justPressed(BTN_Y)) {
+				pickCore(screen);
+				can_resume = 0;
+				readyResume(top->entries->items[top->selected]); // a different core has its own save states
+				dirty = 1;
+			}
+			else if (total>0 && PAD_isPressed(BTN_MENU) && PAD_justPressed(BTN_X) && isSortableFolder(top->path)) {
 				deleteSelected(screen);
 				total = top->entries->count;
 				can_resume = 0;
