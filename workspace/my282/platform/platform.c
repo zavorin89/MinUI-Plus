@@ -9,6 +9,7 @@
 #include <unistd.h>
 #include <errno.h>
 #include <pthread.h>
+#include <stdint.h>
 
 #include <msettings.h>
 #include <mstick.h>
@@ -816,8 +817,16 @@ static void setCPUSpeed(int speed, int wait) {
 void PLAT_setCPUSpeed(int speed) {
 	setCPUSpeed(speed, 1);
 }
+// even backgrounded with "&", system() stops the caller while it forks and starts a shell (a dropped frame or
+// two in the menu), so the change is made from a thread of its own instead
+static void* setCPUSpeedThread(void* arg) {
+	setCPUSpeed((int)(intptr_t)arg, 1);
+	return NULL;
+}
 void PLAT_setCPUSpeedAsync(int speed) {
-	setCPUSpeed(speed, 0);
+	pthread_t thread;
+	if (pthread_create(&thread, NULL, setCPUSpeedThread, (void*)(intptr_t)speed)==0) pthread_detach(thread);
+	else setCPUSpeed(speed, 0);
 }
 
 #define RUMBLE_PATH "/sys/devices/virtual/timed_output/vibrator/enable"

@@ -7,6 +7,8 @@
 #include <dirent.h>
 #include <strings.h>
 #include <pthread.h>
+#include <sys/syscall.h>
+#include <sys/resource.h>
 #include <ctype.h>
 #include <unistd.h>
 #include <fcntl.h>
@@ -2933,6 +2935,12 @@ static SDL_Surface* greySurface(SDL_Surface* src) {
 // the GPU carousel's art is decoded on a thread (PNG decoding is what made scrolling stutter), nearest first;
 // the main thread only uploads what's ready, and waits for (or decodes) just the selected game's art
 #define DECODE_JOBS 12
+#define CAROUSEL_UPLOADS 2 // decoded art moved to the GPU per frame (two textures each), nearest first
+static int carousel_uploads_left = CAROUSEL_UPLOADS;
+// what the last carousel frame spent its time on, for the slow frame log in minui.txt
+static int carousel_uploads = 0;
+static int carousel_decoded = 0; // decoded on the main thread (the selected game's, when the thread hadn't got to it)
+static uint32_t carousel_waited = 0; // ms spent waiting for or decoding the selected game's art
 enum { JOB_FREE, JOB_WAITING, JOB_WORKING, JOB_DONE };
 typedef struct {
 	char path[MAX_PATH];
@@ -2953,6 +2961,9 @@ static SDL_Surface* decode_screen = NULL; // only its pixel format is read
 
 static SDL_Surface* greySurface(SDL_Surface* src);
 static void* Decoder_run(void* arg) {
+#ifdef __linux__
+	setpriority(PRIO_PROCESS, syscall(SYS_gettid), 10); // below the menu, so drawing goes first on a busy core
+#endif
 	pthread_mutex_lock(&decode_lock);
 	while (!decode_stop) {
 		DecodeJob* job = NULL;
@@ -3053,7 +3064,7 @@ static int Decoder_hasDone(void) {
 	if (!decode_started) return 0;
 	int done = 0;
 	pthread_mutex_lock(&decode_lock);
-	for (int i=0; i<DECODE_JOBS && !done; i++) done = decode_jobs[i].state==JOB_DONE && decode_jobs[i].wanted;
+	for (int i=0; i<DECODE_JOBS && !done; i++) done = decode_jobs[i].state==JOB_DONE && decode_jobs[i].wanted && decode_jobs[i].priority<CAROUSEL_LEVELS; // on screen, not prefetched
 	pthread_mutex_unlock(&decode_lock);
 	return done;
 }
@@ -3069,6 +3080,10 @@ static void Decoder_quit(void) {
 	for (int i=0; i<DECODE_JOBS; i++) DecodeJob_free(&decode_jobs[i]);
 }
 
+static int Carousel_has(char* res_path) {
+	for (int i=0; i<CAROUSEL_CACHE_SIZE; i++) if (carousel_cache[i].loaded && exactMatch(carousel_cache[i].path, res_path)) return 1;
+	return 0;
+}
 // where the carousel's picture for an entry comes from: its box art, its switcher screenshot, or "card:" for none
 static void getCarouselPath(Entry* entry, char* res_path) {
 	if (inSwitcher()) {
@@ -3094,6 +3109,8 @@ static CarouselArt* getCarouselSlot(Entry* entry, SDL_Surface* screen, int can_d
 	SDL_Surface* decoded_grey = NULL;
 	if (!slot) {
 		int card = prefixMatch("card:", res_path);
+		if (!card && !can_decode && carousel_uploads_left<=0) return NULL; // next frame: spreads the uploads out
+		uint32_t started = SDL_GetTicks();
 		SDL_Surface* art = NULL;
 		int got = !card && Decoder_take(res_path, &art, &decoded_grey, can_decode); // the thread's, if it's done
 		if (!got && !card && !can_decode) return NULL;
@@ -3102,6 +3119,12 @@ static CarouselArt* getCarouselSlot(Entry* entry, SDL_Surface* screen, int can_d
 		strcpy(slot->path, res_path);
 		slot->art = got ? art : (card ? NULL : loadArt(res_path, screen));
 		slot->loaded = 1;
+		if (!card) {
+			carousel_uploads_left -= 1;
+			carousel_uploads += 1;
+			if (!got) carousel_decoded += 1;
+			if (can_decode) carousel_waited += SDL_GetTicks() - started;
+		}
 	}
 	slot->used = ++carousel_clock;
 	if (slot->art && !slot->color) { // uploading is quick, the decoding was the slow part
@@ -3180,6 +3203,9 @@ static void blitCarouselGPU(SDL_Surface* screen, Directory* dir, int decodes, fl
 	}
 
 	Decoder_beginFrame();
+	carousel_uploads_left = CAROUSEL_UPLOADS;
+	carousel_uploads = carousel_decoded = 0;
+	carousel_waited = 0;
 	// each place's art, and where places sit at rest (spacing follows the art's shape, like the software carousel)
 	CarouselArt* slots[CAROUSEL_SLOTS];
 	int scales[CAROUSEL_SLOTS], widths[CAROUSEL_SLOTS], xs[CAROUSEL_SLOTS];
@@ -3212,10 +3238,9 @@ static void blitCarouselGPU(SDL_Surface* screen, Directory* dir, int decodes, fl
 			int i = dir->selected + side * place;
 			if (i<0 || i>=total) continue;
 			Entry* entry = dir->entries->items[i];
-			if (getCarouselSlot(entry, screen, 0)) continue;
 			char res_path[MAX_PATH];
 			getCarouselPath(entry, res_path);
-			Decoder_request(res_path, place, screen);
+			if (!Carousel_has(res_path)) Decoder_request(res_path, place, screen); // decoded, but left off the GPU until it's on screen
 		}
 	}
 	Decoder_endFrame();
@@ -3307,6 +3332,7 @@ static void blitCarouselGPU(SDL_Surface* screen, Directory* dir, int decodes, fl
 // GPU version of Carousel_preload: decodes and uploads the art either side, one per call
 static int Carousel_preloadGPU(Directory* dir, SDL_Surface* screen) {
 	int total = dir->entries->count;
+	carousel_uploads_left = 1;
 	for (int place=1; place<=CAROUSEL_LEVELS+1; place++) {
 		for (int side=1; side>=-1; side-=2) {
 			int i = dir->selected + side * place;
@@ -3954,6 +3980,9 @@ int main (int argc, char *argv[]) {
 		static uint32_t last_frame_at = 0;
 		uint32_t frame_gap = now - last_frame_at;
 		if (carousel_slide_from && last_frame_at && frame_gap>40) carousel_slide_at += frame_gap - 16;
+		if (last_frame_at && frame_gap>=50 && showsCarousel() && Carousel_useGPU()) { // what a slow carousel frame was doing
+			LOG_info("slow carousel frame: %ums (%i uploaded, %i decoded here, %ums on the selected art)\n", frame_gap, carousel_uploads, carousel_decoded, carousel_waited);
+		}
 		// the first seconds' hiccups go in minui.txt, to see what a fresh boot is waiting on
 		if (last_frame_at && frame_gap>=100 && (getMicroseconds()-main_begin)<20*1000000) {
 			LOG_info("slow frame: %ums, %llums after start\n", frame_gap, (unsigned long long)(getMicroseconds()-main_begin)/1000);
