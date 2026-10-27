@@ -599,18 +599,99 @@ static void blitCaption(char* text, SDL_Color color, int cx, int y, int max_w) {
 	SDL_FreeSurface(rendered);
 }
 
-// the game's own art beside one from the library: left and right go through the library's, A keeps the one on the
-// right, B keeps the game's. 1 when new art was saved
+// the picker's screen: the game's own art beside one from the library, a label under each
+static void drawPicker(Game* game, SDL_Surface* current, SDL_Surface** loaded, int* failed, Art** candidates, int index, int count, int show_setting) {
+	GFX_clear(screen);
+	GFX_blitHardwareGroup(screen, show_setting);
+	char title[MAX_PATH];
+	GFX_truncateText(font.large, game->name, title, screen->w - SCALE1(PADDING*2 + 90), 0);
+	SDL_Surface* text = TTF_RenderUTF8_Blended(font.large, title, COLOR_WHITE);
+	SDL_BlitSurface(text, NULL, screen, &(SDL_Rect){ SCALE1(PADDING + BUTTON_PADDING), SCALE1(PADDING) + (SCALE1(PILL_SIZE) - text->h)/2 });
+	SDL_FreeSurface(text);
+
+	int top = SCALE1(PADDING + PILL_SIZE + 4);
+	int label_h = SCALE1(30);
+	int bottom = screen->h - SCALE1(PADDING + PILL_SIZE + 4);
+	int half = (screen->w - SCALE1(PADDING*3)) / 2;
+	SDL_Rect left = { SCALE1(PADDING), top, half, bottom - top - label_h };
+	SDL_Rect right = { SCALE1(PADDING*2) + half, top, half, bottom - top - label_h };
+	if (current) blitFitted(current, left);
+	else GFX_blitMessage(font.small, "No box art yet", screen, &left);
+	if (loaded[index]) blitFitted(loaded[index], right);
+	else if (failed[index]) GFX_blitMessage(font.small, "Couldn't download this one", screen, &right);
+	blitCaption("Current", COLOR_WHITE, left.x + left.w/2, left.y + left.h + SCALE1(4), half);
+	char name[MAX_PATH], decoded[MAX_PATH];
+	urlDecode(candidates[index]->href, decoded);
+	decoded[strlen(decoded)-4] = '\0'; // .png
+	snprintf(name, sizeof(name), "%i of %i", index+1, count);
+	blitCaption(name, COLOR_WHITE, right.x + right.w/2, right.y + right.h + SCALE1(2), half);
+	blitCaption(decoded, COLOR_DARK_TEXT, right.x + right.w/2, right.y + right.h + SCALE1(15), half);
+
+	if (show_setting && !GetHDMI()) GFX_blitHardwareHints(screen, show_setting);
+	else if (count>1) GFX_blitButtonGroup((char*[]){ "LEFT/RIGHT","MORE", NULL }, 0, screen, 0);
+	GFX_blitButtonGroup((char*[]){ "B",current ? "KEEP MINE" : "CANCEL", "A","USE THIS", NULL }, 1, screen, 1);
+}
+// a popup in the middle of the screen, over what's there, alpha 0-255
+static void blitPopup(char* message, int alpha) {
+	SDL_Surface* text = TTF_RenderUTF8_Blended(font.large, message, COLOR_WHITE);
+	if (!text) return;
+	int w = text->w + SCALE1(BUTTON_PADDING*4), h = text->h + SCALE1(BUTTON_PADDING*2);
+	SDL_Rect box = { (screen->w - w)/2, (screen->h - h)/2, w, h };
+	SDL_Surface* under = alpha<255 ? SDL_CreateRGBSurfaceWithFormat(0, w, h, screen->format->BitsPerPixel, screen->format->format) : NULL;
+	if (under) SDL_BlitSurface(screen, &box, under, NULL);
+	GFX_blitRect(ASSET_DARK_GRAY_PILL, screen, &box);
+	SDL_BlitSurface(text, NULL, screen, &(SDL_Rect){ box.x + (w - text->w)/2, box.y + (h - text->h)/2 });
+	SDL_FreeSurface(text);
+	if (under) { // what was under it back over it, by how faded it is
+		SDL_SetSurfaceBlendMode(under, SDL_BLENDMODE_BLEND);
+		SDL_SetSurfaceAlphaMod(under, 255 - alpha);
+		SDL_BlitSurface(under, NULL, screen, &(SDL_Rect){ box.x, box.y });
+		SDL_FreeSurface(under);
+	}
+}
+
+// the game's own art beside one from the library: every match is downloaded first (a popup counts them, B stops
+// early), then left and right go through them, A keeps the one on the right, B keeps the game's. 1 when saved
+#define POPUP_FADE_MS 200
 static int pickArt(Game* game, Art** candidates, int count) {
 	char art_path[MAX_PATH];
 	artPath(game, art_path);
 	SDL_Surface* current = exists(art_path) ? IMG_Load(art_path) : NULL;
 	SDL_Surface* loaded[CANDIDATES_MAX] = {0};
 	int failed[CANDIDATES_MAX] = {0};
-	int index = 0;
-	int dirty = 1;
 	int show_setting = 0;
+	int dirty = 1;
+
+	// every one first, so going through them is instant
+	for (int i=0; i<count; i++) {
+		GFX_startFrame();
+		PAD_poll();
+		if (PAD_justPressed(BTN_B)) { // stop here, with what's in
+			for (int j=i; j<count; j++) failed[j] = 1;
+			break;
+		}
+		PWR_update(&dirty, &show_setting, NULL, NULL);
+		drawPicker(game, current, loaded, failed, candidates, 0, count, show_setting);
+		char progress[64];
+		snprintf(progress, sizeof(progress), count>1 ? "Downloading box art, %i of %i" : "Downloading box art", i+1, count);
+		blitPopup(progress, 255);
+		GFX_flip(screen);
+		loaded[i] = downloadArt(game->system, candidates[i]->href, NULL);
+		if (!loaded[i]) failed[i] = 1;
+	}
+	PAD_reset();
+	// and the popup fades out over the picker
+	uint32_t fade_from = SDL_GetTicks();
+	for (int t=0; t<POPUP_FADE_MS; t=SDL_GetTicks()-fade_from) {
+		GFX_startFrame();
+		drawPicker(game, current, loaded, failed, candidates, 0, count, show_setting);
+		blitPopup(count>1 ? "Downloading box art, done" : "Downloading box art", 255 * (POPUP_FADE_MS - t) / POPUP_FADE_MS);
+		GFX_flip(screen);
+	}
+
+	int index = 0;
 	int result = -1;
+	dirty = 1;
 	while (result<0) {
 		GFX_startFrame();
 		PAD_poll();
@@ -619,46 +700,8 @@ static int pickArt(Game* game, Art** candidates, int count) {
 		else if (PAD_justRepeated(BTN_LEFT) && count>1) { index = (index + count - 1) % count; dirty = 1; }
 		else if (PAD_justRepeated(BTN_RIGHT) && count>1) { index = (index + 1) % count; dirty = 1; }
 		PWR_update(&dirty, &show_setting, NULL, NULL);
-
-		if (!loaded[index] && !failed[index]) { // fetched as it comes up, with a note while it does
-			GFX_clear(screen);
-			GFX_blitMessage(font.large, "Downloading...", screen, &(SDL_Rect){ 0, 0, screen->w, screen->h });
-			GFX_flip(screen);
-			loaded[index] = downloadArt(game->system, candidates[index]->href, NULL);
-			if (!loaded[index]) failed[index] = 1;
-			dirty = 1;
-		}
 		if (dirty) {
-			GFX_clear(screen);
-			GFX_blitHardwareGroup(screen, show_setting);
-			char title[MAX_PATH];
-			GFX_truncateText(font.large, game->name, title, screen->w - SCALE1(PADDING*2 + 90), 0);
-			SDL_Surface* text = TTF_RenderUTF8_Blended(font.large, title, COLOR_WHITE);
-			SDL_BlitSurface(text, NULL, screen, &(SDL_Rect){ SCALE1(PADDING + BUTTON_PADDING), SCALE1(PADDING) + (SCALE1(PILL_SIZE) - text->h)/2 });
-			SDL_FreeSurface(text);
-
-			// the two side by side, a label under each
-			int top = SCALE1(PADDING + PILL_SIZE + 4);
-			int label_h = SCALE1(30);
-			int bottom = screen->h - SCALE1(PADDING + PILL_SIZE + 4);
-			int half = (screen->w - SCALE1(PADDING*3)) / 2;
-			SDL_Rect left = { SCALE1(PADDING), top, half, bottom - top - label_h };
-			SDL_Rect right = { SCALE1(PADDING*2) + half, top, half, bottom - top - label_h };
-			if (current) blitFitted(current, left);
-			else GFX_blitMessage(font.small, "No box art yet", screen, &left);
-			if (loaded[index]) blitFitted(loaded[index], right);
-			else GFX_blitMessage(font.small, "Couldn't download this one", screen, &right);
-			blitCaption("Current", COLOR_WHITE, left.x + left.w/2, left.y + left.h + SCALE1(4), half);
-			char name[MAX_PATH], decoded[MAX_PATH];
-			urlDecode(candidates[index]->href, decoded);
-			decoded[strlen(decoded)-4] = '\0'; // .png
-			snprintf(name, sizeof(name), "%i of %i", index+1, count);
-			blitCaption(name, COLOR_WHITE, right.x + right.w/2, right.y + right.h + SCALE1(2), half);
-			blitCaption(decoded, COLOR_DARK_TEXT, right.x + right.w/2, right.y + right.h + SCALE1(15), half);
-
-			if (show_setting && !GetHDMI()) GFX_blitHardwareHints(screen, show_setting);
-			else if (count>1) GFX_blitButtonGroup((char*[]){ "LEFT/RIGHT","MORE", NULL }, 0, screen, 0);
-			GFX_blitButtonGroup((char*[]){ "B",current ? "KEEP MINE" : "CANCEL", "A","USE THIS", NULL }, 1, screen, 1);
+			drawPicker(game, current, loaded, failed, candidates, index, count, show_setting);
 			GFX_flip(screen);
 			dirty = 0;
 		}
