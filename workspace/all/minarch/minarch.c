@@ -1095,12 +1095,8 @@ static void Auto_frame(uint64_t frame_us) {
 	if (++auto_frames<AUTO_WINDOW) return;
 	uint64_t average = auto_sum / auto_frames;
 	if (++auto_stable>=AUTO_HOLD_WINDOWS) auto_calm_needed = AUTO_CALM_WINDOWS; // it's held a while: back to trying sooner
-	// what a notch lower would take: the work grows as the clock drops, a little more again when it's down to one core
-	uint64_t scale = 100;
-	if (auto_level>0) {
-		scale = 100 * auto_mhz[auto_level] / auto_mhz[auto_level-1];
-		if (auto_mhz[auto_level]>=1200 && auto_mhz[auto_level-1]<1200) scale = scale * 120 / 100;
-	}
+	// what a notch lower would take: the work grows as the clock drops (both cores stay on at every speed)
+	uint64_t scale = auto_level>0 ? 100 * auto_mhz[auto_level] / auto_mhz[auto_level-1] : 100;
 	uint64_t lower_average = average * scale / 100;
 	uint64_t lower_peak = auto_peak * scale / 100;
 	if (average>budget*60/100 && auto_level<AUTO_LEVELS-1) Auto_set(auto_level+1, "busy");

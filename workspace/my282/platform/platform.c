@@ -1027,12 +1027,16 @@ void PLAT_powerOff(void) {
 ///////////////////////////////
 
 static int cpu_freq_now = 1344; // what was last asked for, to go back to after sleep
-static void setCPUFreq(int freq, int wait) {
+static int cpu_cores_now = 2;
+static void setCPUCores(int freq, int cpu, int wait) {
 	cpu_freq_now = freq;
-	int cpu = freq>=1200 ? 2 : 1; // the second core only when it's that busy
+	cpu_cores_now = cpu;
 	char cmd[128];
 	sprintf(cmd,"overclock.elf userspace %d %d 384 1080 0%s", cpu, freq, wait ? "" : " &");
 	system(cmd);
+}
+static void setCPUFreq(int freq, int wait) {
+	setCPUCores(freq, freq>=1200 ? 2 : 1, wait); // the second core only when it's that busy
 }
 static int speedFreq(int speed) {
 	switch (speed) {
@@ -1056,33 +1060,37 @@ void PLAT_setCPUSpeed(int speed) {
 // even backgrounded with "&", system() stops the caller while it forks and starts a shell (a dropped frame or
 // two in the menu), so the change is made from a thread of its own instead. Every change bumps a generation
 // under one lock, so a thread that gets there after a newer change (eg. leaving a menu quickly) does nothing
-typedef struct { int freq; int generation; } CPUChange;
+typedef struct { int freq; int cores; int generation; } CPUChange;
 static void* setCPUSpeedThread(void* arg) {
 	CPUChange* change = arg;
 	pthread_mutex_lock(&cpu_lock);
-	if (change->generation==cpu_generation) setCPUFreq(change->freq, 1);
+	if (change->generation==cpu_generation) setCPUCores(change->freq, change->cores, 1);
 	pthread_mutex_unlock(&cpu_lock);
 	free(change);
 	return NULL;
 }
-static void setCPUFreqAsync(int freq) {
+static void setCPUFreqAsync(int freq, int cores) {
 	CPUChange* change = malloc(sizeof(CPUChange));
 	pthread_mutex_lock(&cpu_lock);
 	change->freq = freq;
+	change->cores = cores;
 	change->generation = ++cpu_generation;
 	pthread_mutex_unlock(&cpu_lock);
 	pthread_t thread;
 	if (pthread_create(&thread, NULL, setCPUSpeedThread, change)==0) pthread_detach(thread);
 	else {
 		free(change);
-		setCPUFreq(freq, 0);
+		setCPUCores(freq, cores, 0);
 	}
 }
 void PLAT_setCPUSpeedAsync(int speed) {
-	setCPUFreqAsync(speedFreq(speed));
+	int freq = speedFreq(speed);
+	setCPUFreqAsync(freq, freq>=1200 ? 2 : 1);
 }
-void PLAT_setCPUFreq(int mhz) { // minarch's Auto speed, without holding up the frame
-	setCPUFreqAsync(mhz);
+// minarch's Auto speed, without holding up the frame. Both cores stay on at every speed: switching one on and off over
+// and over while a game's threads run can hang the device, and an idle second core costs next to nothing
+void PLAT_setCPUFreq(int mhz) {
+	setCPUFreqAsync(mhz, 2);
 }
 
 // sleep: the screen and sound are off and all that runs is a check of the buttons a few times a second, so one core
@@ -1106,7 +1114,7 @@ void PLAT_powerSave(int state) {
 	else {
 		pthread_mutex_lock(&cpu_lock);
 		cpu_generation += 1;
-		setCPUFreq(cpu_freq_now, 1);
+		setCPUCores(cpu_freq_now, cpu_cores_now, 1);
 		pthread_mutex_unlock(&cpu_lock);
 		unlink(ASLEEP_PATH);
 		if (wifi_slept) {

@@ -53,7 +53,11 @@ static void trackLayout(const char* type, int* offset, int* size) {
 
 static ChdTrack* openChdTrack(const char* path, uint32_t want) {
 	chd_file* chd = NULL;
-	if (chd_open(path, CHD_OPEN_READ, NULL, &chd)!=CHDERR_NONE) return NULL;
+	chd_error err = chd_open(path, CHD_OPEN_READ, NULL, &chd);
+	if (err!=CHDERR_NONE) {
+		fprintf(stderr, "[INFO] ra_chd: couldn't open %s: %s (%i)\n", path, chd_error_string(err), err);
+		return NULL;
+	}
 	const chd_header* header = chd_get_header(chd);
 
 	// walk the track list: CHD frames are padded to a multiple of 4 per track, disc sectors aren't
@@ -99,6 +103,7 @@ static ChdTrack* openChdTrack(const char* path, uint32_t want) {
 		for (int i=0; i<count; i++) if ((uint32_t)tracks[i].number==want) pick = i;
 	}
 	if (pick<0 || !header->hunkbytes || header->hunkbytes % CHD_FRAME_SIZE) {
+		fprintf(stderr, "[INFO] ra_chd: no track %u in %s (%i tracks, hunks of %u bytes)\n", want, path, count, header->hunkbytes);
 		chd_close(chd);
 		return NULL;
 	}

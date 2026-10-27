@@ -41,6 +41,9 @@ static const void* game_data = NULL; // minarch's copy of the ROM (it outlives R
 static size_t game_size = 0;
 static int hardcore = 0; // chosen in Tools/RetroAchievements, can drop to 0 for the session
 static volatile int load_finished = 0; // sign in and identification are over, however they went
+static volatile int hash_retry = 0; // identifying failed reading the game: tried once more a few seconds in
+static uint32_t hash_retry_at = 0;
+static void identify(void);
 static char user_agent[160];
 
 // notifications are queued from any thread and shown one after another on the main thread
@@ -251,7 +254,11 @@ static void loadCallback(int result, const char* error_message, rc_client_t* c, 
 	if (result!=RC_OK) {
 		LOG_info("RetroAchievements: couldn't load the game: %s (%i)\n", error_message ? error_message : "", result);
 		// a game that couldn't be identified is left alone, like one without achievements; other trouble is shown
-		if (!error_message || !strstr(error_message, "hash")) notify("RetroAchievements", error_message ? error_message : "Couldn't load achievements");
+		if (error_message && strstr(error_message, "hash")) {
+			if (!hash_retry) hash_retry = 1; // (it can collide with the core reading the same disc as it starts)
+			return;
+		}
+		notify("RetroAchievements", error_message ? error_message : "Couldn't load achievements");
 		return;
 	}
 	const rc_client_game_t* game = rc_client_get_game_info(c);
@@ -281,18 +288,21 @@ static void loginCallback(int result, const char* error_message, rc_client_t* c,
 		snprintf(creds.username, sizeof(creds.username), "%s", user->username);
 		snprintf(creds.token, sizeof(creds.token), "%s", user->token);
 	}
-	// from memory when minarch has it there (and it's a cartridge system rcheevos can hash that way):
-	// a big ROM isn't read from the card a second time. Disc systems hash from the file
-	static const uint32_t from_memory[] = {
-		RC_CONSOLE_GAMEBOY, RC_CONSOLE_GAMEBOY_COLOR, RC_CONSOLE_GAMEBOY_ADVANCE, RC_CONSOLE_NINTENDO, RC_CONSOLE_SUPER_NINTENDO,
-		RC_CONSOLE_NINTENDO_64, RC_CONSOLE_NINTENDO_DS, RC_CONSOLE_VIRTUAL_BOY, RC_CONSOLE_POKEMON_MINI, RC_CONSOLE_MEGA_DRIVE,
-		RC_CONSOLE_MASTER_SYSTEM, RC_CONSOLE_GAME_GEAR, RC_CONSOLE_SEGA_32X, RC_CONSOLE_SG1000, RC_CONSOLE_PC_ENGINE,
-		RC_CONSOLE_NEOGEO_POCKET, RC_CONSOLE_WONDERSWAN, RC_CONSOLE_ATARI_LYNX, RC_CONSOLE_ATARI_2600, RC_CONSOLE_ATARI_7800,
-		RC_CONSOLE_COLECOVISION, 0,
-	};
+	identify();
+}
+// from memory when minarch has it there (and it's a cartridge system rcheevos can hash that way):
+// a big ROM isn't read from the card a second time. Disc systems hash from the file
+static const uint32_t from_memory[] = {
+	RC_CONSOLE_GAMEBOY, RC_CONSOLE_GAMEBOY_COLOR, RC_CONSOLE_GAMEBOY_ADVANCE, RC_CONSOLE_NINTENDO, RC_CONSOLE_SUPER_NINTENDO,
+	RC_CONSOLE_NINTENDO_64, RC_CONSOLE_NINTENDO_DS, RC_CONSOLE_VIRTUAL_BOY, RC_CONSOLE_POKEMON_MINI, RC_CONSOLE_MEGA_DRIVE,
+	RC_CONSOLE_MASTER_SYSTEM, RC_CONSOLE_GAME_GEAR, RC_CONSOLE_SEGA_32X, RC_CONSOLE_SG1000, RC_CONSOLE_PC_ENGINE,
+	RC_CONSOLE_NEOGEO_POCKET, RC_CONSOLE_WONDERSWAN, RC_CONSOLE_ATARI_LYNX, RC_CONSOLE_ATARI_2600, RC_CONSOLE_ATARI_7800,
+	RC_CONSOLE_COLECOVISION, 0,
+};
+static void identify(void) {
 	const void* data = NULL;
 	for (int i=0; from_memory[i] && game_data; i++) if (from_memory[i]==console_id) data = game_data;
-	rc_client_begin_identify_and_load_game(c, console_id, game_path, data, data ? game_size : 0, loadCallback, NULL);
+	rc_client_begin_identify_and_load_game(client, console_id, game_path, data, data ? game_size : 0, loadCallback, NULL);
 }
 
 ///////////////////////////////
@@ -318,6 +328,7 @@ void RA_init(const char* core_tag, const char* rom_path, const void* rom_data, s
 	rc_client_set_hash_callbacks(client, &hash_callbacks);
 	hardcore = exists(RA_HARDCORE_PATH);
 	load_finished = 0;
+	hash_retry = 0;
 	rc_client_set_hardcore_enabled(client, hardcore); // hardcore games start fresh instead of resuming a state, see minarch
 
 	char clause[96] = "";
@@ -451,6 +462,16 @@ static void showNotification(Notification* n) {
 void RA_update(void) {
 	if (!client) return;
 	uint32_t now = SDL_GetTicks();
+	if (hash_retry==1) { // once, a few seconds after it failed
+		hash_retry = 2;
+		hash_retry_at = now + 5000;
+	}
+	if (hash_retry==2 && (int32_t)(now - hash_retry_at)>=0) {
+		hash_retry = 3;
+		LOG_info("RetroAchievements: identifying the game again\n");
+		load_finished = 0;
+		identify();
+	}
 
 	if (!notify_showing) {
 		Notification n;
