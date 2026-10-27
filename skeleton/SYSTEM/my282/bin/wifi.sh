@@ -59,8 +59,7 @@ SCRIPT
 	while [ $n -lt 20 ] && [ -z "$(ip_address)" ]; do sleep 1; n=$((n+1)); done
 	[ -n "$(ip_address)" ] || exit 1
 
-	# set the clock so unlock times and sessions are right (busybox ntpd quits once set)
-	(ntpd -n -q -p pool.ntp.org >/dev/null 2>&1 &)
+	# no clock sync from the internet: the device has no time zone, so it would turn the time someone set into UTC
 	exit 0
 	;;
 down)

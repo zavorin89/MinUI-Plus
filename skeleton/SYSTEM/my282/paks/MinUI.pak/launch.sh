@@ -31,6 +31,14 @@ reclock
 # (stopped through the service manager, since it restarts dnsmasq and ntpd when they're just killed)
 (for SERVICE in dnsmasq sysntpd cron; do /etc/init.d/$SERVICE stop; done) >/dev/null 2>&1 &
 
+# the time as it was last saved, if the clock is behind it (it lost power): a clock that kept time is left alone
+if [ -f "$DATETIME_PATH" ]; then
+	SAVED=$(date -d "$(cat "$DATETIME_PATH")" +%s 2>/dev/null)
+	if [ -n "$SAVED" ] && [ "$(date +%s)" -lt "$SAVED" ]; then
+		date -s "$(cat "$DATETIME_PATH")" >/dev/null && hwclock --utc -w
+	fi
+fi
+
 # don't write a file's last-access date to the card every time art or a game is read
 mount -o remount,noatime /mnt/SDCARD 2>/dev/null
 
