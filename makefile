@@ -22,7 +22,7 @@ BUILD_HASH:=$(shell git rev-parse --short HEAD)
 RELEASE_TIME:=$(shell TZ=GMT date +%Y%m%d)
 RELEASE_BETA=
 RELEASE_BASE=MinUIPlus-$(RELEASE_TIME)$(RELEASE_BETA)
-RELEASE_DOT:=$(shell find -E ./releases/. -regex ".*/${RELEASE_BASE}-[0-9]+-base\.zip" | wc -l | sed 's/ //g')
+RELEASE_DOT:=$(shell find -E ./releases/. -regex ".*/${RELEASE_BASE}-[0-9]+\.zip" | wc -l | sed 's/ //g')
 RELEASE_NAME=$(RELEASE_BASE)-$(RELEASE_DOT)
 
 ###########################################################
@@ -172,9 +172,10 @@ package: tidy
 	cd ./build/PAYLOAD && zip -r MinUI.zip .system .tmp_update
 	mv ./build/PAYLOAD/MinUI.zip ./build/BASE
 	
-	# TODO: can I just add everything in BASE to zip?
-	cd ./build/BASE && zip -r ../../releases/$(RELEASE_NAME)-base.zip Bios Roms Saves BGM miyoo miyoo354 trimui rg35xx rg35xxplus gkdpixel miyoo355 magicx miyoo285 em_ui.sh MinUI.zip README.txt
-	cd ./build/EXTRAS && zip -r ../../releases/$(RELEASE_NAME)-extras.zip Bios Emus Roms Saves Tools Borders README.txt
+	# MinUI+ is one package for the A30: the extras (more systems, the tools, the borders) go in with the base, and only
+	# the A30's boot folder (miyoo) of the ones for MinUI's other devices
+	cd ./build/EXTRAS && cp -R Bios Emus Roms Saves Tools Borders ../BASE/
+	cd ./build/BASE && zip -r ../../releases/$(RELEASE_NAME).zip Bios Roms Saves BGM Emus Tools Borders miyoo MinUI.zip README.txt
 	echo "$(RELEASE_NAME)" > ./build/latest.txt
 	
 ###########################################################

@@ -1,137 +1,57 @@
-MinUI is a minimal launcher for the Trimui Smart (and Pro) and Brick, the Miyoo Mini (and Plus), A30, and Flip, the Powkiddy RGB30, the M17, the MagicX XU Mini M and Mini Zero 28, and the Anbernic RG*XX family--all from the same SD card. Why? Why not?
+MinUI+ is a fork of MinUI for the Miyoo A30: the same simple launcher and in-game menu, plus a box art carousel, RetroAchievements, menu music, borders and screen effects, Wi-Fi, a game switcher, per-game emulator cores, and lots of work on speed and battery life. It comes set up to look its best from the first boot.
 
-Source:
+MinUI by Shaun Inman:
 https://github.com/shauninman/minui
 
 ----------------------------------------
 Installing
 
-PREFACE
+Format a microSD card as FAT32 (MBR).
 
-MinUI has two essential parts: an installer/updater zip archive named "MinUI.zip" and a bootstrap file or folder with names that vary by platform.
-
-On devices that support two SD cards (eg. RG35XX) I will use the name "TF1" to refer to the card that goes into slot one of the device. All other instances of "SD card" or "primary card" refer to the card that goes into the second slot or to the sole SD card of devices that only support a single card. To be able to use MinUI from a single SD card on multiple devices you must install it on the second card of devices that support two SD cards.
-
-The primary card should be a reputable brand and freshly formatted as FAT32 (MBR).
-
-CAVEATS
-
-While MinUI can be updated from any device once installed, some devices require (minor) changes to NAND or TF1 (via the aforementioned bootstrap file or folder) and therefore need to be installed from the specific device before using. The same is true when trying to use an existing card in a new device of the same type. When in doubt, follow the installation instructions; if all the necessary bits are already installed, the installer will just act as an updater instead.
-
-ALL
-
-Preload the "Bios" and "Roms" folders then copy both to the root of your primary card.
-
-RGB30
-
-MinUI is meant to be used with Moss installed on the SD card that goes into the left slot (labeled TF-OS) of the RGB30. Download and flash the latest version:
-
-	https://github.com/shauninman/Moss/releases
-
-Copy "MinUI.zip" (without unzipping) to the root of the SD card that goes into the right slot (labeled TFGAME) of the RGB30.
-
-MAGICX XU MINI M
-
-MinUI is meant to be used with a heavily modified stock SD card that goes into the left slot (labeled TF1/INT). Download and flash the latest version:
-
-	https://github.com/shauninman/Moss-magicmini/releases
-
-Copy "MinUI.zip" (without unzipping) to the root of the SD card that goes into the right slot (labeled TF2/EXT).
-
-MAGICX MINI ZERO 28
-
-MinUI is meant to be used with Moss installed on the SD card that goes into the left slot (labeled TF1/INT). Download and flash the latest version:
-
-	https://github.com/shauninman/Moss-zero28/releases
-
-Copy the "magicx" folder and "MinUI.zip" (without unzipping) to the root of the SD card that goes into the right slot (labeled TF2/EXT).
-
-TRIMUI SMART / TRIMUI SMART PRO / TRIMUI BRICK
-
-Copy the "trimui" folder and "MinUI.zip" (without unzipping) to the root of the SD card.
-
-MIYOO MINI / MIYOO A30
-
-Copy the "miyoo" folder and "MinUI.zip" (without unzipping) to the root of the SD card.
-
-MIYOO MINI PLUS
-
-Copy the "miyoo354" folder and "MinUI.zip" (without unzipping) to the root of the SD card.
-
-If you have a device with working RTC, you can enable it by creating an empty file named "enable-rtc" (no extension) in "/.userdata/miyoomini/".
-
-MIYOO FLIP
-
-Copy the "miyoo355" folder and "MinUI.zip" (without unzipping) to the root of the SD card. Put the SD card into the right slot (beneath the power button).
-
-MIYOO MINI FLIP
-
-Copy the "miyoo285" folder and "MinUI.zip" (without unzipping) to the root of the SD card.
-
-M17
-
-Copy the "em_ui.sh" file and "MinUI.zip" (without unzipping) to the root of the SD card.
-
-RG35XX PLUS / RG35XX H / RG35XX 2024 / RG28XX / RG35XXSP / RG40XXH / RGCUBEXX / RG34XX / RG34XXSP
-
-MinUI is meant to be installed over a fresh copy of the stock Anbernic firmware. You can use the stock TF1 card, reports of its poor quality are greatly exaggerated and, as long as you are using the recommended two card setup, no userdata is stored on it. (Note that the PLUS/H/2024/SP stock TF1 is not compatible with the 28XX/40XXH and vice versa.)
-
-Copy "/rg35xxplus/dmenu.bin" (just the file) to the root of the "NO NAME" partition (FAT32 with an "anbernic" folder) of the TF1 card. Copy "MinUI.zip" (without unzipping) to the root of the TF2 card.
-
-GKD PIXEL / GKD MINI
-
-An important caveat: this device is not cross-compatible with other MinUI-supported devices because its firmware lives on the SD card and its presence trips up all the other devices.
-
-Backup your stock SD card (not just the "ROMS" partition but the entire thing). If you like to live on the edge just create a folder named "stock" on the "ROMS" partition and copy everything into that folder.
-
-Copy the "gkdpixel" folder and "MinUI.zip" (without unzipping) to the root of the "ROMS" partition of the SD card. (On the GKD Mini should be TF1.)
-
-Boot stock, navigate to the "APP" folder and launch "file manager". Then use the d-pad and A button to navigate to "/media/roms/gkdpixel". Highlight the "install.sh" file and press A to open a menu and select "Execute" to install MinUI.
-
-RG35XX (original)
-
-MinUI is meant to be installed over a fresh copy of the stock Anbernic firmware. You can use the stock TF1 card, reports of its poor quality are greatly exaggerated and, as long as you are using the recommended two card setup, no userdata is stored on it.
-
-Copy "/rg35xx/dmenu.bin" (just the file) to the root of the MISC partition of the TF1 card. Copy "MinUI.zip" (without unzipping) to the root of the TF2 card.
+Copy everything in this zip to the root of the card: the "miyoo" folder, "MinUI.zip" (without unzipping it), and the "Bios", "Roms", "Saves", "BGM", "Emus", "Tools" and "Borders" folders. Put your games in the system folders in "Roms", any bios files in "Bios", and start the A30 with the card in. The first start installs MinUI+.
 
 ----------------------------------------
 Updating
 
-ALL
-
-Copy "MinUI.zip" (without unzipping) to the root of the SD card containing your Roms.
+Copy the new "MinUI.zip" (without unzipping) to the root of the card. Your games, saves and settings are kept.
 
 ----------------------------------------
 Shortcuts
 
-For devices without a dedicated MENU button
+In a game list:
 
-	RGB30: use L3 or R3 for MENU
-	M17:   use + or - for MENU
+  L1 / R1: previous / next letter
+  L2 / R2: change the sort order
+  SELECT: list or carousel view
+  Hold SELECT: pin to the game switcher
+  START: a random game
+  MENU + Y: game menu (core, box art, rename, delete)
+  MENU + X: delete the game
 
-RGB30 / MIYOO MINI PLUS / RG35XX (PLUS) / TRIMUI SMART PRO / TRIMUI BRICK / GKD PIXEL / MIYOO A30 / MAGICX XU MINI M / MIYOO FLIP / MAGICX MINI ZERO 28
-  
-  Brightness: MENU + VOLUME UP
-                  or VOLUME DOWN
-  
-MIYOO MINI / TRIMUI SMART / M17
+Anywhere:
 
-  Volume: SELECT + L or R
-  Brightness: START + L or R
+  MENU: settings, or the pause menu in a game
+  Hold MENU: game switcher (quicksaves first in a game)
+  MENU + VOLUME: brightness
+  POWER: sleep and wake
+  Hold POWER: power off
 
-RGB30 / MIYOO MINI (PLUS) / RG35XX (PLUS) / TRIMUI SMART PRO / TRIMUI BRICK / GKD PIXEL / MIYOO A30 / MAGICX XU MINI M / MIYOO FLIP / MAGICX MINI ZERO 28
-  
-  Sleep: POWER
-  Wake: POWER
-  
-TRIMUI SMART / M17
-  
-  Sleep: MENU (twice)
-  Wake: MENU
+The Controls tool lists these too.
 
-TRIMUI SMART PRO / TRIMUI BRICK
+----------------------------------------
+Music
 
-  Mute: FN switch (volume and rumble)
+Put mp3, ogg, flac or wav files in the "BGM" folder and turn on Music in the settings (tap MENU in the menus). Left and right on that row set its volume. Music plays in the menus and in a game's pause menu, never while you play.
+
+----------------------------------------
+Borders and looks
+
+Every system starts with the look that suits it: a border, an LCD grid and LCD ghosting on handhelds, scanlines on TV consoles, color correction for GBC and GBA, and the Game Boy Pocket's greys for Game Boy games. Change any of it in a game's Options > Frontend. Borders live in "Borders", as <TAG>.png (aspect scaling) and <TAG>-native.png (native scaling).
+
+----------------------------------------
+RetroAchievements and Wi-Fi
+
+Connect in Tools > Wi-Fi, then sign in with Tools > RetroAchievements. Achievements then just work in games, offline too: unlocks are sent the next time you're online. The tool also syncs your games' achievements for offline play.
 
 ----------------------------------------
 Quicksave & auto-resume
@@ -219,7 +139,7 @@ Advanced
 MinUI can automatically run a user-authored shell script on boot. Just place a file named "auto.sh" in "/.userdata/<DEVICE>/". If you're on Windows, make sure your text editor uses Unix line-endings (eg. `\n`), these devices usually choke on Windows line-endings (eg. `\r\n`).
 
 ----------------------------------------
-Thanks
+Thanks (from MinUI)
 
 To eggs, for his NEON scalers, years of top-notch example code, and patience in the face of my endless questions.
 

@@ -40,17 +40,16 @@ LCD ghosting and color correction already set up, and the CPU speed adjusts itse
 
 ## Installing
 
-MinUI+ installs like MinUI:
+MinUI+ is one download with everything in it: every system, the borders and the tools.
 
 1. Format a microSD card as **FAT32**.
-2. Unzip `MinUIPlus-<date>-base.zip` onto it. That's the launcher, the base systems, and the `Bios`, `Roms`,
-   `Saves` and `BGM` folders.
-3. Optionally, unzip `MinUIPlus-<date>-extras.zip` onto it too: more systems (Game Gear, Neo Geo Pocket, PC
-   Engine, Pokémon mini, Virtual Boy, Pico-8, Master System, Super Game Boy, mGBA, Supafaust), the borders, and the
-   tools (Wi-Fi, Box Art, RetroAchievements, Controls and more).
-4. Put your games in the system folders in `Roms`, any BIOS files your systems need in `Bios`, and insert the card.
+2. Unzip `MinUIPlus-<date>.zip` and copy everything in it to the root of the card: the `miyoo` folder,
+   `MinUI.zip` (leave it zipped), and the `Bios`, `Roms`, `Saves`, `BGM`, `Emus`, `Tools` and `Borders` folders.
+3. Put your games in the system folders in `Roms`, any BIOS files your systems need in `Bios`, insert the card
+   and turn the A30 on. The first start installs MinUI+.
 
-To update, unzip the new base zip over the card. Your games, saves and settings are kept.
+To update, copy the new `MinUI.zip` to the root of the card (leave it zipped). Your games, saves and settings are
+kept.
 
 ## The launcher
 
@@ -149,18 +148,18 @@ Sign in with the RetroAchievements tool (on the on-screen keyboard), then just p
 | --- | --- | --- | --- |
 | Game Boy | GB | gambatte | |
 | Game Boy Color | GBC | gambatte | |
-| Game Boy Advance | GBA | gpSP | mGBA (extras) |
+| Game Boy Advance | GBA | gpSP | mGBA |
 | NES | FC | FCEUmm | |
-| Super Nintendo | SFC | snes9x 2005 | snes9x 2010, snes9x (current), Supafaust (extras) |
+| Super Nintendo | SFC | snes9x 2005 | snes9x 2010, snes9x (current), Supafaust |
 | Genesis | MD | PicoDrive | |
 | PlayStation | PS | PCSX ReARMed | |
-| Game Gear, Master System | GG, SMS | PicoDrive (extras) | |
-| Neo Geo Pocket / Color | NGP, NGPC | RACE (extras) | |
-| PC Engine | PCE | Beetle PCE Fast (extras) | |
-| Pokémon mini | PKM | PokeMini (extras) | |
-| Virtual Boy | VB | Beetle VB (extras) | |
-| Pico-8 | P8 | fake-08 (extras) | |
-| Super Game Boy | SGB | mGBA (extras) | |
+| Game Gear, Master System | GG, SMS | PicoDrive | |
+| Neo Geo Pocket / Color | NGP, NGPC | RACE | |
+| PC Engine | PCE | Beetle PCE Fast | |
+| Pokémon mini | PKM | PokeMini | |
+| Virtual Boy | VB | Beetle VB | |
+| Pico-8 | P8 | fake-08 | |
+| Super Game Boy | SGB | mGBA | |
 
 Each system starts with the look that suits it:
 
@@ -257,7 +256,7 @@ MinUI+ builds like MinUI, in Docker, on macOS or Linux:
 make
 ```
 
-builds the A30 release into `releases/` (`MinUIPlus-<date>-base.zip` and `-extras.zip`). The first build also
+builds the A30 release into `releases/` as one `MinUIPlus-<date>.zip`. The first build also
 builds the emulator cores from the libretro sources, which takes a while.
 
 Some extra pieces live in `tools/`:
