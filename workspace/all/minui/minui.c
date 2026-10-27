@@ -4037,6 +4037,7 @@ static void pickCore(SDL_Surface* screen) {
 // the game menu (MENU + Y): change its core, get its box art, rename or delete it
 #define BOX_ART_PAK SDCARD_PATH "/Tools/" PLATFORM "/Box Art.pak/launch.sh"
 #define CLOCK_PAK SDCARD_PATH "/Tools/" PLATFORM "/Clock.pak/launch.sh" // setting the time, from the settings' Clock row
+#define CLOCK_PAK_SYSTEM PAKS_PATH "/Clock.pak/launch.sh" // or where stock MinUI keeps it
 static void gameMenu(SDL_Surface* screen) {
 	Entry* entry = top->entries->items[top->selected];
 	char rel_path[MAX_PATH];
@@ -4401,11 +4402,12 @@ int main (int argc, char *argv[]) {
 				dirty = 1;
 			}
 			else if (info_row==INFO_ROW_CLOCK && PAD_justPressed(BTN_A)) { // setting the time: the Clock tool, then back here
-				if (exists(CLOCK_PAK)) {
+				char* clock_pak = exists(CLOCK_PAK) ? CLOCK_PAK : exists(CLOCK_PAK_SYSTEM) ? CLOCK_PAK_SYSTEM : NULL;
+				if (clock_pak) {
 					SFX_play(SFX_CONFIRM);
 					if (top->entries->count>0) saveLast(((Entry*)top->entries->items[top->selected])->path);
 					char pak[MAX_PATH], cmd[MAX_PATH*2];
-					strcpy(pak, CLOCK_PAK);
+					strcpy(pak, clock_pak);
 					snprintf(cmd, sizeof(cmd), "'%s'", escapeSingleQuotes(pak));
 					queueNext(cmd);
 				}
@@ -4979,6 +4981,8 @@ int main (int argc, char *argv[]) {
 				else if (info_row==INFO_ROW_MOST_PLAYED && info_top_name[0]) GFX_blitButtonGroup((char*[]){ "X","CLEAR", NULL }, 0, screen, 0);
 				else GFX_blitButtonGroup((char*[]){ BTN_SLEEP==BTN_POWER?"POWER":"MENU","SLEEP",  NULL }, 0, screen, 0);
 
+				flash_gpu = 0;
+				blitFlash(screen); // a popup from the settings, over them
 			}
 			else {
 				// list

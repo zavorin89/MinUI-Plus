@@ -29,7 +29,8 @@
 
 static SDL_Surface* screen;
 static FILE* log_file = NULL; // what happened to each game, for troubleshooting
-#define SYNC_LOG(...) do { if (log_file) { fprintf(log_file, __VA_ARGS__); fflush(log_file); } } while (0)
+// each line is on the card before going on, so after a freeze the last one says where it was
+#define SYNC_LOG(...) do { if (log_file) { fprintf(log_file, __VA_ARGS__); fflush(log_file); fsync(fileno(log_file)); } } while (0)
 
 static void showMessage(char* msg, int wait) {
 	int dirty = 1;
@@ -134,7 +135,55 @@ static int signIn(RA_Creds* creds) {
 	return ok && creds->token[0];
 }
 
-static int hashGame(const char* path, uint32_t console, char hash[33]) {
+// each game's hash, by its path, size and date: a rescan only hashes (and unzips) what's new or changed
+#define HASHES_PATH RA_CACHE_DIR "/hashes.txt"
+typedef struct KnownHash {
+	char hash[33];
+	long long size;
+	long long mtime;
+	char* path;
+} KnownHash;
+static KnownHash* known_hashes = NULL;
+static int known_count = 0;
+static void loadHashes(void) {
+	known_hashes = calloc(MAX_GAMES, sizeof(KnownHash));
+	FILE* file = fopen(HASHES_PATH, "r");
+	if (!file) return;
+	char line[MAX_PATH+128];
+	while (known_count<MAX_GAMES && fgets(line, sizeof(line), file)) { // <hash> <size> <mtime> <path>
+		trimTrailingNewlines(line);
+		KnownHash* known = &known_hashes[known_count];
+		int at = 0;
+		if (sscanf(line, "%32s %lld %lld %n", known->hash, &known->size, &known->mtime, &at)!=3 || !at || !line[at]) continue;
+		known->path = strdup(line + at);
+		known_count += 1;
+	}
+	fclose(file);
+}
+static void freeHashes(void) {
+	for (int i=0; i<known_count; i++) free(known_hashes[i].path);
+	free(known_hashes);
+	known_hashes = NULL;
+	known_count = 0;
+}
+static int knownHash(const char* path, struct stat* st, char hash[33]) {
+	for (int i=known_count-1; i>=0; i--) { // the newest entry for a path wins
+		KnownHash* known = &known_hashes[i];
+		if (!exactMatch(known->path, (char*)path)) continue;
+		if (known->size!=(long long)st->st_size || known->mtime!=(long long)st->st_mtime) return 0;
+		strcpy(hash, known->hash);
+		return 1;
+	}
+	return 0;
+}
+static void rememberHash(const char* path, struct stat* st, const char* hash) {
+	FILE* file = fopen(HASHES_PATH, "a");
+	if (!file) return;
+	fprintf(file, "%s %lld %lld %s\n", hash, (long long)st->st_size, (long long)st->st_mtime, path);
+	fclose(file);
+}
+
+static int hashFile(const char* path, uint32_t console, char hash[33]) {
 	if (!suffixMatch(".zip", (char*)path)) return rc_hash_generate_from_file(hash, console, path);
 
 	// zips hash by the rom inside, the same file minarch extracts before loading
@@ -164,6 +213,44 @@ static int hashGame(const char* path, uint32_t console, char hash[33]) {
 	int ok = size>0 && rc_hash_generate_from_buffer(hash, console, data, size);
 	free(data);
 	return ok;
+}
+static int hashGame(const char* path, uint32_t console, char hash[33]) {
+	struct stat st;
+	if (stat(path, &st)!=0) return 0;
+	if (knownHash(path, &st, hash)) return 1;
+	SYNC_LOG("%s: hashing\n", path);
+	if (!hashFile(path, console, hash)) return 0;
+	rememberHash(path, &st, hash);
+	return 1;
+}
+
+// the CPU's clock and the voltages, as the kernel sees them: a lead if the device ever freezes during a sync
+static void logPower(void) {
+	char value[64];
+	char* cpufreq[] = { "scaling_governor", "scaling_cur_freq", "cpuinfo_cur_freq", "scaling_setspeed", NULL };
+	for (int i=0; cpufreq[i]; i++) {
+		char path[128];
+		snprintf(path, sizeof(path), "/sys/devices/system/cpu/cpu0/cpufreq/%s", cpufreq[i]);
+		value[0] = '\0';
+		getFile(path, value, sizeof(value));
+		trimTrailingNewlines(value);
+		if (value[0]) SYNC_LOG("cpu0 %s: %s\n", cpufreq[i], value);
+	}
+	DIR* regulators = opendir("/sys/class/regulator");
+	if (!regulators) return;
+	struct dirent* entry;
+	while ((entry = readdir(regulators))) {
+		if (entry->d_name[0]=='.') continue;
+		char path[MAX_PATH], name[64] = "", microvolts[32] = "";
+		snprintf(path, sizeof(path), "/sys/class/regulator/%s/name", entry->d_name);
+		getFile(path, name, sizeof(name));
+		snprintf(path, sizeof(path), "/sys/class/regulator/%s/microvolts", entry->d_name);
+		getFile(path, microvolts, sizeof(microvolts));
+		trimTrailingNewlines(name);
+		trimTrailingNewlines(microvolts);
+		if (microvolts[0]) SYNC_LOG("%s %s: %s uV\n", entry->d_name, name, microvolts);
+	}
+	closedir(regulators);
 }
 
 typedef struct Game {
@@ -224,7 +311,7 @@ static int hasWifi(void) {
 }
 
 static void runSync(void) {
-	PWR_setCPUSpeed(CPU_SPEED_PERFORMANCE); // hashing is the slow part
+	PWR_setCPUSpeed(CPU_SPEED_NORMAL); // hashing waits on the card more than the CPU, and minutes flat out at the top speed is asking for trouble
 	PWR_disableAutosleep(); // a full sync takes a while with no buttons pressed
 	log_file = fopen(LOG_PATH, "w");
 	RA_Creds creds;
@@ -246,6 +333,8 @@ static void runSync(void) {
 			int unknown = 0; // not in RetroAchievements (usually romhacks)
 
 			SYNC_LOG("%i games found, %i offline unlocks sent\n", count, sent);
+			logPower();
+			loadHashes();
 			int badges = 0;
 			for (int i=0; i<count; i++) {
 				PAD_poll();
@@ -341,6 +430,7 @@ static void runSync(void) {
 				}
 			}
 			free(games);
+			freeHashes();
 			if (!lost && !cancelled && !rejected) done = count;
 
 			char summary[512];
