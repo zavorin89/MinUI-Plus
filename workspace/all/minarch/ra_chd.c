@@ -149,13 +149,16 @@ static void* RC_CCONV openTrack(const char* path, uint32_t track, const struct r
 		handle->is_chd = 1;
 		handle->inner = openChdTrack(path, track);
 	}
-	else if (fallback.open_track_iterator) handle->inner = fallback.open_track_iterator(path, track, iterator);
+	else if (fallback.open_track_iterator && (iterator || !fallback.open_track)) handle->inner = fallback.open_track_iterator(path, track, iterator);
 	else if (fallback.open_track) handle->inner = fallback.open_track(path, track);
 	if (!handle->inner) {
 		free(handle);
 		return NULL;
 	}
 	return handle;
+}
+static void* RC_CCONV openTrackPlain(const char* path, uint32_t track) {
+	return openTrack(path, track, NULL);
 }
 static size_t RC_CCONV readSector(void* track_handle, uint32_t sector, void* buffer, size_t requested) {
 	Handle* handle = track_handle;
@@ -186,6 +189,7 @@ void RA_getDiscReader(struct rc_hash_cdreader* reader) {
 	rc_hash_get_default_cdreader(&fallback);
 	memset(reader, 0, sizeof(*reader));
 	reader->open_track_iterator = openTrack;
+	reader->open_track = openTrackPlain; // rc_client only takes a reader that has this one too (it then calls the other)
 	reader->read_sector = readSector;
 	reader->close_track = closeTrack;
 	reader->first_track_sector = firstTrackSector;

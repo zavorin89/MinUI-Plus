@@ -1044,6 +1044,7 @@ static int auto_calm = 0;
 static int auto_calm_needed = AUTO_CALM_WINDOWS; // grows each time a lower notch doesn't hold, so it isn't retried every few seconds
 static int auto_stable = 0; // windows since the last change
 static int auto_close = 0; // frames in a row close to running late
+static int auto_floor = 0; // a notch where a frame ran late isn't gone back to this session
 static uint64_t auto_sum = 0;
 static uint64_t auto_peak = 0;
 static uint64_t auto_flip_us = 0; // in GFX_flip this frame (mostly waiting for the screen)
@@ -1087,6 +1088,7 @@ static void Auto_frame(uint64_t frame_us) {
 	// up now when a frame ran late, or two in a row came close (one alone is often a load or a blip)
 	auto_close = work>budget*85/100 ? auto_close + 1 : 0;
 	if ((work>budget || auto_close>=2) && auto_level<AUTO_LEVELS-1) {
+		if (work>budget && auto_floor<auto_level+1) auto_floor = auto_level + 1; // it stuttered there: not again
 		Auto_set(auto_level+1, work>budget ? "late frame" : "busy frames");
 		return;
 	}
@@ -1100,7 +1102,7 @@ static void Auto_frame(uint64_t frame_us) {
 	uint64_t lower_average = average * scale / 100;
 	uint64_t lower_peak = auto_peak * scale / 100;
 	if (average>budget*60/100 && auto_level<AUTO_LEVELS-1) Auto_set(auto_level+1, "busy");
-	else if (auto_level>0 && lower_average<budget*50/100 && lower_peak<budget*70/100) { // still comfortably under the step up
+	else if (auto_level>auto_floor && lower_average<budget*50/100 && lower_peak<budget*70/100) { // still comfortably under the step up
 		if (++auto_calm>=auto_calm_needed) Auto_set(auto_level-1, "room to spare");
 		else auto_frames = 0, auto_sum = auto_peak = 0;
 	}
