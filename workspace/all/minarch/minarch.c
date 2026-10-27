@@ -55,7 +55,7 @@ static int prevent_tearing = 1; // lenient
 static int show_debug = 0;
 static int max_ff_speed = 3; // 4x
 static int fast_forward = 0;
-static int overclock = 1; // normal
+static int overclock = 3; // OVERCLOCK_AUTO
 static int has_custom_controllers = 0;
 static int gamepad_type = 0; // index in gamepad_labels/gamepad_values
 static int downsample = 0; // set to 1 to convert from 8888 to 565
@@ -419,6 +419,17 @@ static void SRAM_read(void) {
 
 	fclose(sram_file);
 }
+// the card catches up on its own thread: a save is complete in memory once written, and waiting for every pending
+// write on the card to land made saving slow (launch.sh syncs again when the game exits)
+static void* syncThread(void* arg) {
+	sync();
+	return NULL;
+}
+static void syncLater(void) {
+	pthread_t thread;
+	if (pthread_create(&thread, NULL, syncThread, NULL)==0) pthread_detach(thread);
+	else sync();
+}
 static void SRAM_write(void) {
 	size_t sram_size = core.get_memory_size(RETRO_MEMORY_SAVE_RAM);
 	if (!sram_size) return;
@@ -445,7 +456,7 @@ static void SRAM_write(void) {
 
 	fclose(sram_file);
 
-	sync();
+	syncLater();
 }
 
 ///////////////////////////////////////
@@ -582,7 +593,7 @@ error:
 	if (state) free(state);
 	if (state_file) fclose(state_file);
 
-	sync();
+	syncLater();
 	
 	fast_forward = was_ff;
 }
@@ -832,8 +843,10 @@ static char* overclock_labels[] = {
 	"Powersave",
 	"Normal",
 	"Performance",
+	"Auto",
 	NULL,
 };
+#define OVERCLOCK_AUTO 3
 
 // TODO: this should be provided by the core
 static char* gamepad_labels[] = {
@@ -934,10 +947,10 @@ static struct Config {
 			[FE_OPT_OVERCLOCK] = {
 				.key	= "minarch_cpu_speed",
 				.name	= "CPU Speed",
-				.desc	= "Over- or underclock the CPU to prioritize\npure performance or power savings.",
-				.default_value = 1,
-				.value = 1,
-				.count = 3,
+				.desc	= "Auto uses the lowest speed that keeps the game\nat full speed, which saves battery.\nOr pick one: Powersave, Normal or Performance.",
+				.default_value = OVERCLOCK_AUTO,
+				.value = OVERCLOCK_AUTO,
+				.count = 4,
 				.values = overclock_labels,
 				.labels = overclock_labels,
 			},
@@ -1013,12 +1026,86 @@ static int Config_getValue(char* cfg, const char* key, char* out_value, int* loc
 	return 1;
 }
 
+// Auto CPU speed: the lowest clock that keeps the game at full speed, found by watching how much of each frame's
+// time goes to emulating it (not to waiting on the screen or the audio). It starts where Normal is and only goes
+// lower once there's plenty of room, and goes back up the moment a frame gets close to running late
+static const int auto_mhz[] = { 480, 648, 816, 1008, 1200, 1344, 1512 };
+#define AUTO_LEVELS (int)(sizeof(auto_mhz) / sizeof(auto_mhz[0]))
+#define AUTO_START 5 // 1344, Normal's
+#define AUTO_WINDOW 60 // frames averaged
+#define AUTO_SETTLE 20 // frames ignored after a change, while it takes hold
+#define AUTO_CALM_WINDOWS 3 // windows in a row with room to spare before stepping down
+static int auto_level = AUTO_START;
+static int auto_settle = AUTO_SETTLE;
+static int auto_frames = 0;
+static int auto_calm = 0;
+static uint64_t auto_sum = 0;
+static uint64_t auto_peak = 0;
+static uint64_t auto_flip_us = 0; // in GFX_flip this frame (mostly waiting for the screen)
+static void Auto_set(int level, char* why) {
+	auto_level = level;
+	auto_settle = AUTO_SETTLE;
+	auto_frames = auto_calm = 0;
+	auto_sum = auto_peak = 0;
+	PWR_setCPUFreq(auto_mhz[level]);
+	LOG_info("cpu: %iMHz (%s)\n", auto_mhz[level], why);
+}
+static void Auto_reset(void) { // a frame or two after a menu or a load runs long and means nothing
+	auto_settle = AUTO_SETTLE;
+	auto_frames = auto_calm = 0;
+	auto_sum = auto_peak = 0;
+	SND_takeWaitUs();
+	auto_flip_us = 0;
+}
+static void Auto_frame(uint64_t frame_us) {
+	uint64_t waited = SND_takeWaitUs() + auto_flip_us;
+	auto_flip_us = 0;
+	if (overclock!=OVERCLOCK_AUTO) return;
+	if (fast_forward) { // as fast as it goes, back down after
+		if (auto_level!=AUTO_LEVELS-1) Auto_set(AUTO_LEVELS-1, "fast forward");
+		auto_settle = AUTO_SETTLE;
+		return;
+	}
+	if (auto_settle>0) {
+		auto_settle -= 1;
+		return;
+	}
+	uint64_t budget = core.fps>0 ? 1000000 / core.fps : 16667;
+	if (frame_us>budget*4) { // eg. asleep, or a save, in the middle of the frame: says nothing about the game
+		Auto_reset();
+		return;
+	}
+	uint64_t work = frame_us>waited ? frame_us - waited : 0;
+	if (work>budget*85/100 && auto_level<AUTO_LEVELS-1) { // close to running late: up now
+		Auto_set(auto_level+1, "busy frame");
+		return;
+	}
+	auto_sum += work;
+	if (work>auto_peak) auto_peak = work;
+	if (++auto_frames<AUTO_WINDOW) return;
+	uint64_t average = auto_sum / auto_frames;
+	if (average>budget*60/100 && auto_level<AUTO_LEVELS-1) Auto_set(auto_level+1, "busy");
+	else if (average<budget*35/100 && auto_peak<budget*55/100 && auto_level>0) {
+		if (++auto_calm>=AUTO_CALM_WINDOWS) Auto_set(auto_level-1, "room to spare");
+		else auto_frames = 0, auto_sum = auto_peak = 0;
+	}
+	else {
+		auto_calm = 0;
+		auto_frames = 0;
+		auto_sum = auto_peak = 0;
+	}
+}
+
 static void setOverclock(int i) {
 	overclock = i;
 	switch (i) {
 		case 0: PWR_setCPUSpeed(CPU_SPEED_POWERSAVE); break;
 		case 1: PWR_setCPUSpeed(CPU_SPEED_NORMAL); break;
 		case 2: PWR_setCPUSpeed(CPU_SPEED_PERFORMANCE); break;
+		case OVERCLOCK_AUTO:
+			PWR_setCPUFreq(auto_mhz[auto_level]); // where it had got to (Normal's at first)
+			Auto_reset();
+			break;
 	}
 }
 static void setBorder(int enabled) {
@@ -1702,6 +1789,7 @@ static void Menu_beforeSleep(void);
 static void Menu_afterSleep(void);
 
 static void Menu_saveState(void);
+static void Menu_saveStateNow(void);
 static void Menu_loadState(void);
 
 static int setFastForward(int enable) {
@@ -1781,11 +1869,11 @@ static void input_poll_callback(void) {
 			}
 			else if (PAD_justPressed(btn)) {
 				switch (i) {
-					case SHORTCUT_SAVE_STATE: Menu_saveState(); break;
+					case SHORTCUT_SAVE_STATE: Menu_saveStateNow(); break;
 					case SHORTCUT_LOAD_STATE: Menu_loadState(); break;
 					case SHORTCUT_RESET_GAME: core.reset(); break;
 					case SHORTCUT_SAVE_QUIT:
-						Menu_saveState();
+						Menu_saveStateNow();
 						quit = 1;
 						break;
 					case SHORTCUT_CYCLE_SCALE:
@@ -2944,7 +3032,11 @@ static void video_refresh_callback_main(const void *data, unsigned width, unsign
 	
 	GFX_blitRenderer(&renderer);
 	
-	if (!thread_video) GFX_flip(screen);
+	if (!thread_video) {
+		uint64_t flip_from = getMicroseconds();
+		GFX_flip(screen);
+		auto_flip_us += getMicroseconds() - flip_from;
+	}
 	last_flip_time = SDL_GetTicks();
 }
 static void video_refresh_callback(const void *data, unsigned width, unsigned height, size_t pitch) {
@@ -3146,6 +3238,7 @@ static struct {
 	int slot;
 	int save_exists;
 	int preview_exists;
+	SDL_Surface* shot; // the game as it looked on screen when the menu opened (border, grid...), NULL if it couldn't be had
 } menu = {
 	.bitmap = NULL,
 	.disc = -1,
@@ -4385,20 +4478,77 @@ static void State_writeDisc(int slot) {
 	putFile(txt_path, disc);
 }
 
+// a save's picture. A capture of the screen (border, grid...) is halved, as big as it's ever shown (the slot preview
+// and the game switcher), and written as a 16 bit BMP straight from memory: a sixth of the 24 bit full size one
+// SDL_SaveBMP would write, which made saving slow. The game's own frame (when there's no capture) is saved as before
+static void saveShot(SDL_Surface* shot, const char* path) {
+	if (shot->w!=DEVICE_WIDTH || shot->h!=DEVICE_HEIGHT || shot->format->BitsPerPixel!=16) {
+		SDL_SaveBMP(shot, path);
+		return;
+	}
+	int w = shot->w / 2, h = shot->h / 2;
+	uint16_t* half = malloc(w * h * sizeof(uint16_t));
+	if (!half) return;
+	for (int y=0; y<h; y++) {
+		uint16_t* a = (uint16_t*)((uint8_t*)shot->pixels + (y*2) * shot->pitch);
+		uint16_t* b = (uint16_t*)((uint8_t*)shot->pixels + (y*2+1) * shot->pitch);
+		uint16_t* out = half + y * w;
+		for (int x=0; x<w; x++) { // the average of each 2x2, so grid lines blend instead of flickering in and out
+			uint32_t p0 = a[x*2], p1 = a[x*2+1], p2 = b[x*2], p3 = b[x*2+1];
+			uint32_t r = ((p0>>11) + (p1>>11) + (p2>>11) + (p3>>11) + 2) >> 2;
+			uint32_t g = (((p0>>5)&0x3F) + ((p1>>5)&0x3F) + ((p2>>5)&0x3F) + ((p3>>5)&0x3F) + 2) >> 2;
+			uint32_t bl = ((p0&0x1F) + (p1&0x1F) + (p2&0x1F) + (p3&0x1F) + 2) >> 2;
+			out[x] = (r << 11) | (g << 5) | bl;
+		}
+	}
+	FILE* file = fopen(path, "wb");
+	if (file) {
+		uint32_t size = w * h * 2;
+		uint8_t header[66] = { 'B','M' };
+		#define PUT32(at, v) do { uint32_t _v = (v); header[at] = _v; header[at+1] = _v>>8; header[at+2] = _v>>16; header[at+3] = _v>>24; } while (0)
+		PUT32(2, sizeof(header) + size); // file size
+		PUT32(10, sizeof(header)); // where the pixels start
+		PUT32(14, 40); // BITMAPINFOHEADER
+		PUT32(18, w);
+		PUT32(22, -h); // top-down
+		header[26] = 1; // planes
+		header[28] = 16; // bits per pixel
+		PUT32(30, 3); // BI_BITFIELDS
+		PUT32(34, size);
+		PUT32(54, 0xF800); PUT32(58, 0x07E0); PUT32(62, 0x001F); // RGB565
+		#undef PUT32
+		fwrite(header, 1, sizeof(header), file);
+		fwrite(half, 1, size, file);
+		fclose(file);
+	}
+	free(half);
+}
+
 // the game's path as the launcher and the game switcher know it (the m3u for multi-disc games)
 static char* Game_switcherPath(void) {
 	char* path = game.m3u_path[0] ? game.m3u_path : game.path;
 	return prefixMatch(SDCARD_PATH, path) ? path + strlen(SDCARD_PATH) : path;
 }
 // a quick save with a screenshot into the hidden resume slot, then back to the launcher's game switcher
-static void Switcher_saveAndQuit(void) {
+static SDL_Surface* pending_shot = NULL; // captured on the main thread for a save finished on Busy_run's
+static void Switcher_save(void) {
+	uint32_t started = SDL_GetTicks();
 	State_autosave();
+	uint32_t saved = SDL_GetTicks();
 
 	char bmp_path[MAX_PATH*2];
 	snprintf(bmp_path, sizeof(bmp_path), "%s/%s.%d.bmp", menu.minui_dir, game.name, AUTO_RESUME_SLOT);
-	SDL_Surface* bitmap = SDL_CreateRGBSurfaceFrom(renderer.src, renderer.true_w, renderer.true_h, FIXED_DEPTH, renderer.src_p, RGBA_MASK_565);
-	SDL_SaveBMP(bitmap, bmp_path);
+	SDL_Surface* bitmap = pending_shot; // as it looks, or the game's own frame
+	if (!bitmap) bitmap = SDL_CreateRGBSurfaceFrom(renderer.src, renderer.true_w, renderer.true_h, FIXED_DEPTH, renderer.src_p, RGBA_MASK_565);
+	saveShot(bitmap, bmp_path);
 	SDL_FreeSurface(bitmap);
+	pending_shot = NULL;
+	LOG_info("switcher save: state %ums, picture %ums\n", saved-started, SDL_GetTicks()-saved);
+}
+static void Busy_run(void (*work)(void), int in_game);
+static void Switcher_saveAndQuit(void) {
+	pending_shot = GFX_captureScreen();
+	Busy_run(Switcher_save, 1);
 
 	Switcher_add(Game_switcherPath()); // so there's a way back (does nothing when it's already there or full)
 	putFile(SWITCHER_OPEN_PATH, "1");
@@ -4415,18 +4565,115 @@ static void Menu_saveState(void) {
 		putFile(menu.txt_path, disc_path + strlen(menu.base_path));
 	}
 	
-	SDL_Surface* bitmap = menu.bitmap;
+	// the picture: the game as it looked on screen (border, grid...), or its own frame when that can't be had
+	uint32_t started = SDL_GetTicks();
+	SDL_Surface* bitmap = menu.bitmap ? (menu.shot ? menu.shot : menu.bitmap) : pending_shot; // (captured by Menu_saveStateNow)
 	if (!bitmap) bitmap = SDL_CreateRGBSurfaceFrom(renderer.src, renderer.true_w, renderer.true_h, FIXED_DEPTH, renderer.src_p, RGBA_MASK_565);
-	SDL_RWops* out = SDL_RWFromFile(menu.bmp_path, "wb");
-	SDL_SaveBMP_RW(bitmap, out, 1);
+	saveShot(bitmap, menu.bmp_path);
+	uint32_t pictured = SDL_GetTicks();
 	
 	// LOG_info("%s %ix%i\n", menu.bmp_path, bitmap->w,bitmap->h);
 	
-	if (bitmap!=menu.bitmap) SDL_FreeSurface(bitmap);
+	if (bitmap!=menu.bitmap && bitmap!=menu.shot) SDL_FreeSurface(bitmap);
+	pending_shot = NULL;
 	
 	state_slot = menu.slot;
 	putInt(menu.slot_path, menu.slot);
 	State_write();
+	LOG_info("save: picture %ums, state %ums\n", pictured-started, SDL_GetTicks()-pictured);
+}
+
+// work that can take a moment (saving) runs on a thread while this one shows it's busy: a pill with a spinning ring,
+// over the menu, or over the game's last frame when it's held mid-game. Nothing shows when it's done quickly
+#define BUSY_AFTER_MS 120
+#define BUSY_STEP_MS 90 // the ring moves on a dot
+static volatile int busy_done = 0;
+static void* Busy_thread(void* work) {
+	((void (*)(void))work)();
+	busy_done = 1;
+	return NULL;
+}
+static void Busy_blit(SDL_Surface* dst, int step) {
+	SDL_Surface* text = TTF_RenderUTF8_Blended(font.large, "Saving", COLOR_WHITE);
+	if (!text) return;
+	int ring = SCALE1(16);
+	int pw = SCALE1(BUTTON_PADDING) + ring + SCALE1(8) + text->w + SCALE1(BUTTON_PADDING+4);
+	int ph = SCALE1(PILL_SIZE);
+	SDL_Rect box = { (dst->w - pw) / 2, (dst->h - ph) / 2, pw, ph };
+	// the pill, a row at a time in dst's own format (the asset's middle is a screen color, see-through on the game's overlay)
+	Uint8 br, bg, bb;
+	SDL_GetRGB(RGB_DARK_GRAY, screen->format, &br, &bg, &bb);
+	Uint32 fill = SDL_MapRGBA(dst->format, br, bg, bb, 255);
+	double r = ph / 2.0;
+	for (int py=0; py<ph; py++) {
+		double dy = py + 0.5 - r;
+		int inset = (int)(r - sqrt(r*r - dy*dy) + 0.5);
+		SDL_FillRect(dst, &(SDL_Rect){ box.x + inset, box.y + py, pw - inset*2, 1 }, fill);
+	}
+	// eight dots, the bright one going round and the ones behind it dimming
+	int cx = box.x + SCALE1(BUTTON_PADDING) + ring/2;
+	int cy = box.y + ph/2;
+	int dot = SCALE1(3);
+	for (int i=0; i<8; i++) {
+		double angle = i * M_PI / 4 - M_PI / 2;
+		int x = cx + cos(angle) * (ring/2 - dot/2) - dot/2;
+		int y = cy + sin(angle) * (ring/2 - dot/2) - dot/2;
+		int age = (step - i + 8) % 8;
+		int level = age<5 ? 255 - age * 50 : 40; // 0-255 of white over the pill
+		Uint32 color = SDL_MapRGB(dst->format, br + (255-br)*level/255, bg + (255-bg)*level/255, bb + (255-bb)*level/255);
+		SDL_FillRect(dst, &(SDL_Rect){ x, y, dot, dot }, color);
+	}
+	SDL_BlitSurface(text, NULL, dst, &(SDL_Rect){ cx + ring/2 + SCALE1(8), box.y + (ph - text->h) / 2 });
+	SDL_FreeSurface(text);
+}
+static void Busy_run(void (*work)(void), int in_game) {
+	pthread_t thread;
+	busy_done = 0;
+	if (thread_video || pthread_create(&thread, NULL, Busy_thread, work)!=0) { // (the screen belongs to the core's thread then)
+		work();
+		return;
+	}
+	uint32_t started = SDL_GetTicks();
+	SDL_Surface* under = NULL; // the menu as it was
+	SDL_Surface* overlay = NULL; // over the game
+	int drawn_step = -1;
+	while (!busy_done) {
+		SDL_Delay(10);
+		uint32_t t = SDL_GetTicks() - started;
+		int step = t / BUSY_STEP_MS;
+		if (t<BUSY_AFTER_MS || busy_done || step==drawn_step) continue;
+		drawn_step = step;
+		if (in_game) {
+			if (!overlay) overlay = SDL_CreateRGBSurfaceWithFormat(0, DEVICE_WIDTH, DEVICE_HEIGHT, 32, SDL_PIXELFORMAT_ARGB8888);
+			if (!overlay) continue;
+			SDL_FillRect(overlay, NULL, 0);
+			Busy_blit(overlay, step);
+			GFX_setNotification(overlay);
+			GFX_setNotificationAlpha(255);
+			GFX_presentLastFrame();
+		}
+		else {
+			if (!under) under = SDL_ConvertSurface(screen, screen->format, 0);
+			if (!under) continue;
+			SDL_BlitSurface(under, NULL, screen, NULL);
+			Busy_blit(screen, step);
+			GFX_flip(screen);
+		}
+	}
+	pthread_join(thread, NULL);
+	if (overlay) {
+		GFX_setNotification(NULL);
+		SDL_FreeSurface(overlay);
+	}
+	if (under) {
+		SDL_BlitSurface(under, NULL, screen, NULL);
+		SDL_FreeSurface(under);
+	}
+}
+// saving from a shortcut mid-game: the picture is taken here, the rest is done while the spinner shows
+static void Menu_saveStateNow(void) {
+	if (!menu.bitmap) pending_shot = GFX_captureScreen();
+	Busy_run(Menu_saveState, !menu.bitmap);
 }
 static void Menu_loadState(void) {
 	// LOG_info("Menu_loadState\n");
@@ -4535,7 +4782,13 @@ static void Menu_loop(void) {
 	// LOG_info("Menu_loop:menu.bitmap %ix%i\n", menu.bitmap->w,menu.bitmap->h);
 	
 	SDL_Surface* backing = SDL_CreateRGBSurface(SDL_SWSURFACE,DEVICE_WIDTH,DEVICE_HEIGHT,FIXED_DEPTH,RGBA_MASK_565); 
-	Menu_scale(menu.bitmap, backing);
+	menu.shot = GFX_captureScreen(); // before anything resizes the screen (and the game's texture with it)
+	if (menu.shot && menu.shot->w==backing->w && menu.shot->h==backing->h) SDL_BlitSurface(menu.shot, NULL, backing, NULL);
+	else {
+		if (menu.shot) SDL_FreeSurface(menu.shot);
+		menu.shot = NULL;
+		Menu_scale(menu.bitmap, backing);
+	}
 	
 	int restore_w = screen->w;
 	int restore_h = screen->h;
@@ -4685,7 +4938,7 @@ static void Menu_loop(void) {
 				break;
 				
 				case ITEM_SAVE: {
-					Menu_saveState();
+					Menu_saveStateNow();
 					status = STATUS_SAVE;
 					show_menu = 0;
 				}
@@ -4708,8 +4961,19 @@ static void Menu_loop(void) {
 					}
 					else {
 						int old_scaling = screen_scaling;
+						int old_effect = screen_effect;
+						int old_border = screen_border;
 						Menu_options(&options_menu);
+						if ((screen_effect!=old_effect || screen_border!=old_border) && menu.shot) {
+							// the picture from when the menu opened no longer looks like the game will
+							SDL_FreeSurface(menu.shot);
+							menu.shot = NULL;
+							SDL_FillRect(backing, NULL, 0);
+							Menu_scale(menu.bitmap, backing);
+						}
 						if (screen_scaling!=old_scaling) {
+							if (menu.shot) SDL_FreeSurface(menu.shot);
+							menu.shot = NULL;
 							selectScaler(renderer.true_w,renderer.true_h,renderer.src_p);
 						
 							restore_w = screen->w;
@@ -4857,7 +5121,9 @@ static void Menu_loop(void) {
 					// LOG_info("raw_preview %ix%i\n", raw_preview->w,raw_preview->h);
 					
 					SDL_FillRect(preview, NULL, 0);
-					Menu_scale(raw_preview, preview);
+					if (raw_preview->w==preview->w && raw_preview->h==preview->h) SDL_BlitSurface(raw_preview, NULL, preview, NULL); // the whole screen as it looked, already preview sized
+					else if (raw_preview->w==DEVICE_WIDTH && raw_preview->h==DEVICE_HEIGHT) SDL_BlitScaled(raw_preview, NULL, preview, NULL);
+					else Menu_scale(raw_preview, preview);
 					SDL_BlitSurface(preview, NULL, screen, &(SDL_Rect){ox,oy});
 					SDL_FreeSurface(raw_preview);
 					SDL_FreeSurface(bmp);
@@ -4987,6 +5253,8 @@ static void Menu_loop(void) {
 	
 	SDL_FreeSurface(menu.bitmap);
 	menu.bitmap = NULL;
+	if (menu.shot) SDL_FreeSurface(menu.shot);
+	menu.shot = NULL;
 	SDL_FreeSurface(backing);
 	PWR_disableAutosleep();
 	play.last_tick = SDL_GetTicks(); // don't count time spent in the menu
@@ -5087,6 +5355,7 @@ static void* coreThread(void *arg) {
 }
 
 int main(int argc , char* argv[]) {
+	uint32_t quit_at = 0, ra_done = 0; // how long quitting takes, logged (up here since a failed start jumps past)
 	LOG_info("MinArch\n");
 
 	setOverclock(overclock); // default to normal
@@ -5174,7 +5443,9 @@ int main(int argc , char* argv[]) {
 		GFX_startFrame();
 		
 		if (!thread_video) {
+			uint64_t frame_from = getMicroseconds();
 			core.run();
+			Auto_frame(getMicroseconds() - frame_from);
 			limitFF();
 			trackFPS();
 		}
@@ -5230,16 +5501,21 @@ int main(int argc , char* argv[]) {
 	}
 
 	Play_save();
+	quit_at = SDL_GetTicks();
 	RA_quit();
+	ra_done = SDL_GetTicks();
 	Menu_quit();
 	QuitSettings();
 	
 finish:
 
 	Game_close();
+	uint32_t unload_at = SDL_GetTicks();
 	Core_unload();
 	
+	uint32_t core_at = SDL_GetTicks();
 	Core_quit();
+	if (quit_at) LOG_info("quit: achievements %ums, menu %ums, audio %ums, core and save %ums\n", ra_done-quit_at, unload_at-ra_done, core_at-unload_at, SDL_GetTicks()-core_at);
 	Core_close();
 	
 	Config_quit();

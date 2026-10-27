@@ -298,7 +298,7 @@ static void* BGM_run(void* arg) {
 		uint32_t room = RING_FRAMES - queued;
 		// a chunk can become up to 6x as many frames (8000Hz to 48000Hz)
 		if (room<CHUNK_FRAMES * 6 || queued>RING_FRAMES * 3 / 4) {
-			usleep(40000);
+			usleep(queued>RING_FRAMES * 7 / 8 ? 150000 : 40000); // (full and waiting, eg. asleep or in a game: rarely)
 			continue;
 		}
 		if (!playing) {

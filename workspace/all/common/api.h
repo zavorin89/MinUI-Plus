@@ -178,6 +178,8 @@ void GFX_flip(SDL_Surface* screen);
 #define GFX_setBorder PLAT_setBorder // (const char* path) NULL clears it
 #define GFX_setNotification PLAT_setNotification // (SDL_Surface* full screen with transparency) NULL hides it
 #define GFX_setNotificationAlpha PLAT_setNotificationAlpha // (int 0-255) fades the notification, kept for the next one
+#define GFX_captureScreen PLAT_captureScreen // () the game as it looks on screen, or NULL
+#define GFX_presentLastFrame PLAT_presentLastFrame // ()
 void GFX_sync(void); // call this to maintain 60fps when not calling GFX_flip() this frame
 void GFX_quit(void);
 
@@ -226,6 +228,7 @@ typedef struct SND_Frame {
 
 void SND_init(double sample_rate, double frame_rate);
 size_t SND_batchSamples(const SND_Frame* frames, size_t frame_count);
+uint64_t SND_takeWaitUs(void); // microseconds SND_batchSamples spent waiting for room since the last call
 void SND_quit(void);
 
 // short synthesized sounds, mixed into the game's audio when it's playing or on their own device otherwise
@@ -348,6 +351,7 @@ enum {
 };
 #define PWR_setCPUSpeed PLAT_setCPUSpeed
 #define PWR_setCPUSpeedAsync PLAT_setCPUSpeedAsync
+#define PWR_setCPUFreq PLAT_setCPUFreq
 
 ///////////////////////////////
 
@@ -376,6 +380,10 @@ int PLAT_supportsBorder(void);
 void PLAT_setBorder(const char* path); // image drawn behind the game, filling the screen
 void PLAT_setNotification(SDL_Surface* overlay); // drawn over the game until cleared, copied so the caller keeps ownership
 void PLAT_setNotificationAlpha(int alpha);
+SDL_Surface* PLAT_captureScreen(void); // the last game frame as shown (border, effect), device sized RGB565, NULL when it can't; caller frees
+void PLAT_presentLastFrame(void); // shows the last game frame again, with the notification over it
+enum { POWER_AWAKE, POWER_ASLEEP, POWER_ASLEEP_LONG };
+void PLAT_powerSave(int state); // sleep: the least the device can run on (POWER_ASLEEP_LONG after a minute asleep)
 
 // GPU textures: uploaded once, then drawn scaled (smoothly), faded and darkened over the screen on the next flip,
 // in the order queued (the queue empties each flip). Platforms without a GPU path return NULL from PLAT_createTexture
@@ -395,6 +403,7 @@ void PLAT_powerOff(void);
 	
 void PLAT_setCPUSpeed(int speed); // enum
 void PLAT_setCPUSpeedAsync(int speed); // the same, without waiting for the change to be made
+void PLAT_setCPUFreq(int mhz); // about mhz (the nearest the device has), without waiting; other devices pick the nearest CPU_SPEED_
 void PLAT_setRumble(int strength);
 int PLAT_pickSampleRate(int requested, int max);
 

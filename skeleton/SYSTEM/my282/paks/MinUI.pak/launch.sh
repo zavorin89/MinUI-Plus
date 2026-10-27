@@ -47,7 +47,7 @@ while :; do
 		ifconfig wlan0 down
 	fi
 	killall -9 MtpDaemon
-	sleep 2
+	if [ -f /tmp/minui_asleep ]; then sleep 30; else sleep 2; fi # asleep: fewer wakeups
 done &
 if [ -f "$WIFI_FLAG" ]; then
 	wifi.sh up &
@@ -97,7 +97,7 @@ while [ -f "$EXEC_PATH" ]; do
 		rm -f $NEXT_PATH
 		reclock
 		echo `date +'%F %T'` > "$DATETIME_PATH"
-		sync
+		sync & # the game's saves reach the card while minui starts, instead of minui waiting on them
 	fi
 done
 

@@ -359,6 +359,12 @@ FALLBACK_IMPLEMENTATION int PLAT_supportsBorder(void) { return 0; }
 FALLBACK_IMPLEMENTATION void PLAT_setBorder(const char* path) { }
 FALLBACK_IMPLEMENTATION void PLAT_setNotification(SDL_Surface* overlay) { }
 FALLBACK_IMPLEMENTATION void PLAT_setNotificationAlpha(int alpha) { }
+FALLBACK_IMPLEMENTATION SDL_Surface* PLAT_captureScreen(void) { return NULL; }
+FALLBACK_IMPLEMENTATION void PLAT_presentLastFrame(void) { }
+FALLBACK_IMPLEMENTATION void PLAT_powerSave(int state) { }
+FALLBACK_IMPLEMENTATION void PLAT_setCPUFreq(int mhz) {
+	PLAT_setCPUSpeedAsync(mhz<=800 ? CPU_SPEED_MENU : (mhz<=1100 ? CPU_SPEED_POWERSAVE : (mhz<=1400 ? CPU_SPEED_NORMAL : CPU_SPEED_PERFORMANCE)));
+}
 FALLBACK_IMPLEMENTATION GFX_Texture* PLAT_createTexture(SDL_Surface* surface) { return NULL; } // no GPU path, callers draw in software
 FALLBACK_IMPLEMENTATION void PLAT_destroyTexture(GFX_Texture* texture) { }
 FALLBACK_IMPLEMENTATION void PLAT_queueTexture(GFX_Texture* texture, SDL_Rect* dst, int alpha, int shade) { }
@@ -1118,6 +1124,14 @@ void GFX_blitText(TTF_Font* font, char* str, int leading, SDL_Color color, SDL_S
 
 #define ms SDL_GetTicks
 
+// the audio device as last opened (by the game's sound or the menu sounds), so sleep can close it and open it again
+static SDL_AudioSpec audio_want;
+static int audio_open = 0;
+static int audio_slept = 0;
+static void AUDIO_opened(SDL_AudioSpec* want) {
+	audio_want = *want;
+	audio_open = 1;
+}
 typedef int (*SND_Resampler)(const SND_Frame frame);
 static void SND_fillStream(uint8_t* stream, int len);
 static struct SND_Context {
@@ -1236,6 +1250,12 @@ static void SND_selectResampler(void) { // plat_sound_select_resampler
 		snd.resample = SND_resampleLinear;
 	}
 }
+static uint64_t snd_wait_us = 0; // time spent waiting for room, for minarch's Auto CPU speed
+uint64_t SND_takeWaitUs(void) {
+	uint64_t us = snd_wait_us;
+	snd_wait_us = 0;
+	return us;
+}
 size_t SND_batchSamples(const SND_Frame* frames, size_t frame_count) { // plat_sound_write / plat_sound_write_resample
 	
 	// return frame_count; // TODO: tmp, silent
@@ -1252,12 +1272,14 @@ size_t SND_batchSamples(const SND_Frame* frames, size_t frame_count) { // plat_s
 		int tries = 0;
 		int amount = MIN(BATCH_SIZE, frame_count);
 		
+		uint64_t wait_from = snd.frame_in==snd.frame_filled ? getMicroseconds() : 0;
 		while (tries < 10 && snd.frame_in==snd.frame_filled) {
 			tries++;
 			SDL_UnlockAudio();
 			SDL_Delay(1);
 			SDL_LockAudio();
 		}
+		if (wait_from) snd_wait_us += getMicroseconds() - wait_from;
 		// if (tries) LOG_info("%8i waited %ims for buffer to get low...\n", ms(), tries);
 
 		while (amount && snd.frame_in != snd.frame_filled) {
@@ -1300,6 +1322,7 @@ void SND_init(double sample_rate, double frame_rate) { // plat_sound_init
 	spec_in.callback = SND_audioCallback;
 	
 	if (SDL_OpenAudio(&spec_in, &spec_out)<0) LOG_info("SDL_OpenAudio error: %s\n", SDL_GetError());
+	else AUDIO_opened(&spec_in);
 	
 	snd.buffer_seconds = 5;
 	snd.sample_rate_in  = sample_rate;
@@ -1318,6 +1341,7 @@ void SND_quit(void) { // plat_sound_finish
 	
 	SDL_PauseAudio(1);
 	SDL_CloseAudio();
+	audio_open = 0;
 	snd.initialized = 0;
 	
 	if (snd.buffer) {
@@ -1461,6 +1485,7 @@ static void SFX_prepareLocked(void) {
 			want.samples = SAMPLES;
 			want.callback = SFX_callback;
 			if (SDL_OpenAudio(&want, &have)<0) return;
+			AUDIO_opened(&want);
 			sfx.own_device = have.freq;
 			for (int v=0; v<SFX_VOICES; v++) sfx.voices[v].sound = -1;
 			SDL_PauseAudio(0);
@@ -1552,6 +1577,7 @@ void SFX_quit(void) {
 	}
 	SDL_PauseAudio(1);
 	SDL_CloseAudio();
+	audio_open = 0;
 	sfx.own_device = 0;
 	sfx.rate = 0;
 }
@@ -2166,7 +2192,14 @@ void PWR_powerOff(void) {
 }
 
 static void PWR_enterSleep(void) {
-	SDL_PauseAudio(1);
+	// closed rather than paused: paused, SDL still writes silence to the sound chip ~100 times a second
+	if (audio_open) {
+		SDL_CloseAudio();
+		audio_open = 0;
+		audio_slept = 1;
+	}
+	else SDL_PauseAudio(1);
+	PLAT_powerSave(POWER_ASLEEP);
 	if (GetHDMI()) {
 		PLAT_clearVideo(gfx.screen);
 		PLAT_flip(gfx.screen, 0);
@@ -2180,6 +2213,13 @@ static void PWR_enterSleep(void) {
 	sync();
 }
 static void PWR_exitSleep(void) {
+	PLAT_powerSave(POWER_AWAKE);
+	if (audio_slept) { // the same as before sleep, so its rate etc. hold
+		SDL_AudioSpec have;
+		audio_slept = 0;
+		audio_open = 0;
+		if (SDL_OpenAudio(&audio_want, &have)==0) audio_open = 1;
+	}
 	system("killall -CONT keymon.elf");
 	if (GetHDMI()) {
 		// buh
@@ -2193,10 +2233,16 @@ static void PWR_exitSleep(void) {
 	sync();
 }
 
+#define DEEP_SLEEP_MS 60000 // asleep this long, wifi goes off too (back on when woken)
 static void PWR_waitForWake(void) {
 	uint32_t sleep_ticks = SDL_GetTicks();
 	uint32_t poweroff_delay = PWR_getTimerMs(PWR_TIMER_POWEROFF); // 0 means never
+	int deep = 0;
 	while (!PAD_wake()) {
+		if (!deep && SDL_GetTicks()-sleep_ticks>=DEEP_SLEEP_MS) { // a real break, not a moment: more goes off
+			PLAT_powerSave(POWER_ASLEEP_LONG);
+			deep = 1;
+		}
 		if (pwr.requested_wake) {
 			pwr.requested_wake = 0;
 			break;

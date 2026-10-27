@@ -172,7 +172,23 @@ static struct VID_Context {
 	char border_path[MAX_PATH];
 	SDL_Surface* border_image; // as loaded, for refitting
 	SDL_Rect border_window; // its see-through part, w 0 when it has none
+	SDL_Surface* border_native; // <name>-native.png when there is one: made for the game at native scaling
+	SDL_Surface* border_base; // which of the two is on screen (not owned), for PLAT_captureScreen
+	SDL_Rect border_native_window;
 	SDL_Rect border_fit; // the game rect the texture was fitted to, w 0 when it's the image as is
+	SDL_Surface* border_shown; // the fitted border as a surface (NULL: border_image as is), for PLAT_captureScreen
+	SDL_Surface* effect_image; // the grid/lines, as a surface with the texture's opacity
+	// the last game frame as drawn, for PLAT_presentLastFrame and PLAT_captureScreen
+	int has_frame;
+	SDL_Texture* frame_texture;
+	SDL_Rect frame_src; // in frame_texture (scaled up when crisp)
+	SDL_Rect frame_dst;
+	int frame_effect;
+	SDL_Rect frame_effect_src; // the part of the effect image drawn over frame_dst
+	void* frame_pixels; // the frame itself, RGB565
+	int frame_pitch;
+	int frame_w, frame_h;
+	SDL_Rect frame_src_pixels; // frame_src in frame_pixels
 	SDL_Texture* notification;
 
 	SDL_Surface* buffer;
@@ -324,6 +340,9 @@ void PLAT_quitVideo(void) {
 	if (vid.effect) SDL_DestroyTexture(vid.effect);
 	if (vid.border) SDL_DestroyTexture(vid.border);
 	if (vid.border_image) SDL_FreeSurface(vid.border_image);
+	if (vid.border_shown) SDL_FreeSurface(vid.border_shown);
+	if (vid.border_native) SDL_FreeSurface(vid.border_native);
+	if (vid.effect_image) SDL_FreeSurface(vid.effect_image);
 	if (vid.notification) SDL_DestroyTexture(vid.notification);
 	SDL_DestroyTexture(vid.texture);
 	SDL_DestroyRenderer(vid.renderer);
@@ -361,6 +380,7 @@ static void resizeVideo(int w, int h, int p) {
 	SDL_FreeSurface(vid.buffer);
 	SDL_DestroyTexture(vid.texture);
 	if (vid.target) SDL_DestroyTexture(vid.target);
+	vid.has_frame = 0; // its texture is gone
 	
 	SDL_SetHintWithPriority(SDL_HINT_RENDER_SCALE_QUALITY, vid.sharpness==SHARPNESS_SOFT?"1":"0", SDL_HINT_OVERRIDE);
 	vid.texture = SDL_CreateTexture(vid.renderer,SDL_PIXELFORMAT_RGB565, SDL_TEXTUREACCESS_STREAMING, w,h);
@@ -466,7 +486,7 @@ static void updateEffect(void) {
 	else if (effect.type==EFFECT_GRID) {
 		if (effect.scale<3) {
 			effect_path = RES_PATH "/grid-2.png";
-			opacity = 64; // 1 - 3/4 = 25%
+			opacity = 112; // as strong as grid-3's (25%, 1 - 3/4, left 2x games looking like they had no grid)
 		}
 		else if (effect.scale<4) {
 			effect_path = RES_PATH "/grid-3.png";
@@ -522,7 +542,10 @@ static void updateEffect(void) {
 		if (vid.effect) SDL_DestroyTexture(vid.effect);
 		vid.effect = SDL_CreateTextureFromSurface(vid.renderer, tmp);
 		SDL_SetTextureAlphaMod(vid.effect, opacity);
-		SDL_FreeSurface(tmp);
+		if (vid.effect_image) SDL_FreeSurface(vid.effect_image);
+		vid.effect_image = tmp; // kept for PLAT_captureScreen
+		SDL_SetSurfaceBlendMode(tmp, SDL_BLENDMODE_BLEND);
+		SDL_SetSurfaceAlphaMod(tmp, opacity);
 		effect.live_type = effect.type;
 	}
 	}
@@ -543,34 +566,15 @@ scaler_t PLAT_getScaler(GFX_Renderer* renderer) {
 }
 
 int PLAT_supportsBorder(void) { return 1; }
-void PLAT_setBorder(const char* path) {
-	if (path && exactMatch((char*)path, vid.border_path)) return; // already loaded
-
-	if (vid.border) SDL_DestroyTexture(vid.border);
-	if (vid.border_image) SDL_FreeSurface(vid.border_image);
-	vid.border = NULL;
-	vid.border_image = NULL;
-	vid.border_path[0] = '\0';
-	if (!path) return;
-
+static SDL_Surface* loadBorderImage(const char* path) {
 	SDL_Surface* loaded = IMG_Load(path);
-	if (!loaded) {
-		LOG_warn("couldn't load border: %s\n", path);
-		return;
-	}
+	if (!loaded) return NULL;
 	SDL_Surface* image = SDL_ConvertSurfaceFormat(loaded, SDL_PIXELFORMAT_ARGB8888, 0);
 	SDL_FreeSurface(loaded);
-	if (!image) return;
-	vid.border = SDL_CreateTextureFromSurface(vid.renderer, image);
-	if (!vid.border) {
-		SDL_FreeSurface(image);
-		return;
-	}
-	strcpy(vid.border_path, path);
-	vid.border_image = image;
-	vid.border_fit = (SDL_Rect){0,0,0,0};
-
-	// the see-through window the game shows in (made for aspect scaling)
+	return image;
+}
+// the see-through window a border leaves for the game, w 0 when it has none
+static SDL_Rect borderWindow(SDL_Surface* image) {
 	int x0 = image->w, y0 = image->h, x1 = -1, y1 = -1;
 	for (int y=0; y<image->h; y++) {
 		uint32_t* row = (uint32_t*)((uint8_t*)image->pixels + y * image->pitch);
@@ -582,17 +586,64 @@ void PLAT_setBorder(const char* path) {
 			if (y>y1) y1 = y;
 		}
 	}
-	vid.border_window = x1<0 ? (SDL_Rect){0,0,0,0} : (SDL_Rect){x0, y0, x1-x0+1, y1-y0+1};
+	return x1<0 ? (SDL_Rect){0,0,0,0} : (SDL_Rect){x0, y0, x1-x0+1, y1-y0+1};
+}
+void PLAT_setBorder(const char* path) {
+	if (path && exactMatch((char*)path, vid.border_path)) return; // already loaded
+
+	if (vid.border) SDL_DestroyTexture(vid.border);
+	if (vid.border_image) SDL_FreeSurface(vid.border_image);
+	if (vid.border_shown) SDL_FreeSurface(vid.border_shown);
+	if (vid.border_native) SDL_FreeSurface(vid.border_native);
+	vid.border = NULL;
+	vid.border_image = NULL;
+	vid.border_shown = NULL;
+	vid.border_native = NULL;
+	vid.border_base = NULL;
+	vid.border_path[0] = '\0';
+	if (!path) return;
+
+	SDL_Surface* image = loadBorderImage(path);
+	if (!image) {
+		LOG_warn("couldn't load border: %s\n", path);
+		return;
+	}
+	char native_path[MAX_PATH];
+	snprintf(native_path, sizeof(native_path), "%s", path);
+	char* ext = strrchr(native_path, '.');
+	if (ext && ext - native_path + strlen("-native.png") < sizeof(native_path)) {
+		strcpy(ext, "-native.png");
+		if (exists(native_path)) {
+			vid.border_native = loadBorderImage(native_path);
+			if (vid.border_native) vid.border_native_window = borderWindow(vid.border_native);
+		}
+	}
+	vid.border = SDL_CreateTextureFromSurface(vid.renderer, image);
+	if (!vid.border) {
+		SDL_FreeSurface(image);
+		return;
+	}
+	strcpy(vid.border_path, path);
+	vid.border_image = image;
+	vid.border_fit = (SDL_Rect){0,0,0,0};
+	vid.border_window = borderWindow(image); // (made for aspect scaling)
 }
 // natively scaled games are smaller than the window a border leaves for them: its panels and bars move in to meet
 // the game, and what's left between is filled with the frame's own color (rebuilt only when the game's size changes)
 static void fitBorder(SDL_Rect* game) {
 	SDL_Surface* image = vid.border_image;
 	SDL_Rect* win = &vid.border_window;
-	if (!image || !win->w) return;
 	SDL_Rect want = game ? *game : (SDL_Rect){0,0,0,0};
+	if (want.w && vid.border_native && vid.border_native_window.w) { // one made for native: fitted (if at all) from that
+		image = vid.border_native;
+		win = &vid.border_native_window;
+	}
+	if (!image || !win->w) return;
 	if (want.x==vid.border_fit.x && want.y==vid.border_fit.y && want.w==vid.border_fit.w && want.h==vid.border_fit.h) return;
 	vid.border_fit = want;
+	int as_made = want.w && win->x==want.x && win->y==want.y && win->w==want.w && win->h==want.h;
+	if (as_made) want = (SDL_Rect){0,0,0,0}; // the native one exactly fits: shown as is
+	vid.border_base = image;
 
 	SDL_Surface* out = image;
 	if (want.w) {
@@ -647,10 +698,59 @@ static void fitBorder(SDL_Rect* game) {
 		free(map_y);
 	}
 	SDL_Texture* texture = SDL_CreateTextureFromSurface(vid.renderer, out);
-	if (out!=image) SDL_FreeSurface(out);
+	if (vid.border_shown) SDL_FreeSurface(vid.border_shown);
+	vid.border_shown = out!=image ? out : NULL; // kept for PLAT_captureScreen
 	if (!texture) return;
 	SDL_DestroyTexture(vid.border);
 	vid.border = texture;
+}
+
+// the last game frame as it was on screen (border, scaling, grid or lines), not rotated, for the pause menu and save
+// state pictures. Put together in software from the same pieces the GPU draws (reading the screen back from the GPU
+// turned out unreliable here, and showed whatever popup was up)
+SDL_Surface* PLAT_captureScreen(void) {
+	if (!vid.has_frame || !vid.frame_pixels || !vid.frame_src_pixels.w || !vid.frame_src_pixels.h) return NULL;
+	SDL_Surface* out = SDL_CreateRGBSurfaceWithFormat(0, device_width, device_height, 16, SDL_PIXELFORMAT_RGB565);
+	if (!out) return NULL;
+	SDL_FillRect(out, NULL, 0);
+	SDL_Surface* border = vid.border_shown ? vid.border_shown : (vid.border_base ? vid.border_base : vid.border_image);
+	if (vid.border && border) SDL_BlitSurface(border, NULL, out, NULL);
+	SDL_Surface* frame = SDL_CreateRGBSurfaceWithFormatFrom(vid.frame_pixels, vid.frame_w, vid.frame_h, 16, vid.frame_pitch, SDL_PIXELFORMAT_RGB565);
+	if (frame) {
+		SDL_Rect dst = vid.frame_dst;
+		SDL_BlitScaled(frame, &vid.frame_src_pixels, out, &dst);
+		SDL_FreeSurface(frame);
+	}
+	if (vid.frame_effect && vid.effect_image) {
+		SDL_Rect dst = vid.frame_dst;
+		SDL_BlitScaled(vid.effect_image, &vid.frame_effect_src, out, &dst);
+	}
+	return out;
+}
+
+// the last game frame again, with the notification over it: shows something (eg. that it's saving) while the game is held
+void PLAT_presentLastFrame(void) {
+	if (!vid.has_frame || !vid.frame_texture) return;
+	int oy = (device_width-device_height)/2;
+	int ox = -oy;
+	SDL_SetRenderDrawColor(vid.renderer, 0, 0, 0, 255);
+	SDL_RenderClear(vid.renderer);
+	SDL_Rect* d = &vid.frame_dst;
+	if (vid.border) {
+		if (rotate) SDL_RenderCopyEx(vid.renderer,vid.border,NULL,&(SDL_Rect){ox,oy,device_width,device_height},rotate*90,NULL,SDL_FLIP_NONE);
+		else SDL_RenderCopy(vid.renderer, vid.border, NULL, NULL);
+	}
+	if (rotate) SDL_RenderCopyEx(vid.renderer,vid.frame_texture,&vid.frame_src,&(SDL_Rect){ox+d->x,oy+d->y,d->w,d->h},rotate*90,NULL,SDL_FLIP_NONE);
+	else SDL_RenderCopy(vid.renderer, vid.frame_texture, &vid.frame_src, d);
+	if (vid.frame_effect) {
+		if (rotate) SDL_RenderCopyEx(vid.renderer,vid.effect,&vid.frame_effect_src,&(SDL_Rect){ox+d->x,oy+d->y,d->w,d->h},rotate*90,NULL,SDL_FLIP_NONE);
+		else SDL_RenderCopy(vid.renderer, vid.effect, &vid.frame_effect_src, d);
+	}
+	if (vid.notification) {
+		if (rotate) SDL_RenderCopyEx(vid.renderer,vid.notification,NULL,&(SDL_Rect){ox,oy,device_width,device_height},rotate*90,NULL,SDL_FLIP_NONE);
+		else SDL_RenderCopy(vid.renderer, vid.notification, NULL, NULL);
+	}
+	SDL_RenderPresent(vid.renderer);
 }
 
 static int notification_alpha = 255;
@@ -756,6 +856,11 @@ void PLAT_flip(SDL_Surface* IGNORED, int ignored) {
 	int y = vid.blit->src_y;
 	int w = vid.blit->src_w;
 	int h = vid.blit->src_h;
+	vid.frame_pixels = vid.blit->src;
+	vid.frame_pitch = vid.blit->src_p;
+	vid.frame_w = vid.width;
+	vid.frame_h = vid.height;
+	vid.frame_src_pixels = (SDL_Rect){x,y,w,h};
 	if (vid.sharpness==SHARPNESS_CRISP) {
 		SDL_SetRenderTarget(vid.renderer,vid.target);
 		SDL_RenderCopy(vid.renderer, vid.texture, NULL,NULL);
@@ -814,15 +919,22 @@ void PLAT_flip(SDL_Surface* IGNORED, int ignored) {
 	if (rotate) SDL_RenderCopyEx(vid.renderer,target,src_rect,&(SDL_Rect){ox+dst_rect->x,oy+dst_rect->y,dst_rect->w,dst_rect->h},rotate*90,NULL,SDL_FLIP_NONE);
 	else SDL_RenderCopy(vid.renderer, target, src_rect, dst_rect);
 	
+	SDL_Rect effect_src = { 0, 0, dst_rect->w, dst_rect->h };
 	updateEffect();
+	vid.frame_effect_src = effect_src;
+	vid.has_frame = 1;
+	vid.frame_texture = target;
+	vid.frame_src = *src_rect;
+	vid.frame_dst = *dst_rect;
+	vid.frame_effect = vid.blit && effect.type!=EFFECT_NONE && vid.effect;
 	if (vid.blit && effect.type!=EFFECT_NONE && vid.effect) {
 		// ox = effect.scale - (dst_rect->x % effect.scale);
 		// oy = effect.scale - (dst_rect->y % effect.scale);
 		// if (ox==effect.scale) ox = 0;
 		// if (oy==effect.scale) oy = 0;
  		// LOG_info("rotate: %i ox: %i oy: %i\n", rotate, ox,oy);
-		if (rotate) SDL_RenderCopyEx(vid.renderer,vid.effect,&(SDL_Rect){0,0,dst_rect->w,dst_rect->h},&(SDL_Rect){ox+dst_rect->x,oy+dst_rect->y,dst_rect->w,dst_rect->h},rotate*90,NULL,SDL_FLIP_NONE);
-		else SDL_RenderCopy(vid.renderer, vid.effect, &(SDL_Rect){0,0,dst_rect->w,dst_rect->h},dst_rect);
+		if (rotate) SDL_RenderCopyEx(vid.renderer,vid.effect,&effect_src,&(SDL_Rect){ox+dst_rect->x,oy+dst_rect->y,dst_rect->w,dst_rect->h},rotate*90,NULL,SDL_FLIP_NONE);
+		else SDL_RenderCopy(vid.renderer, vid.effect, &effect_src,dst_rect);
 	}
 	
 	// notifications (eg. achievements) go over everything, positioned like the border
@@ -914,19 +1026,24 @@ void PLAT_powerOff(void) {
 
 ///////////////////////////////
 
-static void setCPUSpeed(int speed, int wait) {
-	int freq = 0;
-	int cpu  = 1;
-	switch (speed) {
-		case CPU_SPEED_MENU: 		freq =  576; cpu = 1; break;
-		case CPU_SPEED_POWERSAVE:	freq = 1056; cpu = 1; break;
-		case CPU_SPEED_NORMAL: 		freq = 1344; cpu = 2; break;
-		case CPU_SPEED_PERFORMANCE: freq = 1512; cpu = 2; break;
-	}
-
+static int cpu_freq_now = 1344; // what was last asked for, to go back to after sleep
+static void setCPUFreq(int freq, int wait) {
+	cpu_freq_now = freq;
+	int cpu = freq>=1200 ? 2 : 1; // the second core only when it's that busy
 	char cmd[128];
 	sprintf(cmd,"overclock.elf userspace %d %d 384 1080 0%s", cpu, freq, wait ? "" : " &");
 	system(cmd);
+}
+static int speedFreq(int speed) {
+	switch (speed) {
+		case CPU_SPEED_MENU: 		return  576;
+		case CPU_SPEED_POWERSAVE:	return 1056;
+		case CPU_SPEED_PERFORMANCE: return 1512;
+		default:					return 1344; // CPU_SPEED_NORMAL
+	}
+}
+static void setCPUSpeed(int speed, int wait) {
+	setCPUFreq(speedFreq(speed), wait);
 }
 static pthread_mutex_t cpu_lock = PTHREAD_MUTEX_INITIALIZER;
 static int cpu_generation = 0;
@@ -939,26 +1056,63 @@ void PLAT_setCPUSpeed(int speed) {
 // even backgrounded with "&", system() stops the caller while it forks and starts a shell (a dropped frame or
 // two in the menu), so the change is made from a thread of its own instead. Every change bumps a generation
 // under one lock, so a thread that gets there after a newer change (eg. leaving a menu quickly) does nothing
-typedef struct { int speed; int generation; } CPUChange;
+typedef struct { int freq; int generation; } CPUChange;
 static void* setCPUSpeedThread(void* arg) {
 	CPUChange* change = arg;
 	pthread_mutex_lock(&cpu_lock);
-	if (change->generation==cpu_generation) setCPUSpeed(change->speed, 1);
+	if (change->generation==cpu_generation) setCPUFreq(change->freq, 1);
 	pthread_mutex_unlock(&cpu_lock);
 	free(change);
 	return NULL;
 }
-void PLAT_setCPUSpeedAsync(int speed) {
+static void setCPUFreqAsync(int freq) {
 	CPUChange* change = malloc(sizeof(CPUChange));
 	pthread_mutex_lock(&cpu_lock);
-	change->speed = speed;
+	change->freq = freq;
 	change->generation = ++cpu_generation;
 	pthread_mutex_unlock(&cpu_lock);
 	pthread_t thread;
 	if (pthread_create(&thread, NULL, setCPUSpeedThread, change)==0) pthread_detach(thread);
 	else {
 		free(change);
-		setCPUSpeed(speed, 0);
+		setCPUFreq(freq, 0);
+	}
+}
+void PLAT_setCPUSpeedAsync(int speed) {
+	setCPUFreqAsync(speedFreq(speed));
+}
+void PLAT_setCPUFreq(int mhz) { // minarch's Auto speed, without holding up the frame
+	setCPUFreqAsync(mhz);
+}
+
+// sleep: the screen and sound are off and all that runs is a check of the buttons a few times a second, so one core
+// at a crawl does. After a minute asleep wifi goes too (it's the biggest draw left), and comes back when woken
+#define ASLEEP_PATH "/tmp/minui_asleep" // launch.sh's background loop checks in less often while it's there
+static int wifi_slept = 0;
+void PLAT_powerSave(int state) {
+	if (state==POWER_ASLEEP) {
+		pthread_mutex_lock(&cpu_lock);
+		cpu_generation += 1; // a change still on its way would undo this
+		system("overclock.elf userspace 1 240 384 1080 0"); // (cpu_freq_now kept, to go back to)
+		pthread_mutex_unlock(&cpu_lock);
+		touch(ASLEEP_PATH);
+	}
+	else if (state==POWER_ASLEEP_LONG) {
+		if (PLAT_isOnline()) {
+			system("wifi.sh down");
+			wifi_slept = 1;
+		}
+	}
+	else {
+		pthread_mutex_lock(&cpu_lock);
+		cpu_generation += 1;
+		setCPUFreq(cpu_freq_now, 1);
+		pthread_mutex_unlock(&cpu_lock);
+		unlink(ASLEEP_PATH);
+		if (wifi_slept) {
+			wifi_slept = 0;
+			system("wifi.sh up >/dev/null 2>&1 &"); // reconnects in the background
+		}
 	}
 }
 
