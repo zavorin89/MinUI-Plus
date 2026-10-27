@@ -23,6 +23,10 @@
 #define POWER_PATH SHARED_USERDATA_PATH "/.minui/power.txt"
 #define PLAYTIME_PATH SHARED_USERDATA_PATH "/.minui/playtime.txt"
 #define GAME_CORES_PATH SHARED_USERDATA_PATH "/.minui/cores.txt" // "<game path>\t<pak tag>" for games not on their system's own core
+#define BGM_PATH SDCARD_PATH "/BGM" // the launcher's background music: mp3, ogg, flac or wav files
+#define BGM_ENABLED_PATH SHARED_USERDATA_PATH "/.minui/music.txt"
+#define BGM_VOLUME_PATH SHARED_USERDATA_PATH "/.minui/music_volume.txt"
+#define BGM_LAST_PATH "/tmp/minui_music" // the song played last, so the next launch starts another
 #define SWITCHER_PATH SHARED_USERDATA_PATH "/.minui/switcher.txt" // games picked for the game switcher, paths without SDCARD_PATH
 #define SWITCHER_MAX 10
 #define SWITCHER_OPEN_PATH "/tmp/open_switcher" // left by minarch so the launcher opens straight into the switcher

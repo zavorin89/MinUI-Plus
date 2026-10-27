@@ -396,8 +396,8 @@ static void signInFromConsole(void) {
 	RACache_readCreds(&saved);
 	memset(&creds, 0, sizeof(creds));
 	snprintf(creds.username, sizeof(creds.username), "%s", saved.username);
-	if (!KB_enterText(screen, "RetroAchievements username", creds.username, sizeof(creds.username)) || !creds.username[0]) return;
-	if (!KB_enterText(screen, "RetroAchievements password", creds.password, sizeof(creds.password)) || !creds.password[0]) return;
+	if (!KB_enterText(screen, "RetroAchievements username", creds.username, sizeof(creds.username), "NEXT", 0) || !creds.username[0]) return;
+	if (!KB_enterText(screen, "RetroAchievements password", creds.password, sizeof(creds.password), "SIGN IN", 0) || !creds.password[0]) return;
 	
 	showMessage("Signing in...", 0);
 	// the saved login is only replaced once this one is accepted (signIn saves the new token)

@@ -21,7 +21,7 @@ SDL?=SDL
 
 TARGET = minarch
 INCDIR = -I. -I./libretro-common/include/ -I../common/ -I../../$(PLATFORM)/platform/
-SOURCE = $(TARGET).c ra.c ra_http.c ra_cache.c ra_chd.c libchdr/unity.c ../common/scaler.c ../common/utils.c ../common/api.c ../../$(PLATFORM)/platform/platform.c
+SOURCE = $(TARGET).c ra.c ra_http.c ra_cache.c ra_chd.c libchdr/unity.c ../common/bgm.c ../common/scaler.c ../common/utils.c ../common/api.c ../../$(PLATFORM)/platform/platform.c
 
 # RetroAchievements (rcheevos, vendored in rcheevos/), minus the Windows-only RAIntegration bridge
 RC = rcheevos/src
@@ -31,6 +31,7 @@ INCDIR += -Ircheevos/include -I$(RC) -I$(RC)/libretro -Ilibchdr/include
 CC = $(CROSS_COMPILE)gcc
 CFLAGS   = $(ARCH) -fomit-frame-pointer
 CFLAGS  += $(INCDIR) -DPLATFORM=\"$(PLATFORM)\" -DUSE_$(SDL) -Ofast -std=gnu99
+CFLAGS  += -DBGM_FLAC_LINKED # bgm.c uses the dr_flac libchdr builds
 CFLAGS  += -DWANT_RAW_DATA_SECTOR=1 -DWANT_SUBCODE=0 -DVERIFY_BLOCK_CRC=0 # libchdr, for hashing PlayStation .chd discs
 CFLAGS	+= -Os -flto
 CFLAGS	+= -DRC_CLIENT_SUPPORTS_HASH

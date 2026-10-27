@@ -20,6 +20,7 @@
 #include "scaler.h"
 #include "ra.h"
 #include "ra_cache.h" // RA_HARDCORE_PATH
+#include "bgm.h"
 
 ///////////////////////////////////////
 
@@ -3088,6 +3089,7 @@ void Core_reset(void) {
 	core.reset();
 }
 void Core_unload(void) {
+	BGM_quit(); // before the audio it mixes into goes
 	SND_quit();
 }
 void Core_quit(void) {
@@ -3345,7 +3347,10 @@ static int Menu_message(char* message, char** pairs) {
 		GFX_startFrame();
 		PAD_poll();
 
-		if (PAD_justPressed(BTN_A) || PAD_justPressed(BTN_B)) break;
+		if (PAD_justPressed(BTN_A) || PAD_justPressed(BTN_B)) {
+			SFX_play(SFX_BACK);
+			break;
+		}
 		
 		PWR_update(&dirty, NULL, Menu_beforeSleep, Menu_afterSleep);
 		
@@ -3372,7 +3377,10 @@ static int Menu_detail(char* text) {
 		GFX_startFrame();
 		PAD_poll();
 
-		if (PAD_justPressed(BTN_A) || PAD_justPressed(BTN_B)) break;
+		if (PAD_justPressed(BTN_A) || PAD_justPressed(BTN_B)) {
+			SFX_play(SFX_BACK);
+			break;
+		}
 		
 		PWR_update(&dirty, NULL, Menu_beforeSleep, Menu_afterSleep);
 		
@@ -3852,6 +3860,7 @@ static int Menu_options(MenuList* list) {
 				end -= 1;
 			}
 			dirty = 1;
+			SFX_play(SFX_TICK);
 		}
 		else if (PAD_justRepeated(BTN_DOWN)) {
 			selected += 1;
@@ -3865,6 +3874,7 @@ static int Menu_options(MenuList* list) {
 				end += 1;
 			}
 			dirty = 1;
+			SFX_play(SFX_TICK);
 		}
 		else {
 			MenuItem* item = &items[selected];
@@ -3881,6 +3891,7 @@ static int Menu_options(MenuList* list) {
 					else if (list->on_change) list->on_change(list, selected);
 				
 					dirty = 1;
+					SFX_play(SFX_TICK);
 				}
 				else if (PAD_justRepeated(BTN_RIGHT)) {
 					if (item->values[item->value+1]) item->value += 1;
@@ -3890,6 +3901,7 @@ static int Menu_options(MenuList* list) {
 					else if (list->on_change) list->on_change(list, selected);
 				
 					dirty = 1;
+					SFX_play(SFX_TICK);
 				}
 			}
 		}
@@ -3897,9 +3909,11 @@ static int Menu_options(MenuList* list) {
 		// uint32_t now = SDL_GetTicks();
 		if (PAD_justPressed(BTN_B)) { // || PAD_tappedMenu(now)
 			show_options = 0;
+			SFX_play(SFX_BACK);
 		}
 		else if (PAD_justPressed(BTN_A)) {
 			MenuItem* item = &items[selected];
+			SFX_play(SFX_CONFIRM);
 			int result = MENU_CALLBACK_NOP;
 			if (item->on_confirm) result = item->on_confirm(list, selected); // item-specific action, eg. Save for all games
 			else if (item->submenu) result = Menu_options(item->submenu); // drill down, eg. main options menu
@@ -3931,6 +3945,7 @@ static int Menu_options(MenuList* list) {
 			if (PAD_justPressed(BTN_X)) {
 				MenuItem* item = &items[selected];
 				item->value = 0;
+				SFX_play(SFX_BACK); // cleared
 				
 				if (item->on_change) item->on_change(list, selected);
 				else if (list->on_change) list->on_change(list, selected);
@@ -4528,6 +4543,7 @@ static void Menu_loop(void) {
 	}
 	
 	Menu_startSaves();
+	BGM_start(); // the menu music, on its own low priority thread (fades in, or picks up where it was)
 	PWR_warn(0);
 	if (!HAS_POWER_BUTTON) PWR_enableSleep();
 	PWR_setCPUSpeedAsync(CPU_SPEED_POWERSAVE); // without waiting for it, and quick enough for the menu to feel snappy
@@ -4925,6 +4941,7 @@ static void Menu_loop(void) {
 		hdmimon();
 	}
 	Menu_waitForSaves(); // before the game runs again
+	BGM_pause(); // fades out over the game's first moments, no waiting
 	
 	SDL_FreeSurface(preview);
 	

@@ -615,8 +615,12 @@ void RA_showAchievements(SDL_Surface* screen, RA_SleepCallback before_sleep, RA_
 		GFX_startFrame();
 		PAD_poll();
 		
-		if (PAD_justPressed(BTN_B) || PAD_justPressed(BTN_MENU)) break;
+		if (PAD_justPressed(BTN_B) || PAD_justPressed(BTN_MENU)) {
+			SFX_play(SFX_BACK);
+			break;
+		}
 		if (PAD_justPressed(BTN_X)) {
+			SFX_play(SFX_TICK);
 			sort = (sort + 1) % SORT_COUNT;
 			putInt(SORT_PATH, sort);
 			// badges belong to rows, which just moved
@@ -650,6 +654,7 @@ void RA_showAchievements(SDL_Surface* screen, RA_SleepCallback before_sleep, RA_
 			if (next!=selected) {
 				selected = next;
 				dirty = 1;
+				SFX_play(SFX_TICK);
 			}
 		}
 		if (selected<start+1 && selected>0 && rows[selected-1].header) start = selected-1; // show the section label with its first item

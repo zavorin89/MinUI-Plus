@@ -170,6 +170,9 @@ static struct VID_Context {
 	SDL_Texture* effect;
 	SDL_Texture* border;
 	char border_path[MAX_PATH];
+	SDL_Surface* border_image; // as loaded, for refitting
+	SDL_Rect border_window; // its see-through part, w 0 when it has none
+	SDL_Rect border_fit; // the game rect the texture was fitted to, w 0 when it's the image as is
 	SDL_Texture* notification;
 
 	SDL_Surface* buffer;
@@ -320,6 +323,7 @@ void PLAT_quitVideo(void) {
 	if (vid.target) SDL_DestroyTexture(vid.target);
 	if (vid.effect) SDL_DestroyTexture(vid.effect);
 	if (vid.border) SDL_DestroyTexture(vid.border);
+	if (vid.border_image) SDL_FreeSurface(vid.border_image);
 	if (vid.notification) SDL_DestroyTexture(vid.notification);
 	SDL_DestroyTexture(vid.texture);
 	SDL_DestroyRenderer(vid.renderer);
@@ -543,18 +547,110 @@ void PLAT_setBorder(const char* path) {
 	if (path && exactMatch((char*)path, vid.border_path)) return; // already loaded
 
 	if (vid.border) SDL_DestroyTexture(vid.border);
+	if (vid.border_image) SDL_FreeSurface(vid.border_image);
 	vid.border = NULL;
+	vid.border_image = NULL;
 	vid.border_path[0] = '\0';
 	if (!path) return;
 
-	SDL_Surface* image = IMG_Load(path);
-	if (!image) {
+	SDL_Surface* loaded = IMG_Load(path);
+	if (!loaded) {
 		LOG_warn("couldn't load border: %s\n", path);
 		return;
 	}
+	SDL_Surface* image = SDL_ConvertSurfaceFormat(loaded, SDL_PIXELFORMAT_ARGB8888, 0);
+	SDL_FreeSurface(loaded);
+	if (!image) return;
 	vid.border = SDL_CreateTextureFromSurface(vid.renderer, image);
-	SDL_FreeSurface(image);
-	if (vid.border) strcpy(vid.border_path, path);
+	if (!vid.border) {
+		SDL_FreeSurface(image);
+		return;
+	}
+	strcpy(vid.border_path, path);
+	vid.border_image = image;
+	vid.border_fit = (SDL_Rect){0,0,0,0};
+
+	// the see-through window the game shows in (made for aspect scaling)
+	int x0 = image->w, y0 = image->h, x1 = -1, y1 = -1;
+	for (int y=0; y<image->h; y++) {
+		uint32_t* row = (uint32_t*)((uint8_t*)image->pixels + y * image->pitch);
+		for (int x=0; x<image->w; x++) {
+			if ((row[x] >> 24)>=128) continue;
+			if (x<x0) x0 = x;
+			if (x>x1) x1 = x;
+			if (y<y0) y0 = y;
+			if (y>y1) y1 = y;
+		}
+	}
+	vid.border_window = x1<0 ? (SDL_Rect){0,0,0,0} : (SDL_Rect){x0, y0, x1-x0+1, y1-y0+1};
+}
+// natively scaled games are smaller than the window a border leaves for them: its panels and bars move in to meet
+// the game, and what's left between is filled with the frame's own color (rebuilt only when the game's size changes)
+static void fitBorder(SDL_Rect* game) {
+	SDL_Surface* image = vid.border_image;
+	SDL_Rect* win = &vid.border_window;
+	if (!image || !win->w) return;
+	SDL_Rect want = game ? *game : (SDL_Rect){0,0,0,0};
+	if (want.x==vid.border_fit.x && want.y==vid.border_fit.y && want.w==vid.border_fit.w && want.h==vid.border_fit.h) return;
+	vid.border_fit = want;
+
+	SDL_Surface* out = image;
+	if (want.w) {
+		int w = image->w, h = image->h;
+		out = SDL_CreateRGBSurfaceWithFormat(0, w, h, 32, SDL_PIXELFORMAT_ARGB8888);
+		if (!out) return;
+		// the frame's color: its most common one (not an average, which its logos and trim would tint)
+		static uint32_t counts[4096], sums[4096][3];
+		memset(counts, 0, sizeof(counts));
+		memset(sums, 0, sizeof(sums));
+		for (int y=0; y<h; y+=2) {
+			uint32_t* row = (uint32_t*)((uint8_t*)image->pixels + y * image->pitch);
+			for (int x=0; x<w; x+=2) {
+				uint32_t c = row[x];
+				if ((c >> 24)<128) continue;
+				int bucket = ((c >> 12) & 0xF00) | ((c >> 8) & 0xF0) | ((c >> 4) & 0xF);
+				counts[bucket] += 1;
+				sums[bucket][0] += (c >> 16) & 0xFF; sums[bucket][1] += (c >> 8) & 0xFF; sums[bucket][2] += c & 0xFF;
+			}
+		}
+		int most = 0;
+		for (int i=1; i<4096; i++) if (counts[i]>counts[most]) most = i;
+		uint32_t n = counts[most];
+		uint32_t fill = n ? 0xFF000000 | ((sums[most][0]/n) << 16) | ((sums[most][1]/n) << 8) | (sums[most][2]/n) : 0xFF000000;
+		// each side that has a panel slides in to the game, sides without one keep their place
+		int left = win->x>0, right = win->x+win->w<w, top = win->y>0, bottom = win->y+win->h<h;
+		int* map_x = malloc(w * sizeof(int));
+		int* map_y = malloc(h * sizeof(int));
+		for (int x=0; x<w; x++) {
+			if (left && x<want.x) map_x[x] = MAX(0, x - (want.x - win->x));
+			else if (right && x>=want.x+want.w) map_x[x] = MIN(w-1, win->x + win->w + (x - want.x - want.w));
+			else map_x[x] = x;
+		}
+		for (int y=0; y<h; y++) {
+			if (top && y<want.y) map_y[y] = MAX(0, y - (want.y - win->y));
+			else if (bottom && y>=want.y+want.h) map_y[y] = MIN(h-1, win->y + win->h + (y - want.y - want.h));
+			else map_y[y] = y;
+		}
+		for (int y=0; y<h; y++) {
+			uint32_t* src_row = (uint32_t*)((uint8_t*)image->pixels + map_y[y] * image->pitch);
+			uint32_t* dst = (uint32_t*)((uint8_t*)out->pixels + y * out->pitch);
+			int in_y = y>=want.y && y<want.y+want.h;
+			for (int x=0; x<w; x++) {
+				if (in_y && x>=want.x && x<want.x+want.w) dst[x] = 0; // the game
+				else {
+					uint32_t c = src_row[map_x[x]];
+					dst[x] = (c >> 24)<128 ? fill : c;
+				}
+			}
+		}
+		free(map_x);
+		free(map_y);
+	}
+	SDL_Texture* texture = SDL_CreateTextureFromSurface(vid.renderer, out);
+	if (out!=image) SDL_FreeSurface(out);
+	if (!texture) return;
+	SDL_DestroyTexture(vid.border);
+	vid.border = texture;
 }
 
 static int notification_alpha = 255;
@@ -710,6 +806,7 @@ void PLAT_flip(SDL_Surface* IGNORED, int ignored) {
 
 	// border first so the game always draws over it
 	if (vid.border) {
+		fitBorder(vid.blit->aspect==0 ? dst_rect : NULL);
 		if (rotate) SDL_RenderCopyEx(vid.renderer,vid.border,NULL,&(SDL_Rect){ox,oy,device_width,device_height},rotate*90,NULL,SDL_FLIP_NONE);
 		else SDL_RenderCopy(vid.renderer, vid.border, NULL, NULL);
 	}

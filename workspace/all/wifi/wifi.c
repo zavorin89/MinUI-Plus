@@ -277,7 +277,7 @@ int main(int argc , char* argv[]) {
 				else if (network->secure) {
 					char title[96];
 					snprintf(title, sizeof(title), "Password for %s", network->ssid);
-					ready = KB_enterText(screen, title, psk, MAX_PSK);
+					ready = KB_enterText(screen, title, psk, MAX_PSK, "JOIN", 0);
 				}
 				if (ready && connectTo(network->ssid, psk)) {
 					enabled = 1;

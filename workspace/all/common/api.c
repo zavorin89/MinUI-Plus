@@ -1109,8 +1109,10 @@ static struct SND_Context {
 	int phase; // how far the next output sits between previous and the frame coming in, 0 to sample_rate_out
 } snd = {0};
 static void SFX_mix(int16_t* stream, int frames);
+static SFX_Music sfx_music = NULL; // background music in the menus, under the sounds
 static void SND_audioCallback(void* userdata, uint8_t* stream, int len) { // plat_sound_callback
 	SND_fillStream(stream, len);
+	if (sfx_music) sfx_music((int16_t*)stream, len / (sizeof(int16_t) * 2)); // the pause menu's music
 	SFX_mix((int16_t*)stream, len / (sizeof(int16_t) * 2)); // menu sounds and the achievement chime, over the game
 }
 static void SND_fillStream(uint8_t* stream, int len) {
@@ -1405,9 +1407,17 @@ static void SFX_mix(int16_t* stream, int frames) {
 }
 static void SFX_callback(void* userdata, uint8_t* stream, int len) { // the device SFX opens when no game is playing
 	memset(stream, 0, len);
+	if (sfx_music) sfx_music((int16_t*)stream, len / (sizeof(int16_t) * 2));
 	SFX_mix((int16_t*)stream, len / (sizeof(int16_t) * 2));
 }
+static pthread_mutex_t sfx_lock = PTHREAD_MUTEX_INITIALIZER; // the warm-up and music threads open the device too
+static void SFX_prepareLocked(void);
 static void SFX_prepare(void) {
+	pthread_mutex_lock(&sfx_lock);
+	SFX_prepareLocked();
+	pthread_mutex_unlock(&sfx_lock);
+}
+static void SFX_prepareLocked(void) {
 	int rate;
 	if (snd.initialized) rate = snd.sample_rate_out;
 	else {
@@ -1485,6 +1495,16 @@ void SFX_play(int sound) {
 	}
 	sfx.voices[voice].sound = sound;
 	sfx.voices[voice].position = 0;
+	SDL_UnlockAudio();
+}
+int SFX_open(void) {
+	if (snd.initialized) return snd.sample_rate_out; // a game's audio has the device, music mixes into it
+	SFX_prepare();
+	return sfx.own_device ? sfx.rate : 0;
+}
+void SFX_setMusic(SFX_Music music) {
+	SDL_LockAudio();
+	sfx_music = music;
 	SDL_UnlockAudio();
 }
 void SFX_quit(void) {

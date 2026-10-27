@@ -13,6 +13,7 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <signal.h>
+#include <errno.h>
 #if defined(__arm__) && defined(__linux__)
 #include <ucontext.h>
 #endif
@@ -20,6 +21,8 @@
 #include "defines.h"
 #include "api.h"
 #include "utils.h"
+#include "keyboard.h"
+#include "bgm.h"
 
 ///////////////////////////////////////
 
@@ -3710,6 +3713,239 @@ static void deleteSelected(SDL_Surface* screen) {
 	showFlash("Deleted", 0);
 }
 
+// renaming a game (MENU + Y): the file (or a multi-disc folder and its m3u or cue), and everything named after it,
+// its box art, saves, states, settings and border, and every list that points at it
+
+// a list file of paths relative to SDCARD_PATH (anything after a tab is kept): old_rel becomes new_rel, and when
+// old_dir is set, files inside it (each disc of a multi-disc game) move to new_dir
+static void renameInList(char* list_path, char* old_rel, char* new_rel, char* old_dir, char* new_dir) {
+	FILE* file = fopen(list_path, "r");
+	if (!file) return;
+	static char out[64*1024];
+	out[0] = '\0';
+	int changed = 0;
+	int dir_len = old_dir ? strlen(old_dir) : 0;
+	char line[MAX_PATH*2];
+	while (fgets(line, sizeof(line), file)) {
+		char fixed[MAX_PATH*2];
+		char* tab = strchr(line, '\t');
+		int path_len = tab ? tab - line : (int)strcspn(line, "\r\n");
+		if (path_len==(int)strlen(old_rel) && !strncmp(line, old_rel, path_len)) {
+			snprintf(fixed, sizeof(fixed), "%s%s", new_rel, line + path_len);
+			changed = 1;
+		}
+		else if (old_dir && path_len>dir_len && !strncmp(line, old_dir, dir_len) && line[dir_len]=='/') {
+			snprintf(fixed, sizeof(fixed), "%s%s", new_dir, line + dir_len);
+			changed = 1;
+		}
+		else strcpy(fixed, line);
+		if (strlen(out)+strlen(fixed)<sizeof(out)) strcat(out, fixed);
+	}
+	fclose(file);
+	if (changed) putFile(list_path, out);
+}
+static void renameInRecents(Array* list, char* old_rel, char* new_rel, char* old_dir, char* new_dir, char* new_name) {
+	int dir_len = old_dir ? strlen(old_dir) : 0;
+	for (int i=0; i<list->count; i++) {
+		Recent* recent = list->items[i];
+		char path[MAX_PATH];
+		if (exactMatch(recent->path, old_rel)) {
+			strcpy(path, new_rel);
+			if (recent->alias) { // the name it was listed under is the old one
+				free(recent->alias);
+				recent->alias = strdup(new_name);
+			}
+		}
+		else if (old_dir && prefixMatch(old_dir, recent->path) && recent->path[dir_len]=='/') snprintf(path, sizeof(path), "%s%s", new_dir, recent->path + dir_len);
+		else continue;
+		free(recent->path);
+		recent->path = strdup(path);
+	}
+}
+// drops map.txt's custom name for the old file, the typed name is the one to show now
+static void dropMapAlias(char* dir, char* file_name) {
+	char map_path[MAX_PATH];
+	snprintf(map_path, sizeof(map_path), "%s/map.txt", dir);
+	FILE* file = fopen(map_path, "r");
+	if (!file) return;
+	static char out[32*1024];
+	out[0] = '\0';
+	int changed = 0;
+	int len = strlen(file_name);
+	char line[MAX_PATH*2];
+	while (fgets(line, sizeof(line), file)) {
+		if (!strncmp(line, file_name, len) && line[len]=='\t') {
+			changed = 1;
+			continue;
+		}
+		if (strlen(out)+strlen(line)<sizeof(out)) strcat(out, line);
+	}
+	fclose(file);
+	if (changed) putFile(map_path, out);
+}
+static void renameSelected(SDL_Surface* screen) {
+	if (!isSortableFolder(top->path) || !top->entries->count) return;
+	Entry* entry = top->entries->items[top->selected];
+	char old_rel[MAX_PATH];
+	if (entry->type==ENTRY_PAK || !getFavoritePath(entry, old_rel)) {
+		showFlash("Only games can be renamed", 0);
+		return;
+	}
+	int is_dir = entry->type==ENTRY_DIR; // a multi-disc game's folder, or a folder with a cue of the same name
+	char old_launch[MAX_PATH];
+	snprintf(old_launch, sizeof(old_launch), "%s%s", SDCARD_PATH, old_rel);
+	if (!is_dir && !exactMatch(old_launch, entry->path)) {
+		showFlash("Rename the game, not one of its discs", 0);
+		return;
+	}
+
+	// what's typed is the file's name without its extension, "(USA)" and all
+	char dir[MAX_PATH];
+	strcpy(dir, entry->path);
+	*strrchr(dir, '/') = '\0';
+	char old_file[MAX_PATH];
+	strcpy(old_file, strrchr(entry->path, '/')+1);
+	char ext[32] = "";
+	char name[128];
+	snprintf(name, sizeof(name), "%s", old_file);
+	char* dot = strrchr(name, '.');
+	if (!is_dir && dot && dot>name && strlen(dot)<sizeof(ext)) {
+		strcpy(ext, dot);
+		*dot = '\0';
+	}
+	char old_name[128];
+	strcpy(old_name, name);
+	if (!KB_enterText(screen, "Rename", name, sizeof(name), "RENAME", KB_FILE_NAME)) {
+		SFX_play(SFX_BACK);
+		return;
+	}
+	char* start = name;
+	while (*start==' ') start++;
+	int len = strlen(start);
+	while (len>0 && start[len-1]==' ') start[--len] = '\0';
+	if (exactMatch(start, old_name)) return;
+	if (!start[0] || start[0]=='.') {
+		showFlash("That name can't be used", 0);
+		return;
+	}
+
+	char new_file[MAX_PATH];
+	snprintf(new_file, sizeof(new_file), "%s%s", start, ext);
+	char new_path[MAX_PATH];
+	snprintf(new_path, sizeof(new_path), "%s/%s", dir, new_file);
+	if (exists(new_path) && strcasecmp(new_file, old_file)) { // (only the case changing is the same file on the card)
+		showFlash("There's already a game by that name", 0);
+		return;
+	}
+
+	// the name its saves go by: the file, or the m3u or cue inside the folder
+	char old_save_name[MAX_PATH], new_save_name[MAX_PATH];
+	strcpy(old_save_name, strrchr(old_launch, '/')+1);
+	strcpy(new_save_name, old_save_name);
+	char new_rel[MAX_PATH];
+	if (is_dir) {
+		char* launch_ext = strrchr(old_save_name, '.');
+		int named_after_folder = launch_ext && (int)(launch_ext - old_save_name)==(int)strlen(old_file) && !strncmp(old_save_name, old_file, strlen(old_file));
+		if (named_after_folder) snprintf(new_save_name, sizeof(new_save_name), "%s%s", new_file, launch_ext);
+		snprintf(new_rel, sizeof(new_rel), "%s/%s", new_path + strlen(SDCARD_PATH), new_save_name);
+	}
+	else {
+		strcpy(new_save_name, new_file);
+		strcpy(new_rel, new_path + strlen(SDCARD_PATH));
+	}
+
+	// find the saves first, while they still match the old name
+	char names[1][MAX_PATH];
+	strcpy(names[0], old_save_name);
+	char tag[MAX_PATH];
+	getEmuName(entry->path, tag);
+	char save_dir[MAX_PATH];
+	delete_save_count = 0;
+	snprintf(save_dir, sizeof(save_dir), "%s/Saves/%s", SDCARD_PATH, tag);
+	findSaves(save_dir, names, 1, 0);
+	findCoreSaves(SHARED_USERDATA_PATH, tag, names, 1, 0);
+	snprintf(save_dir, sizeof(save_dir), "%s/.minui/%s", SHARED_USERDATA_PATH, tag);
+	findSaves(save_dir, names, 1, 0);
+	findCoreSaves(USERDATA_PATH, tag, names, 1, 1);
+	snprintf(save_dir, sizeof(save_dir), "%s/%s", BORDERS_PATH, tag);
+	findSaves(save_dir, names, 1, 0);
+
+	// the game
+	if (is_dir && !exactMatch(old_save_name, new_save_name)) {
+		char from[MAX_PATH], to[MAX_PATH];
+		snprintf(from, sizeof(from), "%s/%s", entry->path, old_save_name);
+		snprintf(to, sizeof(to), "%s/%s", entry->path, new_save_name);
+		rename(from, to);
+	}
+	if (rename(entry->path, new_path)) {
+		LOG_info("rename %s failed: %s\n", entry->path, strerror(errno));
+		if (is_dir && !exactMatch(old_save_name, new_save_name)) { // put the m3u back
+			char from[MAX_PATH], to[MAX_PATH];
+			snprintf(from, sizeof(from), "%s/%s", entry->path, new_save_name);
+			snprintf(to, sizeof(to), "%s/%s", entry->path, old_save_name);
+			rename(from, to);
+		}
+		showFlash("Couldn't rename it", 0);
+		return;
+	}
+
+	// its box art (replacing any art already there under the new name), saves and the rest
+	char old_art[MAX_PATH], new_art[MAX_PATH];
+	getResPath(entry, old_art);
+	snprintf(new_art, sizeof(new_art), "%s/.res/%s.png", dir, new_file);
+	if (exists(old_art)) rename(old_art, new_art);
+	int kept = 0;
+	for (int i=0; i<delete_save_count; i++) {
+		char* file = strrchr(delete_saves[i], '/') + 1;
+		char to[MAX_PATH];
+		snprintf(to, sizeof(to), "%.*s%s%s", (int)(file - delete_saves[i]), delete_saves[i], new_save_name, file + strlen(old_save_name));
+		if (exists(to) && strcasecmp(to, delete_saves[i])) kept += 1; // never over another game's save
+		else rename(delete_saves[i], to);
+	}
+	dropMapAlias(dir, old_file);
+
+	// and every list that points at it
+	char old_dir_rel[MAX_PATH], new_dir_rel[MAX_PATH];
+	strcpy(old_dir_rel, entry->path + strlen(SDCARD_PATH));
+	strcpy(new_dir_rel, new_path + strlen(SDCARD_PATH));
+	char* from_dir = is_dir ? old_dir_rel : NULL;
+	char* to_dir = is_dir ? new_dir_rel : NULL;
+	char display_name[256];
+	getDisplayName(new_path, display_name);
+	renameInRecents(recents, old_rel, new_rel, from_dir, to_dir, display_name);
+	saveRecents();
+	renameInRecents(favorites, old_rel, new_rel, from_dir, to_dir, display_name);
+	saveFavorites();
+	renameInList(PLAYTIME_PATH, old_rel, new_rel, from_dir, to_dir);
+	renameInList(SWITCHER_PATH, old_rel, new_rel, from_dir, to_dir);
+	renameInList(GAME_CORES_PATH, old_rel, new_rel, from_dir, to_dir);
+	DIR* collections = opendir(COLLECTIONS_PATH);
+	if (collections) {
+		struct dirent* e;
+		while ((e = readdir(collections))) {
+			if (e->d_name[0]=='.' || !suffixMatch(".txt", e->d_name) || exactMatch(e->d_name, "map.txt")) continue;
+			char list_path[MAX_PATH];
+			snprintf(list_path, sizeof(list_path), "%s/%s", COLLECTIONS_PATH, e->d_name);
+			renameInList(list_path, old_rel, new_rel, from_dir, to_dir);
+		}
+		closedir(collections);
+	}
+	forgetSwitcherSaves();
+	sync();
+
+	// the list, re-sorted, still on the game
+	int type = entry->type;
+	Entry_free(top->entries->items[top->selected]);
+	top->entries->items[top->selected] = Entry_new(new_path, type);
+	Directory_markFavorites(top);
+	Directory_sort(top);
+	int i = EntryArray_indexOf(top->entries, new_path);
+	if (i>=0) top->selected = i;
+	Directory_reindex(top);
+	centerRows(top, top->selected);
+	showFlash(kept ? "Renamed (some old saves were in the way)" : "Renamed", 0);
+}
+
 // choosing a game's core (MENU + Y): a list of every core that can run it
 static void pickCore(SDL_Surface* screen) {
 	Entry* entry = top->entries->items[top->selected];
@@ -3786,7 +4022,7 @@ static void pickCore(SDL_Surface* screen) {
 	showFlash(cores[selected].name, 0);
 }
 
-// the game menu (MENU + Y): change its core, get its box art, delete it
+// the game menu (MENU + Y): change its core, get its box art, rename or delete it
 #define BOX_ART_PAK SDCARD_PATH "/Tools/" PLATFORM "/Box Art.pak/launch.sh"
 static void gameMenu(SDL_Surface* screen) {
 	Entry* entry = top->entries->items[top->selected];
@@ -3800,8 +4036,8 @@ static void gameMenu(SDL_Surface* screen) {
 	char system_tag[MAX_PATH];
 	getEmuName(sd_path, system_tag);
 
-	enum { ROW_CORE, ROW_ART, ROW_DELETE };
-	int rows[3];
+	enum { ROW_CORE, ROW_ART, ROW_RENAME, ROW_DELETE };
+	int rows[4];
 	int count = 0;
 	Core cores[CORE_MAX];
 	char core_name[64] = "";
@@ -3815,7 +4051,10 @@ static void gameMenu(SDL_Surface* screen) {
 	getResPath(entry, art_path);
 	int has_art = exists(art_path);
 	if (exists(BOX_ART_PAK)) rows[count++] = ROW_ART;
-	if (isSortableFolder(top->path)) rows[count++] = ROW_DELETE;
+	if (isSortableFolder(top->path)) {
+		rows[count++] = ROW_RENAME;
+		rows[count++] = ROW_DELETE;
+	}
 	if (!count) {
 		showFlash("No options for this game", 0);
 		return;
@@ -3851,6 +4090,7 @@ static void gameMenu(SDL_Surface* screen) {
 				char* value = "";
 				if (rows[i]==ROW_CORE) { name = "Change core"; value = core_name; if (is_selected) hint = "Pick which emulator runs this game"; }
 				else if (rows[i]==ROW_ART) { name = has_art ? "Replace box art" : "Get box art"; if (is_selected) hint = "Downloads it from the libretro library (needs Wi-Fi)"; }
+				else if (rows[i]==ROW_RENAME) { name = "Rename"; if (is_selected) hint = "Its box art and saves keep up with the new name"; }
 				else if (rows[i]==ROW_DELETE) { name = "Delete game"; if (is_selected) hint = "Asks first, then about its saves and box art"; }
 				if (is_selected) GFX_blitPill(ASSET_WHITE_PILL, screen, &(SDL_Rect){ x - SCALE1(BUTTON_PADDING), y, rows_w + SCALE1(BUTTON_PADDING*2), SCALE1(PILL_SIZE) });
 				SDL_Surface* name_txt = TTF_RenderUTF8_Blended(font.large, name, is_selected ? COLOR_BLACK : COLOR_WHITE);
@@ -3881,6 +4121,7 @@ static void gameMenu(SDL_Surface* screen) {
 	SFX_play(SFX_CONFIRM);
 	int row = rows[selected];
 	if (row==ROW_CORE) pickCore(screen);
+	else if (row==ROW_RENAME) renameSelected(screen);
 	else if (row==ROW_DELETE) deleteSelected(screen);
 	else if (row==ROW_ART) {
 		// off to the Box Art tool for this one game, then back to this same spot in the list
@@ -3994,6 +4235,7 @@ int main (int argc, char *argv[]) {
 	uint32_t last_input_at = 0;
 	GFX_setVsync(VSYNC_STRICT);
 	SFX_warmUp(); // the first tick shouldn't have to wait for the audio device
+	BGM_start(); // decodes on its own low priority thread, fading in
 
 	PAD_reset();
 	int dirty = 1;
@@ -4002,8 +4244,11 @@ int main (int argc, char *argv[]) {
 	#define INFO_ROW_MOST_PLAYED 0 // then one row per power timer
 	#define INFO_ROW_THEME (1 + PWR_TIMER_COUNT)
 	#define INFO_ROW_SOUNDS (2 + PWR_TIMER_COUNT)
-	#define INFO_ROW_COUNT (3 + PWR_TIMER_COUNT)
+	#define INFO_ROW_MUSIC (3 + PWR_TIMER_COUNT)
+	#define INFO_ROW_COUNT (4 + PWR_TIMER_COUNT)
+	#define INFO_ROWS_SHOWN 5 // the rest scroll into view
 	int info_row = 0; // selected row on the version screen
+	int info_start = 0; // first row shown
 	uint32_t clear_armed_at = 0; // first X press on Most played, a second one within CLEAR_CONFIRM_MS clears
 	#define CLEAR_CONFIRM_MS 3000
 	int show_setting = 0; // 1=brightness,2=volume
@@ -4100,6 +4345,18 @@ int main (int argc, char *argv[]) {
 			else if (info_row==INFO_ROW_SOUNDS && (PAD_justPressed(BTN_A) || PAD_justPressed(BTN_LEFT) || PAD_justPressed(BTN_RIGHT))) {
 				SFX_setMenuSounds(!SFX_menuSoundsEnabled());
 				SFX_play(SFX_CONFIRM); // heard when turning them on
+				dirty = 1;
+			}
+			else if (info_row==INFO_ROW_MUSIC && PAD_justPressed(BTN_A)) {
+				BGM_setEnabled(!BGM_isEnabled());
+				SFX_play(SFX_CONFIRM);
+				dirty = 1;
+			}
+			else if (info_row==INFO_ROW_MUSIC && (PAD_justRepeated(BTN_LEFT) || PAD_justRepeated(BTN_RIGHT))) {
+				// the volume, and turning it on if it's off
+				if (BGM_isEnabled()) BGM_setVolume(BGM_getVolume() + (PAD_justRepeated(BTN_RIGHT) ? 1 : -1));
+				else BGM_setEnabled(1);
+				SFX_play(SFX_TICK);
 				dirty = 1;
 			}
 			else if (info_row==INFO_ROW_MOST_PLAYED && PAD_justPressed(BTN_X) && info_top_name[0]) {
@@ -4553,15 +4810,18 @@ int main (int argc, char *argv[]) {
 				// most played and the power timers sit under the version info, the whole block centered
 				int rows_w = MAX(version->w, SCALE1(260));
 				int rows_gap = SCALE1(4);
-				int rows_h = rows_gap + SCALE1(PILL_SIZE) * INFO_ROW_COUNT;
+				if (info_row<info_start) info_start = info_row;
+				if (info_row>=info_start+INFO_ROWS_SHOWN) info_start = info_row - INFO_ROWS_SHOWN + 1;
+				int head_h = version->h;
+				int rows_h = rows_gap + SCALE1(PILL_SIZE) * INFO_ROWS_SHOWN;
 				int top = SCALE1(PADDING); // the hardware group is on the right, the text starts left of it
 				int bottom = screen->h - SCALE1(PADDING + PILL_SIZE + 6); // clear of the button hints
-				int block_y = top + (bottom - top - version->h - rows_h) / 2;
+				int block_y = top + (bottom - top - head_h - rows_h) / 2;
 				int block_x = (screen->w - rows_w) / 2;
 				SDL_BlitSurface(version, NULL, screen, &(SDL_Rect){block_x, block_y});
 
-				for (int i=0; i<INFO_ROW_COUNT; i++) {
-					int y = block_y + version->h + rows_gap + SCALE1(PILL_SIZE) * i;
+				for (int i=info_start; i<INFO_ROW_COUNT && i<info_start+INFO_ROWS_SHOWN; i++) {
+					int y = block_y + head_h + rows_gap + SCALE1(PILL_SIZE) * (i - info_start);
 					int selected = i==info_row;
 					if (selected) {
 						GFX_blitPill(ASSET_WHITE_PILL, screen, &(SDL_Rect){
@@ -4586,6 +4846,11 @@ int main (int argc, char *argv[]) {
 						name = "Menu sounds";
 						strcpy(value, SFX_menuSoundsEnabled() ? "On" : "Off");
 					}
+					else if (i==INFO_ROW_MUSIC) {
+						name = "Music";
+						if (BGM_isEnabled()) sprintf(value, "%i%%", BGM_getVolume() * 100 / BGM_VOLUME_MAX);
+						else strcpy(value, "Off");
+					}
 					else {
 						char* timer_names[PWR_TIMER_COUNT] = { "Sleep after", "Power off after" };
 						name = timer_names[i-1];
@@ -4600,13 +4865,33 @@ int main (int argc, char *argv[]) {
 					SDL_FreeSurface(value_txt);
 				}
 
+				// more rows below (no room for a mark above, under the play time)
+				int rows_top = block_y + head_h + rows_gap;
+				if (info_start+INFO_ROWS_SHOWN<INFO_ROW_COUNT) SDL_FillRect(screen, &(SDL_Rect){ screen->w/2 - SCALE1(8), rows_top + SCALE1(PILL_SIZE) * INFO_ROWS_SHOWN + SCALE1(1), SCALE1(16), SCALE1(2) }, RGB_GRAY);
+
 				// buttons (duped and trimmed from below)
+				int right_w = 0;
+				if (info_row==INFO_ROW_MOST_PLAYED && info_top_name[0]) right_w = GFX_blitButtonGroup((char*[]){ "B","BACK", "A","VIEW", NULL }, 1, screen, 1);
+				else if (info_row==INFO_ROW_MUSIC) right_w = GFX_blitButtonGroup((char*[]){ "B","BACK", "A",BGM_isEnabled() ? "OFF" : "ON", NULL }, 1, screen, 1);
+				else right_w = GFX_blitButtonGroup((char*[]){ "B","BACK",  NULL }, 0, screen, 1);
+
 				if (show_setting && !GetHDMI()) GFX_blitHardwareHints(screen, show_setting);
+				else if (info_row==INFO_ROW_MUSIC) { // where the songs go, in place of the left hints
+					int songs = BGM_countSongs();
+					char hint[64], shown[64];
+					if (songs) snprintf(hint, sizeof(hint), "%i song%s in /BGM", songs, songs==1 ? "" : "s");
+					else strcpy(hint, "Put songs in /BGM");
+					int pill_w = screen->w - SCALE1(PADDING*3) - right_w;
+					GFX_truncateText(font.small, hint, shown, pill_w - SCALE1(BUTTON_PADDING*2), 0);
+					SDL_Surface* text = TTF_RenderUTF8_Blended(font.small, shown, COLOR_WHITE);
+					int pill_y = screen->h - SCALE1(PADDING + PILL_SIZE);
+					GFX_blitPill(ASSET_DARK_GRAY_PILL, screen, &(SDL_Rect){ SCALE1(PADDING), pill_y, text->w + SCALE1(BUTTON_PADDING*2), SCALE1(PILL_SIZE) });
+					SDL_BlitSurface(text, NULL, screen, &(SDL_Rect){ SCALE1(PADDING + BUTTON_PADDING), pill_y + (SCALE1(PILL_SIZE) - text->h) / 2 });
+					SDL_FreeSurface(text);
+				}
 				else if (info_row==INFO_ROW_MOST_PLAYED && info_top_name[0]) GFX_blitButtonGroup((char*[]){ "X","CLEAR", NULL }, 0, screen, 0);
 				else GFX_blitButtonGroup((char*[]){ BTN_SLEEP==BTN_POWER?"POWER":"MENU","SLEEP",  NULL }, 0, screen, 0);
-				
-				if (info_row==INFO_ROW_MOST_PLAYED && info_top_name[0]) GFX_blitButtonGroup((char*[]){ "B","BACK", "A","VIEW", NULL }, 1, screen, 1);
-				else GFX_blitButtonGroup((char*[]){ "B","BACK",  NULL }, 0, screen, 1);
+
 			}
 			else {
 				// list
@@ -4810,6 +5095,7 @@ int main (int argc, char *argv[]) {
 	PLAT_destroyTexture(flash_texture);
 	if (flash_font) TTF_CloseFont(flash_font);
 
+	BGM_quit(); // a quick fade, before the device closes
 	SFX_quit(); // lets the confirm sound for a launched game finish
 	Menu_quit();
 	PWR_quit();

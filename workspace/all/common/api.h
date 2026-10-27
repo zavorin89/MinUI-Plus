@@ -240,6 +240,9 @@ void SFX_warmUp(void); // opens the device and makes the menu sounds on a thread
 int SFX_menuSoundsEnabled(void);
 void SFX_setMenuSounds(int enabled); // also saves the choice
 void SFX_quit(void); // lets a sound that's playing finish (briefly), then closes its device
+typedef void (*SFX_Music)(int16_t* stream, int frames); // adds stereo frames into stream, on the audio thread
+int SFX_open(void); // opens the menu sounds' device (or uses a game's), returns its sample rate or 0
+void SFX_setMusic(SFX_Music music); // NULL stops calling it
 
 ///////////////////////////////
 
