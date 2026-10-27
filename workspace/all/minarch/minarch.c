@@ -1059,6 +1059,24 @@ static void Auto_set(int level, char* why) {
 	PWR_setCPUFreq(auto_mhz[level]);
 	LOG_info("cpu: %iMHz (%s)\n", auto_mhz[level], why);
 }
+// a game's floor is kept beside its settings, so next time it starts there instead of finding it with a stutter
+static void Auto_floorPath(char* path) {
+	snprintf(path, MAX_PATH, "%s/%s.cpu", core.config_dir, game.name);
+}
+static void Auto_load(void) {
+	char path[MAX_PATH];
+	Auto_floorPath(path);
+	if (!exists(path)) return;
+	int mhz = getInt(path);
+	for (int i=0; i<AUTO_LEVELS; i++) if (auto_mhz[i]==mhz) auto_floor = i;
+	if (auto_floor>auto_level) auto_level = auto_floor;
+	LOG_info("cpu: this game needed %iMHz before, starting at %iMHz\n", mhz, auto_mhz[auto_level]);
+}
+static void Auto_remember(void) {
+	char path[MAX_PATH];
+	Auto_floorPath(path);
+	putInt(path, auto_mhz[auto_floor]);
+}
 static void Auto_reset(void) { // a frame or two after a menu or a load runs long and means nothing
 	auto_settle = MAX(auto_settle, AUTO_SETTLE); // (keeps a game's first two seconds)
 	auto_frames = auto_calm = 0;
@@ -1088,7 +1106,10 @@ static void Auto_frame(uint64_t frame_us) {
 	// up now when a frame ran late, or two in a row came close (one alone is often a load or a blip)
 	auto_close = work>budget*85/100 ? auto_close + 1 : 0;
 	if ((work>budget || auto_close>=2) && auto_level<AUTO_LEVELS-1) {
-		if (work>budget && auto_floor<auto_level+1) auto_floor = auto_level + 1; // it stuttered there: not again
+		if (work>budget && auto_floor<auto_level+1) { // it stuttered there: not again, this time or next
+			auto_floor = auto_level + 1;
+			Auto_remember();
+		}
 		Auto_set(auto_level+1, work>budget ? "late frame" : "busy frames");
 		return;
 	}
@@ -5415,6 +5436,7 @@ int main(int argc , char* argv[]) {
 	Config_load(); // before init?
 	Config_init();
 	Config_readOptions(); // cores with boot logo option (eg. gb) need to load options early
+	Auto_load(); // where this game settled last time, when it learned it needs more
 	setOverclock(overclock);
 	GFX_setVsync(prevent_tearing);
 	
