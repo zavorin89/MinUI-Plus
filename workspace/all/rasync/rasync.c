@@ -231,7 +231,7 @@ static void logPower(void) {
 	for (int i=0; cpufreq[i]; i++) {
 		char path[128];
 		snprintf(path, sizeof(path), "/sys/devices/system/cpu/cpu0/cpufreq/%s", cpufreq[i]);
-		value[0] = '\0';
+		memset(value, 0, sizeof(value)); // sysfs files say they're 4096 bytes, so getFile keeps whatever was here before
 		getFile(path, value, sizeof(value));
 		trimTrailingNewlines(value);
 		if (value[0]) SYNC_LOG("cpu0 %s: %s\n", cpufreq[i], value);
