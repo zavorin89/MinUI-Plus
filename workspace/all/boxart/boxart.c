@@ -629,7 +629,7 @@ static void drawPicker(Game* game, SDL_Surface* current, SDL_Surface** loaded, i
 
 	if (show_setting && !GetHDMI()) GFX_blitHardwareHints(screen, show_setting);
 	else if (count>1) GFX_blitButtonGroup((char*[]){ "LEFT/RIGHT","MORE", NULL }, 0, screen, 0);
-	GFX_blitButtonGroup((char*[]){ "B",current ? "KEEP MINE" : "CANCEL", "A","USE THIS", NULL }, 1, screen, 1);
+	GFX_blitButtonGroup((char*[]){ "B","CANCEL", "A","REPLACE", NULL }, 1, screen, 1);
 }
 // a popup in the middle of the screen, over what's there, alpha 0-255
 static void blitPopup(char* message, int alpha) {
