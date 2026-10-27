@@ -60,6 +60,10 @@ static int notify_showing = 0; // one is on screen
 static uint32_t notify_shown_at = 0;
 static int notify_ms = 0;
 static int notify_alpha = -1;
+static volatile int dismiss_requested = 0; // MENU pressed over a popup (asked from the core's thread too)
+static uint32_t dismissed_at = 0; // fading out early, from dismissed_alpha
+static int dismissed_alpha = 0;
+#define DISMISS_FADE_MS 150
 
 static pthread_mutex_t jobs_mx = PTHREAD_MUTEX_INITIALIZER;
 static int jobs_running = 0;
@@ -453,6 +457,30 @@ void RA_update(void) {
 		notify_showing = 1;
 		notify_shown_at = now;
 		notify_ms = n.ms;
+		dismiss_requested = 0;
+		dismissed_at = 0;
+	}
+
+	// dismissed: a quick fade from wherever it is
+	if (dismiss_requested && !dismissed_at) {
+		dismissed_at = now;
+		dismissed_alpha = notify_alpha<0 ? 255 : notify_alpha;
+	}
+	if (dismissed_at) {
+		int t = now - dismissed_at;
+		if (t>=DISMISS_FADE_MS) {
+			GFX_setNotification(NULL);
+			notify_showing = 0;
+			dismiss_requested = 0;
+			dismissed_at = 0;
+			return;
+		}
+		int alpha = dismissed_alpha * (DISMISS_FADE_MS - t) / DISMISS_FADE_MS;
+		if (alpha!=notify_alpha) {
+			GFX_setNotificationAlpha(alpha);
+			notify_alpha = alpha;
+		}
+		return;
 	}
 
 	// fade in, hold, fade out, then make way for the next one
@@ -469,6 +497,15 @@ void RA_update(void) {
 		GFX_setNotificationAlpha(alpha);
 		notify_alpha = alpha;
 	}
+}
+
+int RA_dismissNotification(void) {
+	if (!notify_showing || dismiss_requested) return 0;
+	pthread_mutex_lock(&notify_mx);
+	notify_count = 0; // the ones waiting go too, the list has them all
+	pthread_mutex_unlock(&notify_mx);
+	dismiss_requested = 1;
+	return 1;
 }
 
 void RA_quit(void) {

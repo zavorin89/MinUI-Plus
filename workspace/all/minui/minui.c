@@ -3426,6 +3426,7 @@ static int marqueeOffset(char* key, int overflow, uint32_t now) {
 #define FLASH_LETTER_MS 900
 #define FLASH_TEXT_MS 1000
 #define FLASH_WAITING UINT32_MAX // shown, but not drawn yet
+#define FLASH_FADE_MS 150 // its last moments, fading out
 static char flash_text[64];
 static int flash_big = 0;
 static uint32_t flash_until = 0;
@@ -3442,6 +3443,8 @@ static void showFlash(char* text, int big) {
 static void blitFlash(SDL_Surface* screen) {
 	if (!flash_until) return;
 	if (flash_until==FLASH_WAITING) flash_until = SDL_GetTicks() + (flash_big ? FLASH_LETTER_MS : FLASH_TEXT_MS);
+	int left = (int32_t)(flash_until - SDL_GetTicks());
+	int alpha = left>=FLASH_FADE_MS ? 255 : (left>0 ? 255 * left / FLASH_FADE_MS : 0);
 	if (flash_big && !flash_font) flash_font = TTF_OpenFont(FONT_PATH, SCALE1(FONT_LARGE*3));
 	TTF_Font* f = flash_big && flash_font ? flash_font : font.large;
 	
@@ -3468,13 +3471,22 @@ static void blitFlash(SDL_Surface* screen) {
 			strcpy(flash_texture_text, flash_text);
 			flash_texture_theme = GFX_getTheme();
 		}
-		PLAT_queueTexture(flash_texture, &rect, 255, 255);
+		PLAT_queueTexture(flash_texture, &rect, alpha, 255);
 		SDL_FreeSurface(text);
 		return;
 	}
+	// fading: what was under it goes back over it, more each frame
+	SDL_Surface* under = alpha<255 ? SDL_CreateRGBSurfaceWithFormat(0, rect.w, rect.h, screen->format->BitsPerPixel, screen->format->format) : NULL;
+	if (under) SDL_BlitSurface(screen, &rect, under, NULL);
 	GFX_blitRect(ASSET_DARK_GRAY_PILL, screen, &rect);
 	SDL_BlitSurface(text, NULL, screen, &(SDL_Rect){ rect.x + (w-text->w)/2, rect.y + (h-text->h)/2 });
 	SDL_FreeSurface(text);
+	if (under) {
+		SDL_SetSurfaceBlendMode(under, SDL_BLENDMODE_BLEND);
+		SDL_SetSurfaceAlphaMod(under, 255 - alpha);
+		SDL_BlitSurface(under, NULL, screen, &(SDL_Rect){ rect.x, rect.y });
+		SDL_FreeSurface(under);
+	}
 }
 static void showLetter(Entry* entry) {
 	int i = getIndexChar(entry->name);
@@ -4696,6 +4708,7 @@ int main (int argc, char *argv[]) {
 			flash_until = 0;
 			dirty = 1;
 		}
+		else if (flash_until && flash_until!=FLASH_WAITING && (int32_t)(flash_until - SDL_GetTicks())<FLASH_FADE_MS) dirty = 1; // fading out
 		if (carousel_slide_from) {
 			if (!Carousel_shift(now)) carousel_slide_from = 0; // one last still frame
 			dirty = 1;
@@ -4995,7 +5008,7 @@ int main (int argc, char *argv[]) {
 			
 				flash_gpu = carousel && Carousel_useGPU(); // over the carousel's art, which the GPU draws after the menu
 				blitFlash(screen);
-				if (flash_gpu && show_setting && !GetHDMI()) queueHardwareGroup(screen, ow); // brightness/volume on top too
+				if (flash_gpu && (show_setting || GFX_settingFading()) && !GetHDMI()) queueHardwareGroup(screen, ow); // brightness/volume on top too
 				
 				// buttons
 				char fav_path[256];

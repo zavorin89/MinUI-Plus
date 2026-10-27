@@ -852,7 +852,38 @@ void GFX_blitMessage(TTF_Font* font, char* msg, SDL_Surface* dst, SDL_Rect* dst_
 	}
 }
 
+// the volume/brightness bar fades out instead of snapping back to the battery
+#define SETTING_FADE_MS 150
+static uint32_t setting_fade_until = 0;
+static SDL_Surface* setting_shot = NULL; // the bar as last drawn, faded over the battery
+static SDL_Rect setting_shot_rect;
+int GFX_settingFading(void) {
+	return setting_shot && setting_fade_until && (int32_t)(setting_fade_until - SDL_GetTicks())>0;
+}
+static void GFX_keepSetting(SDL_Surface* dst, SDL_Rect* rect) {
+	if (!setting_shot || setting_shot->w!=rect->w || setting_shot->h!=rect->h || setting_shot->format->format!=dst->format->format) {
+		if (setting_shot) SDL_FreeSurface(setting_shot);
+		setting_shot = SDL_CreateRGBSurfaceWithFormat(0, rect->w, rect->h, dst->format->BitsPerPixel, dst->format->format);
+		if (!setting_shot) return;
+		SDL_SetSurfaceBlendMode(setting_shot, SDL_BLENDMODE_BLEND);
+	}
+	SDL_BlitSurface(dst, rect, setting_shot, NULL);
+	setting_shot_rect = *rect;
+}
+static int GFX_blitHardwareGroupNow(SDL_Surface* dst, int show_setting);
 int GFX_blitHardwareGroup(SDL_Surface* dst, int show_setting) {
+	if (show_setting) setting_fade_until = 0;
+	int ow = GFX_blitHardwareGroupNow(dst, show_setting);
+	if (show_setting && !GetHDMI()) GFX_keepSetting(dst, &(SDL_Rect){ dst->w - SCALE1(PADDING) - ow, SCALE1(PADDING), ow, SCALE1(PILL_SIZE) });
+	else if (GFX_settingFading()) {
+		int left = setting_fade_until - SDL_GetTicks();
+		SDL_SetSurfaceAlphaMod(setting_shot, 255 * left / SETTING_FADE_MS);
+		SDL_BlitSurface(setting_shot, NULL, dst, &(SDL_Rect){ setting_shot_rect.x, setting_shot_rect.y });
+		ow = MAX(ow, setting_shot_rect.w);
+	}
+	return ow;
+}
+static int GFX_blitHardwareGroupNow(SDL_Surface* dst, int show_setting) {
 	int ox;
 	int oy;
 	int ow = 0;
@@ -2086,6 +2117,12 @@ void PWR_update(int* _dirty, int* _show_setting, PWR_callback_t before_sleep, PW
 	}
 	
 	if (show_setting) dirty = 1; // shm is slow or keymon is catching input on the next frame
+	int was_showing = _show_setting ? *_show_setting : 0;
+	if (was_showing && !show_setting) setting_fade_until = now + SETTING_FADE_MS; // GFX_blitHardwareGroup fades it out
+	if (setting_fade_until) { // frames while it fades, and one more once it's gone so none of it is left on screen
+		dirty = 1;
+		if ((int32_t)(setting_fade_until - now)<=0) setting_fade_until = 0;
+	}
 	if (_dirty) *_dirty = dirty;
 	if (_show_setting) *_show_setting = show_setting;
 }

@@ -30,7 +30,8 @@ static Section sections[] = {
 		{ "MENU + X",		"Delete the game" },
 	}},
 	{ "Everywhere", "Menus and games", {
-		{ "MENU",			"Settings and play time" },
+		{ "MENU",			"Settings, or pause a game" },
+		{ "MENU",			"Hide an achievement popup" },
 		{ "hold MENU",		"Game switcher" },
 		{ "MENU + VOL",		"Brightness" },
 		{ "hold POWER",		"Power off" },

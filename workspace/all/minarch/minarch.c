@@ -1733,6 +1733,7 @@ static void input_poll_callback(void) {
 	if (PAD_justPressed(BTN_MENU)) {
 		ignore_menu = 0;
 		menu_down_at = SDL_GetTicks();
+		if (RA_dismissNotification()) ignore_menu = 1; // a popup's up: MENU clears it instead of opening the menu
 	}
 	if (PAD_isPressed(BTN_MENU) && (PAD_isPressed(BTN_PLUS) || PAD_isPressed(BTN_MINUS))) {
 		ignore_menu = 1;
@@ -4525,6 +4526,7 @@ static void Menu_blitPill(uint32_t color, SDL_Surface* dst, SDL_Rect* rect) {
 	SDL_FreeSurface(ends);
 }
 
+#define MENU_MESSAGE_FADE_MS 150
 static void Menu_loop(void) {
 	char* menu_message = NULL; // a short confirmation over the menu, eg. after pinning to the game switcher
 	uint32_t menu_message_until = 0;
@@ -4598,6 +4600,7 @@ static void Menu_loop(void) {
 			menu_message_until = 0;
 			dirty = 1;
 		}
+		else if (menu_message_until && menu_message_until-now<MENU_MESSAGE_FADE_MS) dirty = 1; // fading out
 		
 		if (PAD_justPressed(BTN_UP)) {
 			selected -= 1;
@@ -4929,9 +4932,19 @@ static void Menu_loop(void) {
 				int pw = text->w + SCALE1(BUTTON_PADDING*4);
 				int ph = text->h + SCALE1(BUTTON_PADDING*2);
 				SDL_Rect box = { (screen->w-pw)/2, (screen->h-ph)/2, pw, ph };
+				// its last moments fade: what was under it goes back over it, more each frame
+				int left = (int32_t)(menu_message_until - SDL_GetTicks());
+				SDL_Surface* under = left<MENU_MESSAGE_FADE_MS ? SDL_CreateRGBSurfaceWithFormat(0, pw, ph, screen->format->BitsPerPixel, screen->format->format) : NULL;
+				if (under) SDL_BlitSurface(screen, &box, under, NULL);
 				GFX_blitRect(ASSET_DARK_GRAY_PILL, screen, &box);
 				SDL_BlitSurface(text, NULL, screen, &(SDL_Rect){ box.x + (pw-text->w)/2, box.y + (ph-text->h)/2 });
 				SDL_FreeSurface(text);
+				if (under) {
+					SDL_SetSurfaceBlendMode(under, SDL_BLENDMODE_BLEND);
+					SDL_SetSurfaceAlphaMod(under, 255 - 255 * MAX(left, 0) / MENU_MESSAGE_FADE_MS);
+					SDL_BlitSurface(under, NULL, screen, &(SDL_Rect){ box.x, box.y });
+					SDL_FreeSurface(under);
+				}
 			}
 	
 			GFX_flip(screen);

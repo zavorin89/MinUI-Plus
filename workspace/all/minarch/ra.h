@@ -13,6 +13,7 @@ typedef void (*RA_GetMemory)(unsigned id, uint8_t** data, size_t* size); // wrap
 void RA_init(const char* core_tag, const char* rom_path, const void* rom_data, size_t rom_size, const struct retro_memory_map* mmap, RA_GetMemory get_memory);
 void RA_doFrame(void); // once per emulated frame
 void RA_update(void); // once per main loop iteration, shows and hides notifications
+int RA_dismissNotification(void); // fades out the popup on screen (and drops any waiting), 1 if there was one
 void RA_quit(void); // waits briefly for pending unlocks to be sent
 
 int RA_hasAchievements(void); // signed in and the game has a set
