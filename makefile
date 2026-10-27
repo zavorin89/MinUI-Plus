@@ -11,7 +11,9 @@ endif
 endif
 
 ifeq (,$(PLATFORMS))
-PLATFORMS = miyoomini trimuismart rg35xx rg35xxplus my355 tg5040 zero28 rgb30 m17 gkdpixel my282 magicmini
+# MinUI+ is made for the Miyoo A30 (my282). The other platforms still build from here (make PLATFORMS="..."),
+# but MinUI+'s additions were only made and tested on the A30
+PLATFORMS = my282
 endif
 
 ###########################################################
@@ -19,7 +21,7 @@ endif
 BUILD_HASH:=$(shell git rev-parse --short HEAD)
 RELEASE_TIME:=$(shell TZ=GMT date +%Y%m%d)
 RELEASE_BETA=
-RELEASE_BASE=MinUI-$(RELEASE_TIME)$(RELEASE_BETA)
+RELEASE_BASE=MinUIPlus-$(RELEASE_TIME)$(RELEASE_BETA)
 RELEASE_DOT:=$(shell find -E ./releases/. -regex ".*/${RELEASE_BASE}-[0-9]+-base\.zip" | wc -l | sed 's/ //g')
 RELEASE_NAME=$(RELEASE_BASE)-$(RELEASE_DOT)
 
@@ -69,6 +71,11 @@ cores: # TODO: can't assume every platform will have the same stock cores (platf
 	cp ./workspace/$(PLATFORM)/cores/output/picodrive_libretro.so ./build/SYSTEM/$(PLATFORM)/cores
 	cp ./workspace/$(PLATFORM)/cores/output/snes9x2005_plus_libretro.so ./build/SYSTEM/$(PLATFORM)/cores
 	cp ./workspace/$(PLATFORM)/cores/output/pcsx_rearmed_libretro.so ./build/SYSTEM/$(PLATFORM)/cores
+ifeq ($(PLATFORM),my282)
+	# MinUI+'s other SNES cores, picked a game at a time (built in workspace/my282/cores)
+	cp ./workspace/$(PLATFORM)/cores/output/snes9x2010_libretro.so ./build/SYSTEM/$(PLATFORM)/paks/Emus/SFC10.pak/
+	cp ./workspace/$(PLATFORM)/cores/output/snes9x_libretro.so ./build/SYSTEM/$(PLATFORM)/paks/Emus/SNESX.pak/
+endif
 	
 	# extras
 ifeq ($(PLATFORM), trimuismart)
@@ -166,8 +173,8 @@ package: tidy
 	mv ./build/PAYLOAD/MinUI.zip ./build/BASE
 	
 	# TODO: can I just add everything in BASE to zip?
-	cd ./build/BASE && zip -r ../../releases/$(RELEASE_NAME)-base.zip Bios Roms Saves miyoo miyoo354 trimui rg35xx rg35xxplus gkdpixel miyoo355 magicx miyoo285 em_ui.sh MinUI.zip README.txt
-	cd ./build/EXTRAS && zip -r ../../releases/$(RELEASE_NAME)-extras.zip Bios Emus Roms Saves Tools README.txt
+	cd ./build/BASE && zip -r ../../releases/$(RELEASE_NAME)-base.zip Bios Roms Saves BGM miyoo miyoo354 trimui rg35xx rg35xxplus gkdpixel miyoo355 magicx miyoo285 em_ui.sh MinUI.zip README.txt
+	cd ./build/EXTRAS && zip -r ../../releases/$(RELEASE_NAME)-extras.zip Bios Emus Roms Saves Tools Borders README.txt
 	echo "$(RELEASE_NAME)" > ./build/latest.txt
 	
 ###########################################################
