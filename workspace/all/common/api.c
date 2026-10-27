@@ -881,6 +881,10 @@ static int GFX_blitHardwareGroupNow(SDL_Surface* dst, int show_setting);
 // the clock in the hardware group: off, 12 or 24 hour, kept in CLOCK_PATH
 static int clock_mode = -1;
 static time_t clock_drawn_minute = 0; // PWR_update redraws when the minute changes
+static int clock_left = 0; // in a pill of its own at the top left (the carousel: its art covers the top right)
+void GFX_setClockLeft(int left) {
+	clock_left = left;
+}
 int GFX_getClockMode(void) {
 	if (clock_mode<0) clock_mode = exists(CLOCK_PATH) ? getInt(CLOCK_PATH) : CLOCK_12H;
 	if (clock_mode<CLOCK_OFF || clock_mode>CLOCK_24H) clock_mode = CLOCK_12H;
@@ -979,6 +983,13 @@ static int GFX_blitHardwareGroupNow(SDL_Surface* dst, int show_setting) {
 			clock_drawn_minute = now / 60;
 		}
 		SDL_Surface* clock_text = clock[0] ? TTF_RenderUTF8_Blended(font.small, clock, COLOR_WHITE) : NULL;
+		if (clock_text && clock_left) {
+			int pill_w = clock_text->w + SCALE1(BUTTON_PADDING*2);
+			GFX_blitPill(gfx.mode==MODE_MAIN ? ASSET_DARK_GRAY_PILL : ASSET_BLACK_PILL, dst, &(SDL_Rect){ SCALE1(PADDING), SCALE1(PADDING), pill_w, SCALE1(PILL_SIZE) });
+			SDL_BlitSurface(clock_text, NULL, dst, &(SDL_Rect){ SCALE1(PADDING + BUTTON_PADDING), SCALE1(PADDING) + (SCALE1(PILL_SIZE) - clock_text->h) / 2 });
+			SDL_FreeSurface(clock_text);
+			clock_text = NULL;
+		}
 		int cw = clock_text ? clock_text->w + SCALE1(BUTTON_PADDING) : 0;
 		ow += cw;
 

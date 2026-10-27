@@ -216,6 +216,7 @@ int GFX_settingFading(void); // the volume/brightness bar is still fading out (G
 enum { CLOCK_OFF, CLOCK_12H, CLOCK_24H };
 int GFX_getClockMode(void); // the clock in the hardware group (CLOCK_12H unless changed)
 void GFX_setClockMode(int mode); // also saves it
+void GFX_setClockLeft(int left); // the clock in its own pill at the top left instead (eg. the carousel)
 void GFX_blitHardwareHints(SDL_Surface* dst, int show_setting);
 int GFX_blitButtonGroup(char** hints, int primary, SDL_Surface* dst, int align_right);
 

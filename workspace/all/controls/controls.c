@@ -20,16 +20,16 @@ typedef struct Section {
 } Section;
 
 static Section sections[] = {
-	{ "Game lists", "In a system's games", {
+	{ "Game lists", "Your games", {
 		{ "L1 R1",			"Jump by letter" },
 		{ "L2 R2",			"Change the sort order" },
 		{ "SELECT",			"List or carousel view" },
 		{ "hold SELECT",	"Pin to the game switcher" },
-		{ "START",			"Pick a random game" },
+		{ "START",			"Random game, any system" },
 		{ "MENU + Y",		"Game menu: core, art, rename" },
 		{ "MENU + X",		"Delete the game" },
 	}},
-	{ "Everywhere", "Menus and games", {
+	{ "Everywhere", "In games too", {
 		{ "MENU",			"Settings, or pause a game" },
 		{ "MENU",			"Hide an achievement popup" },
 		{ "hold MENU",		"Game switcher" },

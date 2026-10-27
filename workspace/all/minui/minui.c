@@ -4036,6 +4036,7 @@ static void pickCore(SDL_Surface* screen) {
 
 // the game menu (MENU + Y): change its core, get its box art, rename or delete it
 #define BOX_ART_PAK SDCARD_PATH "/Tools/" PLATFORM "/Box Art.pak/launch.sh"
+#define CLOCK_PAK SDCARD_PATH "/Tools/" PLATFORM "/Clock.pak/launch.sh" // setting the time, from the settings' Clock row
 static void gameMenu(SDL_Surface* screen) {
 	Entry* entry = top->entries->items[top->selected];
 	char rel_path[MAX_PATH];
@@ -4149,6 +4150,39 @@ static void gameMenu(SDL_Surface* screen) {
 		snprintf(cmd, sizeof(cmd), "'%s' '%s'", escapeSingleQuotes(pak), escapeSingleQuotes(game));
 		queueNext(cmd);
 	}
+}
+
+// START in the system list: a random system that has games (another one than now, when there's a choice), opened on
+// a random game. The system list stays on it, so B goes back to it
+static int random_everywhere = 0; // START keeps picking from every system
+static int randomAnywhere(void) {
+	while (stack->count>1) closeDirectory();
+	Directory* root = top;
+	int systems[256];
+	int count = 0;
+	for (int i=0; i<root->entries->count && count<256; i++) {
+		Entry* entry = root->entries->items[i];
+		if (prefixMatch(ROMS_PATH "/", entry->path)) systems[count++] = i;
+	}
+	if (!count) return 0;
+	static int last = -1;
+	for (int tries=0; tries<8; tries++) {
+		int pick = systems[rand() % count];
+		if (count>1 && pick==last) continue;
+		last = pick;
+		root->selected = pick;
+		centerRows(root, pick);
+		Entry* system = root->entries->items[pick];
+		openDirectory(system->path, 0);
+		if (top->entries->count>0) {
+			top->selected = rand() % top->entries->count;
+			centerRows(top, top->selected);
+			random_everywhere = 1;
+			return 1;
+		}
+		closeDirectory(); // (nothing in it after all)
+	}
+	return 1;
 }
 
 static void openSwitcher(void) {
@@ -4360,10 +4394,22 @@ int main (int argc, char *argv[]) {
 				SFX_play(SFX_CONFIRM); // heard when turning them on
 				dirty = 1;
 			}
-			else if (info_row==INFO_ROW_CLOCK && (PAD_justRepeated(BTN_LEFT) || PAD_justRepeated(BTN_RIGHT) || PAD_justPressed(BTN_A))) {
+			else if (info_row==INFO_ROW_CLOCK && (PAD_justRepeated(BTN_LEFT) || PAD_justRepeated(BTN_RIGHT))) {
 				int modes = CLOCK_24H + 1; // wraps: 12 hour, 24 hour, off
 				GFX_setClockMode((GFX_getClockMode() + (PAD_justRepeated(BTN_LEFT) ? modes - 1 : 1)) % modes);
 				SFX_play(SFX_TICK);
+				dirty = 1;
+			}
+			else if (info_row==INFO_ROW_CLOCK && PAD_justPressed(BTN_A)) { // setting the time: the Clock tool, then back here
+				if (exists(CLOCK_PAK)) {
+					SFX_play(SFX_CONFIRM);
+					if (top->entries->count>0) saveLast(((Entry*)top->entries->items[top->selected])->path);
+					char pak[MAX_PATH], cmd[MAX_PATH*2];
+					strcpy(pak, CLOCK_PAK);
+					snprintf(cmd, sizeof(cmd), "'%s'", escapeSingleQuotes(pak));
+					queueNext(cmd);
+				}
+				else showFlash("The Clock tool isn't installed", 0);
 				dirty = 1;
 			}
 			else if (info_row==INFO_ROW_MUSIC && PAD_justPressed(BTN_A)) {
@@ -4562,7 +4608,19 @@ int main (int argc, char *argv[]) {
 				dirty = 1;
 			}
 
-			if (CAN_START && PAD_justPressed(BTN_START) && canCarousel() && total>1) { // game lists only
+			if (CAN_START && PAD_justPressed(BTN_START) && !inSwitcher() && (stack->count==1 || (random_everywhere && stack->count==2))) {
+				// from the system list: a random game from a random system, and START again keeps picking from all of them
+				// (until a system is opened by hand: then it's random within that one, like any game list)
+				if (randomAnywhere()) {
+					selected = top->selected;
+					total = top->entries->count;
+					carousel_slide_from = 0;
+					SFX_play(SFX_TICK);
+					dirty = 1;
+					if (total>0) readyResume(top->entries->items[top->selected]);
+				}
+			}
+			else if (CAN_START && PAD_justPressed(BTN_START) && canCarousel() && total>1) { // game lists only
 				int i = rand() % (total-1);
 				selected = i>=selected ? i+1 : i; // never the game you're already on
 				centerRows(top, selected);
@@ -4643,6 +4701,7 @@ int main (int argc, char *argv[]) {
 			}
 			else if (total>0 && PAD_justPressed(BTN_A)) {
 				SFX_play(SFX_CONFIRM);
+				random_everywhere = 0; // opened by hand
 				if (inSwitcher()) { // the switcher picks up from the newer of its quick save and the last manual save
 					char preview[256];
 					int slot;
@@ -4659,6 +4718,7 @@ int main (int argc, char *argv[]) {
 			}
 			else if (PAD_justPressed(BTN_B) && stack->count>1) {
 				SFX_play(SFX_BACK);
+				random_everywhere = 0;
 				int from_most_played = exactMatch(top->path, FAUX_MOSTPLAYED_PATH);
 				closeDirectory();
 				if (from_most_played && most_played_from_info) {
@@ -4766,6 +4826,7 @@ int main (int argc, char *argv[]) {
 				else last_art_x = 0;
 			}
 			
+			GFX_setClockLeft(carousel && !show_version); // the carousel's art covers the top right
 			int ow = GFX_blitHardwareGroup(screen, show_setting);
 			
 			if (show_version) {
@@ -4898,6 +4959,7 @@ int main (int argc, char *argv[]) {
 				int right_w = 0;
 				if (info_row==INFO_ROW_MOST_PLAYED && info_top_name[0]) right_w = GFX_blitButtonGroup((char*[]){ "B","BACK", "A","VIEW", NULL }, 1, screen, 1);
 				else if (info_row==INFO_ROW_MUSIC) right_w = GFX_blitButtonGroup((char*[]){ "B","BACK", "A",BGM_isEnabled() ? "OFF" : "ON", NULL }, 1, screen, 1);
+				else if (info_row==INFO_ROW_CLOCK) right_w = GFX_blitButtonGroup((char*[]){ "B","BACK", "A","SET TIME", NULL }, 1, screen, 1);
 				else right_w = GFX_blitButtonGroup((char*[]){ "B","BACK",  NULL }, 0, screen, 1);
 
 				if (show_setting && !GetHDMI()) GFX_blitHardwareHints(screen, show_setting);

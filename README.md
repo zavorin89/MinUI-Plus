@@ -65,7 +65,8 @@ kept.
 
 - **L1 / R1** jump to the previous or next letter, with a big letter popup showing where you are.
 - **L2 / R2** change the sort order: A to Z, Z to A, recently played, or favorites first.
-- **START** picks a random game.
+- **START** picks a random game. In the system list it picks a random system too, and keeps picking from every
+  system each time you press it, until you open a system yourself.
 - **Favorites** (Y on a game), **Recently Played**, and **Most Played** with play time for each game.
 
 ### The game menu (MENU + Y)
@@ -92,6 +93,8 @@ of where you left it. A picks a game up from that exact moment. In a game, holdi
 - **Sleep after** and **Power off after** timers
 - **Theme**: several color themes for the whole interface
 - **Menu sounds**: subtle clicks for moving, opening and going back
+- **Clock**: shown beside Wi-Fi and the battery (at the top left in the carousel), 12-hour, 24-hour or off. A sets
+  the time
 - **Music**: background music on or off, and its volume (Left/Right). Put songs in the `BGM` folder
 
 ### Music
@@ -214,7 +217,7 @@ Everything on screen has a button hint. These are the ones you won't see:
 | L2 / R2 | Sort order |
 | SELECT | List or carousel |
 | Hold SELECT | Pin to the game switcher |
-| START | Random game |
+| START | Random game (in the system list: from any system) |
 | MENU + Y | Game menu: core, box art, rename, delete |
 | MENU + X | Delete the game |
 

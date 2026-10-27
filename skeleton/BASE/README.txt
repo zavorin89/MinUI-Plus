@@ -24,7 +24,7 @@ In a game list:
   L2 / R2: change the sort order
   SELECT: list or carousel view
   Hold SELECT: pin to the game switcher
-  START: a random game
+  START: a random game (in the system list: from any system)
   MENU + Y: game menu (core, box art, rename, delete)
   MENU + X: delete the game
 
@@ -37,6 +37,11 @@ Anywhere:
   Hold POWER: power off
 
 The Controls tool lists these too.
+
+----------------------------------------
+Clock
+
+The time shows beside Wi-Fi and the battery. Change its format (12-hour, 24-hour or off) in the settings' Clock row, and press A there to set the time. The A30 has no clock battery: Wi-Fi keeps the time right, otherwise it carries on from when it was last on.
 
 ----------------------------------------
 Music
