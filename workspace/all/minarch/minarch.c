@@ -1035,14 +1035,22 @@ static const int auto_mhz[] = { 480, 648, 816, 1008, 1200, 1344, 1512 };
 #define AUTO_WINDOW 60 // frames averaged
 #define AUTO_SETTLE 20 // frames ignored after a change, while it takes hold
 #define AUTO_CALM_WINDOWS 3 // windows in a row with room to spare before stepping down
+#define AUTO_CALM_MAX 40 // (when lower notches keep failing: about 40 seconds between tries)
+#define AUTO_HOLD_WINDOWS 30 // a notch that's held this long (about 30 seconds) is settled
 static int auto_level = AUTO_START;
 static int auto_settle = 120; // the first two seconds of a game (loading, achievements signing in) say nothing
 static int auto_frames = 0;
 static int auto_calm = 0;
+static int auto_calm_needed = AUTO_CALM_WINDOWS; // grows each time a lower notch doesn't hold, so it isn't retried every few seconds
+static int auto_stable = 0; // windows since the last change
+static int auto_close = 0; // frames in a row close to running late
 static uint64_t auto_sum = 0;
 static uint64_t auto_peak = 0;
 static uint64_t auto_flip_us = 0; // in GFX_flip this frame (mostly waiting for the screen)
 static void Auto_set(int level, char* why) {
+	if (level>auto_level && auto_stable<AUTO_HOLD_WINDOWS && strcmp(why, "fast forward")) auto_calm_needed = MIN(auto_calm_needed * 2, AUTO_CALM_MAX); // that notch didn't hold
+	auto_stable = 0;
+	auto_close = 0;
 	auto_level = level;
 	auto_settle = AUTO_SETTLE;
 	auto_frames = auto_calm = 0;
@@ -1076,20 +1084,28 @@ static void Auto_frame(uint64_t frame_us) {
 		return;
 	}
 	uint64_t work = frame_us>waited ? frame_us - waited : 0;
-	if (work>budget*85/100 && auto_level<AUTO_LEVELS-1) { // close to running late: up now
-		Auto_set(auto_level+1, "busy frame");
+	// up now when a frame ran late, or two in a row came close (one alone is often a load or a blip)
+	auto_close = work>budget*85/100 ? auto_close + 1 : 0;
+	if ((work>budget || auto_close>=2) && auto_level<AUTO_LEVELS-1) {
+		Auto_set(auto_level+1, work>budget ? "late frame" : "busy frames");
 		return;
 	}
 	auto_sum += work;
 	if (work>auto_peak) auto_peak = work;
 	if (++auto_frames<AUTO_WINDOW) return;
 	uint64_t average = auto_sum / auto_frames;
-	// what a notch lower would take: the work grows as the clock drops
-	uint64_t lower_average = auto_level>0 ? average * auto_mhz[auto_level] / auto_mhz[auto_level-1] : 0;
-	uint64_t lower_peak = auto_level>0 ? auto_peak * auto_mhz[auto_level] / auto_mhz[auto_level-1] : 0;
+	if (++auto_stable>=AUTO_HOLD_WINDOWS) auto_calm_needed = AUTO_CALM_WINDOWS; // it's held a while: back to trying sooner
+	// what a notch lower would take: the work grows as the clock drops, a little more again when it's down to one core
+	uint64_t scale = 100;
+	if (auto_level>0) {
+		scale = 100 * auto_mhz[auto_level] / auto_mhz[auto_level-1];
+		if (auto_mhz[auto_level]>=1200 && auto_mhz[auto_level-1]<1200) scale = scale * 120 / 100;
+	}
+	uint64_t lower_average = average * scale / 100;
+	uint64_t lower_peak = auto_peak * scale / 100;
 	if (average>budget*60/100 && auto_level<AUTO_LEVELS-1) Auto_set(auto_level+1, "busy");
 	else if (auto_level>0 && lower_average<budget*50/100 && lower_peak<budget*70/100) { // still comfortably under the step up
-		if (++auto_calm>=AUTO_CALM_WINDOWS) Auto_set(auto_level-1, "room to spare");
+		if (++auto_calm>=auto_calm_needed) Auto_set(auto_level-1, "room to spare");
 		else auto_frames = 0, auto_sum = auto_peak = 0;
 	}
 	else {

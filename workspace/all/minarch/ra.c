@@ -239,11 +239,19 @@ static void fetchBadges(rc_client_t* c) {
 	}
 }
 
+static void RC_CCONV clientLog(const char* message, const rc_client_t* c) {
+	LOG_info("RetroAchievements: %s\n", message);
+}
+static void RC_CCONV hashError(const char* message, const struct rc_hash_iterator* iterator) {
+	LOG_info("RetroAchievements hash: %s\n", message);
+}
 static void loadCallback(int result, const char* error_message, rc_client_t* c, void* userdata) {
 	load_finished = 1;
 	if (result==RC_NO_GAME_LOADED) return; // not in RetroAchievements' database, nothing to show
 	if (result!=RC_OK) {
-		notify("RetroAchievements", error_message ? error_message : "Couldn't load achievements");
+		LOG_info("RetroAchievements: couldn't load the game: %s (%i)\n", error_message ? error_message : "", result);
+		// a game that couldn't be identified is left alone, like one without achievements; other trouble is shown
+		if (!error_message || !strstr(error_message, "hash")) notify("RetroAchievements", error_message ? error_message : "Couldn't load achievements");
 		return;
 	}
 	const rc_client_game_t* game = rc_client_get_game_info(c);
@@ -251,8 +259,11 @@ static void loadCallback(int result, const char* error_message, rc_client_t* c, 
 	rc_client_user_game_summary_t summary;
 	rc_client_get_user_game_summary(c, &summary);
 	char detail[160];
-	if (summary.num_promoted_achievements==0) snprintf(detail, sizeof(detail), "No achievements for this game yet");
-	else snprintf(detail, sizeof(detail), "%u of %u unlocked  \xC2\xB7  %u of %u points",
+	if (summary.num_promoted_achievements==0) { // known, but nothing to unlock yet: no popup
+		LOG_info("RetroAchievements: %s has no achievements yet\n", game->title);
+		return;
+	}
+	snprintf(detail, sizeof(detail), "%u of %u unlocked  \xC2\xB7  %u of %u points",
 		summary.num_unlocked_achievements, summary.num_promoted_achievements, summary.points_unlocked, summary.points_available);
 	notifyFull(hardcore ? "RetroAchievements  \xC2\xB7  Hardcore" : "RetroAchievements", game->title, detail, NULL, RA_STATUS_MS);
 	fetchBadges(c);
@@ -299,9 +310,11 @@ void RA_init(const char* core_tag, const char* rom_path, const void* rom_data, s
 	memory_ready = rc_libretro_memory_init(&memory, mmap, getCoreMemoryInfo, console_id);
 
 	client = rc_client_create(readMemory, serverCall);
+	rc_client_enable_logging(client, RC_CLIENT_LOG_LEVEL_WARN, clientLog); // its warnings and errors, in the log
 	rc_client_set_event_handler(client, eventHandler);
 	rc_hash_callbacks_t hash_callbacks = {0}; // rcheevos' own readers, plus .chd for disc games
 	RA_getDiscReader(&hash_callbacks.cdreader);
+	hash_callbacks.error_message = hashError; // why a game couldn't be identified, in the log
 	rc_client_set_hash_callbacks(client, &hash_callbacks);
 	hardcore = exists(RA_HARDCORE_PATH);
 	load_finished = 0;
