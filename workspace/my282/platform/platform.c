@@ -1028,15 +1028,55 @@ void PLAT_powerOff(void) {
 
 static int cpu_freq_now = 1344; // what was last asked for, to go back to after sleep
 static int cpu_cores_now = 2;
+// changing speed in-process: the CPU PLL register written directly (as overclock.elf does) and the second core switched
+// through sysfs, instead of starting overclock.elf, whose shells and rewrites of the GPU and RAM clocks made every
+// change take a noticeable moment. overclock.elf still sets the governor, GPU and RAM clocks at boot (launch.sh)
+#include <sys/mman.h>
+#include "../overclock/cpu_clocks.h"
+static volatile uint32_t* ccu = NULL;
+static int ccu_tried = 0;
+static void setCoreOnline(int core, int online) {
+	char path[64];
+	snprintf(path, sizeof(path), "/sys/devices/system/cpu/cpu%i/online", core);
+	FILE* file = fopen(path, "r");
+	if (!file) return;
+	int now = fgetc(file)=='1';
+	fclose(file);
+	if (now==online) return;
+	file = fopen(path, "w");
+	if (!file) return;
+	fputs(online ? "1" : "0", file);
+	fclose(file);
+}
+static int fastCPU(int freq, int cpu) {
+	if (!ccu_tried) {
+		ccu_tried = 1;
+		int fd = open("/dev/mem", O_RDWR | O_SYNC);
+		if (fd>=0) {
+			void* mem = mmap(0, 4096, PROT_READ | PROT_WRITE, MAP_SHARED, fd, CCU_BASE);
+			if (mem!=MAP_FAILED) ccu = mem;
+			close(fd);
+		}
+	}
+	if (!ccu) return 0;
+	int best = 0;
+	for (int i=1; i<(int)(sizeof(cpu_clock)/sizeof(cpu_clock[0])); i++) {
+		if (abs(cpu_clock[i].clk - freq)<abs(cpu_clock[best].clk - freq)) best = i;
+	}
+	setCoreOnline(1, cpu>=2);
+	ccu[0] = cpu_clock[best].reg;
+	return 1;
+}
 static void setCPUCores(int freq, int cpu, int wait) {
 	cpu_freq_now = freq;
 	cpu_cores_now = cpu;
+	if (fastCPU(freq, cpu)) return;
 	char cmd[128];
 	sprintf(cmd,"overclock.elf userspace %d %d 384 1080 0%s", cpu, freq, wait ? "" : " &");
 	system(cmd);
 }
 static void setCPUFreq(int freq, int wait) {
-	setCPUCores(freq, freq>=1200 ? 2 : 1, wait); // the second core only when it's that busy
+	setCPUCores(freq, 2, wait); // both cores at every speed: switching one off and on as you scroll was slow, and risky
 }
 static int speedFreq(int speed) {
 	switch (speed) {
@@ -1084,8 +1124,7 @@ static void setCPUFreqAsync(int freq, int cores) {
 	}
 }
 void PLAT_setCPUSpeedAsync(int speed) {
-	int freq = speedFreq(speed);
-	setCPUFreqAsync(freq, freq>=1200 ? 2 : 1);
+	setCPUFreqAsync(speedFreq(speed), 2);
 }
 // minarch's Auto speed, without holding up the frame. Both cores stay on at every speed: switching one on and off over
 // and over while a game's threads run can hang the device, and an idle second core costs next to nothing
@@ -1101,7 +1140,7 @@ void PLAT_powerSave(int state) {
 	if (state==POWER_ASLEEP) {
 		pthread_mutex_lock(&cpu_lock);
 		cpu_generation += 1; // a change still on its way would undo this
-		system("overclock.elf userspace 1 240 384 1080 0"); // (cpu_freq_now kept, to go back to)
+		if (!fastCPU(240, 1)) system("overclock.elf userspace 1 240 384 1080 0"); // (cpu_freq_now kept, to go back to)
 		pthread_mutex_unlock(&cpu_lock);
 		touch(ASLEEP_PATH);
 	}

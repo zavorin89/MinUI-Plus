@@ -7,6 +7,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <pthread.h>
+#include <time.h>
 
 #include <errno.h>
 #include <stdbool.h>
@@ -877,6 +878,18 @@ static void GFX_keepSetting(SDL_Surface* dst, SDL_Rect* rect) {
 	setting_shot_rect = *rect;
 }
 static int GFX_blitHardwareGroupNow(SDL_Surface* dst, int show_setting);
+// the clock in the hardware group: off, 12 or 24 hour, kept in CLOCK_PATH
+static int clock_mode = -1;
+static time_t clock_drawn_minute = 0; // PWR_update redraws when the minute changes
+int GFX_getClockMode(void) {
+	if (clock_mode<0) clock_mode = exists(CLOCK_PATH) ? getInt(CLOCK_PATH) : CLOCK_12H;
+	if (clock_mode<CLOCK_OFF || clock_mode>CLOCK_24H) clock_mode = CLOCK_12H;
+	return clock_mode;
+}
+void GFX_setClockMode(int mode) {
+	clock_mode = mode;
+	putInt(CLOCK_PATH, mode);
+}
 int GFX_blitHardwareGroup(SDL_Surface* dst, int show_setting) {
 	if (show_setting) setting_fade_until = 0;
 	int ow = GFX_blitHardwareGroupNow(dst, show_setting);
@@ -952,6 +965,23 @@ static int GFX_blitHardwareGroupNow(SDL_Surface* dst, int show_setting) {
 		ow = SCALE1(PILL_SIZE);
 		if (show_wifi) ow += ww;
 
+		// the time, before wifi and the battery
+		char clock[16] = "";
+		int clock_mode = GFX_getClockMode();
+		if (clock_mode) {
+			time_t now = time(NULL);
+			struct tm* local = localtime(&now);
+			if (clock_mode==CLOCK_24H) strftime(clock, sizeof(clock), "%H:%M", local);
+			else {
+				strftime(clock, sizeof(clock), "%I:%M %p", local);
+				if (clock[0]=='0') memmove(clock, clock+1, strlen(clock)); // "9:41 PM", not "09:41 PM"
+			}
+			clock_drawn_minute = now / 60;
+		}
+		SDL_Surface* clock_text = clock[0] ? TTF_RenderUTF8_Blended(font.small, clock, COLOR_WHITE) : NULL;
+		int cw = clock_text ? clock_text->w + SCALE1(BUTTON_PADDING) : 0;
+		ow += cw;
+
 		ox = dst->w - SCALE1(PADDING) - ow;
 		oy = SCALE1(PADDING);
 		GFX_blitPill(gfx.mode==MODE_MAIN ? ASSET_DARK_GRAY_PILL : ASSET_BLACK_PILL, dst, &(SDL_Rect){
@@ -960,6 +990,11 @@ static int GFX_blitHardwareGroupNow(SDL_Surface* dst, int show_setting) {
 			ow,
 			SCALE1(PILL_SIZE)
 		});
+		if (clock_text) {
+			SDL_BlitSurface(clock_text, NULL, dst, &(SDL_Rect){ ox + SCALE1(BUTTON_PADDING), oy + (SCALE1(PILL_SIZE) - clock_text->h) / 2 });
+			SDL_FreeSurface(clock_text);
+			ox += cw;
+		}
 		if (show_wifi) {
 			SDL_Rect rect = asset_rects[ASSET_WIFI];
 			int x = ox;
@@ -2143,6 +2178,7 @@ void PWR_update(int* _dirty, int* _show_setting, PWR_callback_t before_sleep, PW
 	}
 	
 	if (show_setting) dirty = 1; // shm is slow or keymon is catching input on the next frame
+	if (clock_drawn_minute && GFX_getClockMode() && time(NULL) / 60 != clock_drawn_minute) dirty = 1; // the clock moved on
 	int was_showing = _show_setting ? *_show_setting : 0;
 	if (was_showing && !show_setting) setting_fade_until = now + SETTING_FADE_MS; // GFX_blitHardwareGroup fades it out
 	if (setting_fade_until) { // frames while it fades, and one more once it's gone so none of it is left on screen

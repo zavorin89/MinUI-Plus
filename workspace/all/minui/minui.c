@@ -4101,7 +4101,7 @@ static void gameMenu(SDL_Surface* screen) {
 				char* name = "";
 				char* value = "";
 				if (rows[i]==ROW_CORE) { name = "Change core"; value = core_name; if (is_selected) hint = "Pick which emulator runs this game"; }
-				else if (rows[i]==ROW_ART) { name = has_art ? "Replace box art" : "Get box art"; if (is_selected) hint = "Downloads it from the libretro library (needs Wi-Fi)"; }
+				else if (rows[i]==ROW_ART) { name = has_art ? "Replace box art" : "Get box art"; if (is_selected) hint = has_art ? "Compare the library's covers with yours, keep one" : "Downloads it from the libretro library (needs Wi-Fi)"; }
 				else if (rows[i]==ROW_RENAME) { name = "Rename"; if (is_selected) hint = "Its box art and saves keep up with the new name"; }
 				else if (rows[i]==ROW_DELETE) { name = "Delete game"; if (is_selected) hint = "Asks first, then about its saves and box art"; }
 				if (is_selected) GFX_blitPill(ASSET_WHITE_PILL, screen, &(SDL_Rect){ x - SCALE1(BUTTON_PADDING), y, rows_w + SCALE1(BUTTON_PADDING*2), SCALE1(PILL_SIZE) });
@@ -4238,7 +4238,7 @@ int main (int argc, char *argv[]) {
 	#define BOOT_STAMP_PATH "/tmp/minui_booted"
 	#define BOOT_BOOST_MS 10000
 	#define START_BOOST_MS 3000
-	#define NAV_BOOST_MS 2500
+	#define NAV_BOOST_MS 5000 // long enough that pausing to look then scrolling on stays quick; it only drops when you've really stopped
 	int fresh_boot = !exists(BOOT_STAMP_PATH);
 	if (fresh_boot) touch(BOOT_STAMP_PATH);
 	uint32_t boot_boost_until = SDL_GetTicks() + (fresh_boot ? BOOT_BOOST_MS : START_BOOST_MS);
@@ -4257,7 +4257,8 @@ int main (int argc, char *argv[]) {
 	#define INFO_ROW_THEME (1 + PWR_TIMER_COUNT)
 	#define INFO_ROW_SOUNDS (2 + PWR_TIMER_COUNT)
 	#define INFO_ROW_MUSIC (3 + PWR_TIMER_COUNT)
-	#define INFO_ROW_COUNT (4 + PWR_TIMER_COUNT)
+	#define INFO_ROW_CLOCK (4 + PWR_TIMER_COUNT)
+	#define INFO_ROW_COUNT (5 + PWR_TIMER_COUNT)
 	#define INFO_ROWS_SHOWN 5 // the rest scroll into view
 	int info_row = 0; // selected row on the version screen
 	int info_start = 0; // first row shown
@@ -4357,6 +4358,12 @@ int main (int argc, char *argv[]) {
 			else if (info_row==INFO_ROW_SOUNDS && (PAD_justPressed(BTN_A) || PAD_justPressed(BTN_LEFT) || PAD_justPressed(BTN_RIGHT))) {
 				SFX_setMenuSounds(!SFX_menuSoundsEnabled());
 				SFX_play(SFX_CONFIRM); // heard when turning them on
+				dirty = 1;
+			}
+			else if (info_row==INFO_ROW_CLOCK && (PAD_justRepeated(BTN_LEFT) || PAD_justRepeated(BTN_RIGHT) || PAD_justPressed(BTN_A))) {
+				int modes = CLOCK_24H + 1; // wraps: 12 hour, 24 hour, off
+				GFX_setClockMode((GFX_getClockMode() + (PAD_justRepeated(BTN_LEFT) ? modes - 1 : 1)) % modes);
+				SFX_play(SFX_TICK);
 				dirty = 1;
 			}
 			else if (info_row==INFO_ROW_MUSIC && PAD_justPressed(BTN_A)) {
@@ -4858,6 +4865,11 @@ int main (int argc, char *argv[]) {
 					else if (i==INFO_ROW_SOUNDS) {
 						name = "Menu sounds";
 						strcpy(value, SFX_menuSoundsEnabled() ? "On" : "Off");
+					}
+					else if (i==INFO_ROW_CLOCK) {
+						name = "Clock";
+						int mode = GFX_getClockMode();
+						strcpy(value, mode==CLOCK_12H ? "12-hour" : (mode==CLOCK_24H ? "24-hour" : "Off"));
 					}
 					else if (i==INFO_ROW_MUSIC) {
 						name = "Music";

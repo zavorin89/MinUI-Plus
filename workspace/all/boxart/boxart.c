@@ -489,34 +489,185 @@ static int collectGames(Game* games, int missing_only) {
 	return count;
 }
 
+// one piece of art from the library, decoded, or NULL (url, when given, gets the address tried)
+static SDL_Surface* downloadArt(const char* system, const char* href, char* url_out) {
+	char system_encoded[MAX_PATH], url[MAX_PATH*3];
+	urlEncode(system, system_encoded);
+	snprintf(url, sizeof(url), THUMBS_URL "%s/Named_Boxarts/%s", system_encoded, href);
+	if (url_out) snprintf(url_out, MAX_PATH, "%s", url);
+	HTTP_Response response = {0};
+	SDL_Surface* image = NULL;
+	if (HTTP_request(url, NULL, NULL, USER_AGENT, RA_CA_PATH, &response)) {
+		if (response.status==200) image = IMG_Load_RW(SDL_RWFromConstMem(response.body, response.body_length), 1);
+		HTTP_freeResponse(&response);
+	}
+	return image;
+}
+static void artPath(Game* game, char* art_path) {
+	char res_dir[MAX_PATH];
+	snprintf(res_dir, sizeof(res_dir), "%s/.res", game->folder);
+	mkdir(res_dir, 0755);
+	snprintf(art_path, MAX_PATH, "%s/%s.png", res_dir, game->file);
+}
+
 // downloads and sizes one game's art from the system's list: ART_FOUND (href is the art's name),
 // ART_NO_MATCH, or ART_FAILED (href is the address that failed)
 enum { ART_FOUND, ART_NO_MATCH, ART_FAILED };
 static int fetchArt(Game* game, ArtList* list, char* href) {
 	Art* art = findArt(list, game->name);
 	if (!art) return ART_NO_MATCH;
-
-	char system_encoded[MAX_PATH], url[MAX_PATH*3];
-	urlEncode(game->system, system_encoded);
-	sprintf(url, THUMBS_URL "%s/Named_Boxarts/%s", system_encoded, art->href);
-	HTTP_Response response = {0};
+	char url[MAX_PATH];
+	SDL_Surface* image = downloadArt(game->system, art->href, url);
 	int ok = 0;
-	if (HTTP_request(url, NULL, NULL, USER_AGENT, RA_CA_PATH, &response)) {
-		if (response.status==200) {
-			SDL_Surface* image = IMG_Load_RW(SDL_RWFromConstMem(response.body, response.body_length), 1);
-			if (image) {
-				char res_dir[MAX_PATH], art_path[MAX_PATH];
-				sprintf(res_dir, "%s/.res", game->folder);
-				mkdir(res_dir, 0755);
-				sprintf(art_path, "%s/%s.png", res_dir, game->file);
-				ok = saveResized(image, art_path); // replaces any art it had, only once the new art is in hand
-				SDL_FreeSurface(image);
-			}
-		}
-		HTTP_freeResponse(&response);
+	if (image) {
+		char art_path[MAX_PATH];
+		artPath(game, art_path);
+		ok = saveResized(image, art_path); // replaces any art it had, only once the new art is in hand
+		SDL_FreeSurface(image);
 	}
 	snprintf(href, MAX_PATH, "%s", ok ? art->href : url);
 	return ok ? ART_FOUND : ART_FAILED;
+}
+
+// every piece of art that could be this game's: all its regions and versions, then titles that start with its name,
+// best first (for picking one by eye)
+#define CANDIDATES_MAX 16
+static int sortCandidates(const void* a, const void* b) {
+	return (*(Art**)b)->score - (*(Art**)a)->score;
+}
+static int findCandidates(ArtList* list, const char* game, Art** out) {
+	char key[MAX_PATH];
+	normalize(game, key);
+	if (!key[0]) return 0;
+	int count = 0;
+	for (int i=0; i<list->count && count<CANDIDATES_MAX; i++) if (!strcmp(list->items[i].key, key)) out[count++] = &list->items[i];
+	qsort(out, count, sizeof(Art*), sortCandidates);
+	int exact = count;
+	int len = strlen(key);
+	if (len>=4) {
+		for (int i=0; i<list->count && count<CANDIDATES_MAX; i++) {
+			Art* art = &list->items[i];
+			if (strcmp(art->key, key) && !strncmp(art->key, key, len)) out[count++] = art;
+		}
+		qsort(out+exact, count-exact, sizeof(Art*), sortCandidates);
+	}
+	return count;
+}
+
+// a yes/no question: 1 for A, 0 for B
+static int ask(char* question, char* yes, char* no) {
+	int dirty = 1;
+	int show_setting = 0;
+	int answer = -1;
+	while (answer<0) {
+		GFX_startFrame();
+		PAD_poll();
+		if (PAD_justPressed(BTN_A)) answer = 1;
+		else if (PAD_justPressed(BTN_B)) answer = 0;
+		PWR_update(&dirty, &show_setting, NULL, NULL);
+		if (dirty) {
+			GFX_clear(screen);
+			GFX_blitHardwareGroup(screen, show_setting);
+			GFX_blitMessage(font.large, question, screen, &(SDL_Rect){ 0, 0, screen->w, screen->h - SCALE1(PILL_SIZE+PADDING) });
+			GFX_blitButtonGroup((char*[]){ "B",no, "A",yes, NULL }, 1, screen, 1);
+			GFX_flip(screen);
+			dirty = 0;
+		}
+		else GFX_sync();
+	}
+	return answer;
+}
+
+// art drawn to fit inside box, keeping its shape
+static void blitFitted(SDL_Surface* image, SDL_Rect box) {
+	int w = box.w, h = image->h * box.w / image->w;
+	if (h>box.h) {
+		h = box.h;
+		w = image->w * box.h / image->h;
+	}
+	SDL_Surface* converted = SDL_ConvertSurface(image, screen->format, 0);
+	if (!converted) return;
+	SDL_BlitScaled(converted, NULL, screen, &(SDL_Rect){ box.x + (box.w-w)/2, box.y + (box.h-h)/2, w, h });
+	SDL_FreeSurface(converted);
+}
+static void blitCaption(char* text, SDL_Color color, int cx, int y, int max_w) {
+	char shown[MAX_PATH];
+	GFX_truncateText(font.small, text, shown, max_w, 0);
+	SDL_Surface* rendered = TTF_RenderUTF8_Blended(font.small, shown, color);
+	if (!rendered) return;
+	SDL_BlitSurface(rendered, NULL, screen, &(SDL_Rect){ cx - rendered->w/2, y });
+	SDL_FreeSurface(rendered);
+}
+
+// the game's own art beside one from the library: left and right go through the library's, A keeps the one on the
+// right, B keeps the game's. 1 when new art was saved
+static int pickArt(Game* game, Art** candidates, int count) {
+	char art_path[MAX_PATH];
+	artPath(game, art_path);
+	SDL_Surface* current = exists(art_path) ? IMG_Load(art_path) : NULL;
+	SDL_Surface* loaded[CANDIDATES_MAX] = {0};
+	int failed[CANDIDATES_MAX] = {0};
+	int index = 0;
+	int dirty = 1;
+	int show_setting = 0;
+	int result = -1;
+	while (result<0) {
+		GFX_startFrame();
+		PAD_poll();
+		if (PAD_justPressed(BTN_B)) result = 0;
+		else if (PAD_justPressed(BTN_A) && loaded[index]) result = 1;
+		else if (PAD_justRepeated(BTN_LEFT) && count>1) { index = (index + count - 1) % count; dirty = 1; }
+		else if (PAD_justRepeated(BTN_RIGHT) && count>1) { index = (index + 1) % count; dirty = 1; }
+		PWR_update(&dirty, &show_setting, NULL, NULL);
+
+		if (!loaded[index] && !failed[index]) { // fetched as it comes up, with a note while it does
+			GFX_clear(screen);
+			GFX_blitMessage(font.large, "Downloading...", screen, &(SDL_Rect){ 0, 0, screen->w, screen->h });
+			GFX_flip(screen);
+			loaded[index] = downloadArt(game->system, candidates[index]->href, NULL);
+			if (!loaded[index]) failed[index] = 1;
+			dirty = 1;
+		}
+		if (dirty) {
+			GFX_clear(screen);
+			GFX_blitHardwareGroup(screen, show_setting);
+			char title[MAX_PATH];
+			GFX_truncateText(font.large, game->name, title, screen->w - SCALE1(PADDING*2 + 90), 0);
+			SDL_Surface* text = TTF_RenderUTF8_Blended(font.large, title, COLOR_WHITE);
+			SDL_BlitSurface(text, NULL, screen, &(SDL_Rect){ SCALE1(PADDING + BUTTON_PADDING), SCALE1(PADDING) + (SCALE1(PILL_SIZE) - text->h)/2 });
+			SDL_FreeSurface(text);
+
+			// the two side by side, a label under each
+			int top = SCALE1(PADDING + PILL_SIZE + 4);
+			int label_h = SCALE1(30);
+			int bottom = screen->h - SCALE1(PADDING + PILL_SIZE + 4);
+			int half = (screen->w - SCALE1(PADDING*3)) / 2;
+			SDL_Rect left = { SCALE1(PADDING), top, half, bottom - top - label_h };
+			SDL_Rect right = { SCALE1(PADDING*2) + half, top, half, bottom - top - label_h };
+			if (current) blitFitted(current, left);
+			else GFX_blitMessage(font.small, "No box art yet", screen, &left);
+			if (loaded[index]) blitFitted(loaded[index], right);
+			else GFX_blitMessage(font.small, "Couldn't download this one", screen, &right);
+			blitCaption("Current", COLOR_WHITE, left.x + left.w/2, left.y + left.h + SCALE1(4), half);
+			char name[MAX_PATH], decoded[MAX_PATH];
+			urlDecode(candidates[index]->href, decoded);
+			decoded[strlen(decoded)-4] = '\0'; // .png
+			snprintf(name, sizeof(name), "%i of %i", index+1, count);
+			blitCaption(name, COLOR_WHITE, right.x + right.w/2, right.y + right.h + SCALE1(2), half);
+			blitCaption(decoded, COLOR_DARK_TEXT, right.x + right.w/2, right.y + right.h + SCALE1(15), half);
+
+			if (show_setting && !GetHDMI()) GFX_blitHardwareHints(screen, show_setting);
+			else if (count>1) GFX_blitButtonGroup((char*[]){ "LEFT/RIGHT","MORE", NULL }, 0, screen, 0);
+			GFX_blitButtonGroup((char*[]){ "B",current ? "KEEP MINE" : "CANCEL", "A","USE THIS", NULL }, 1, screen, 1);
+			GFX_flip(screen);
+			dirty = 0;
+		}
+		else GFX_sync();
+	}
+	int saved = result==1 && saveResized(loaded[index], art_path);
+	for (int i=0; i<count; i++) if (loaded[i]) SDL_FreeSurface(loaded[i]);
+	if (current) SDL_FreeSurface(current);
+	return saved;
 }
 
 // just one game's art, for the launcher's game menu (boxart.elf <path to the game>)
@@ -538,27 +689,38 @@ static void findOne(char* path) {
 	PWR_setCPUSpeed(CPU_SPEED_PERFORMANCE);
 	showMessage("Finding box art...", 0);
 	ArtList list = {0};
-	int result = ART_FAILED;
-	char href[MAX_PATH] = "";
-	if (loadArtList(game.system, &list)) result = fetchArt(&game, &list, href);
+	if (!loadArtList(game.system, &list)) {
+		PWR_setCPUSpeed(CPU_SPEED_MENU);
+		showMessage("Couldn't get the list of box art\nCheck the Wi-Fi connection", 1);
+		return;
+	}
+	Art* candidates[CANDIDATES_MAX];
+	int count = findCandidates(&list, game.name, candidates);
+	char art_path[MAX_PATH];
+	artPath(&game, art_path);
+	char message[MAX_PATH*2] = "";
+	if (!count) snprintf(message, sizeof(message), "No box art matches\n%s", game.name);
+	else if (count==1 && !exists(art_path)) { // nothing to choose between: it's the one
+		char href[MAX_PATH];
+		int result = fetchArt(&game, &list, href);
+		if (result==ART_FOUND) snprintf(message, sizeof(message), "Box art found");
+		else snprintf(message, sizeof(message), "Couldn't download the box art\nCheck the Wi-Fi connection");
+	}
+	else if (pickArt(&game, candidates, count)) snprintf(message, sizeof(message), "Box art replaced");
 	freeArtList(&list);
 	sync();
 	PWR_setCPUSpeed(CPU_SPEED_MENU);
-	char message[MAX_PATH*2];
-	if (result==ART_FOUND) snprintf(message, sizeof(message), "Box art found");
-	else if (result==ART_NO_MATCH) snprintf(message, sizeof(message), "No box art matches\n%s", game.name);
-	else snprintf(message, sizeof(message), "Couldn't download the box art\nCheck the Wi-Fi connection");
-	showMessage(message, 1);
+	if (message[0]) showMessage(message, 1);
 }
 
-static void findMissing(void) {
+static void findMissing(int replace) {
 	if (!hasWifi() && !WIFI_offer(screen, "Box art needs Wi-Fi")) return;
 	PWR_setCPUSpeed(CPU_SPEED_PERFORMANCE); // decoding and resizing is the slow part
 	PWR_disableAutosleep(); // a long run with no buttons pressed
 	log_file = fopen(LOG_PATH, "w");
 
 	Game* games = calloc(MAX_GAMES, sizeof(Game));
-	int count = collectGames(games, 1);
+	int count = collectGames(games, !replace); // replacing: every game (one with no match keeps the art it has)
 	int found = 0, unmatched = 0, failed = 0, unsupported = 0;
 	int stopped = 0;
 	ArtList list = {0};
@@ -685,7 +847,10 @@ int main(int argc , char* argv[]) {
 			dirty = 1;
 		}
 		else if (PAD_justPressed(BTN_A)) {
-			if (selected==ROW_MISSING) findMissing();
+			if (selected==ROW_MISSING) {
+				int replace = ask("Replace existing box art?\n\nGames with no matches will not be changed", "REPLACE", "MISSING ONLY");
+				findMissing(replace);
+			}
 			else resizeAll();
 			showMessage("Checking box art...", 0);
 			missing = collectGames(scratch, 1);
@@ -703,7 +868,7 @@ int main(int argc , char* argv[]) {
 			for (int i=0; i<ROW_COUNT; i++) {
 				char name[64], value[64];
 				if (i==ROW_MISSING) {
-					strcpy(name, "Find missing box art");
+					strcpy(name, "Find box art");
 					if (missing) sprintf(value, "%i missing", missing);
 					else strcpy(value, "None missing");
 				}
@@ -731,7 +896,7 @@ int main(int argc , char* argv[]) {
 			}
 
 			char* hint = selected==ROW_MISSING
-				? "Downloads art from the libretro thumbnail library\nand sizes it to fit (Wi-Fi needs to be on)"
+				? "Downloads art from the libretro thumbnail library\nfor games missing it, or all of them\n(Wi-Fi needs to be on)"
 				: "Shrinks or grows existing art to the same width\nso lists and the carousel load quickly";
 			int y = SCALE1(PADDING + ROW_COUNT*PILL_SIZE + PADDING);
 			GFX_blitMessage(font.small, hint, screen, &(SDL_Rect){ 0, y, screen->w, screen->h - y - SCALE1(PADDING+PILL_SIZE) });
