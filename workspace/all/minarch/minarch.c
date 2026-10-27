@@ -1027,8 +1027,8 @@ static int Config_getValue(char* cfg, const char* key, char* out_value, int* loc
 }
 
 // Auto CPU speed: the lowest clock that keeps the game at full speed, found by watching how much of each frame's
-// time goes to emulating it (not to waiting on the screen or the audio). It starts where Normal is and only goes
-// lower once there's plenty of room, and goes back up the moment a frame gets close to running late
+// time goes to emulating it (not to waiting on the screen or the audio). It starts where Normal is and steps down while
+// a notch lower would still leave plenty of room, and goes back up the moment a frame gets close to running late
 static const int auto_mhz[] = { 480, 648, 816, 1008, 1200, 1344, 1512 };
 #define AUTO_LEVELS (int)(sizeof(auto_mhz) / sizeof(auto_mhz[0]))
 #define AUTO_START 5 // 1344, Normal's
@@ -1036,7 +1036,7 @@ static const int auto_mhz[] = { 480, 648, 816, 1008, 1200, 1344, 1512 };
 #define AUTO_SETTLE 20 // frames ignored after a change, while it takes hold
 #define AUTO_CALM_WINDOWS 3 // windows in a row with room to spare before stepping down
 static int auto_level = AUTO_START;
-static int auto_settle = AUTO_SETTLE;
+static int auto_settle = 120; // the first two seconds of a game (loading, achievements signing in) say nothing
 static int auto_frames = 0;
 static int auto_calm = 0;
 static uint64_t auto_sum = 0;
@@ -1051,7 +1051,7 @@ static void Auto_set(int level, char* why) {
 	LOG_info("cpu: %iMHz (%s)\n", auto_mhz[level], why);
 }
 static void Auto_reset(void) { // a frame or two after a menu or a load runs long and means nothing
-	auto_settle = AUTO_SETTLE;
+	auto_settle = MAX(auto_settle, AUTO_SETTLE); // (keeps a game's first two seconds)
 	auto_frames = auto_calm = 0;
 	auto_sum = auto_peak = 0;
 	SND_takeWaitUs();
@@ -1084,8 +1084,11 @@ static void Auto_frame(uint64_t frame_us) {
 	if (work>auto_peak) auto_peak = work;
 	if (++auto_frames<AUTO_WINDOW) return;
 	uint64_t average = auto_sum / auto_frames;
+	// what a notch lower would take: the work grows as the clock drops
+	uint64_t lower_average = auto_level>0 ? average * auto_mhz[auto_level] / auto_mhz[auto_level-1] : 0;
+	uint64_t lower_peak = auto_level>0 ? auto_peak * auto_mhz[auto_level] / auto_mhz[auto_level-1] : 0;
 	if (average>budget*60/100 && auto_level<AUTO_LEVELS-1) Auto_set(auto_level+1, "busy");
-	else if (average<budget*35/100 && auto_peak<budget*55/100 && auto_level>0) {
+	else if (auto_level>0 && lower_average<budget*50/100 && lower_peak<budget*70/100) { // still comfortably under the step up
 		if (++auto_calm>=AUTO_CALM_WINDOWS) Auto_set(auto_level-1, "room to spare");
 		else auto_frames = 0, auto_sum = auto_peak = 0;
 	}

@@ -74,6 +74,20 @@ static struct {
 
 static void BGM_mix(int16_t* stream, int frames);
 
+// the thread's naps, cut short by BGM_quit so stopping (eg. quitting a game) never waits one out
+static pthread_mutex_t nap_lock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t nap_wake = PTHREAD_COND_INITIALIZER;
+static void nap(int ms) {
+	struct timespec until;
+	clock_gettime(CLOCK_REALTIME, &until);
+	until.tv_nsec += (long)ms * 1000000;
+	until.tv_sec += until.tv_nsec / 1000000000;
+	until.tv_nsec %= 1000000000;
+	pthread_mutex_lock(&nap_lock);
+	if (!bgm.quit) pthread_cond_timedwait(&nap_wake, &nap_lock, &until);
+	pthread_mutex_unlock(&nap_lock);
+}
+
 ///////////////////////////////
 
 static int volumeGain(int volume) { // a curve, since loudness isn't linear: 10 is full, 5 a quarter
@@ -298,7 +312,7 @@ static void* BGM_run(void* arg) {
 		uint32_t room = RING_FRAMES - queued;
 		// a chunk can become up to 6x as many frames (8000Hz to 48000Hz)
 		if (room<CHUNK_FRAMES * 6 || queued>RING_FRAMES * 3 / 4) {
-			usleep(queued>RING_FRAMES * 7 / 8 ? 150000 : 40000); // (full and waiting, eg. asleep or in a game: rarely)
+			nap(queued>RING_FRAMES * 7 / 8 ? 150 : 40); // (full and waiting, eg. asleep or in a game: rarely)
 			continue;
 		}
 		if (!playing) {
@@ -358,7 +372,10 @@ void BGM_pause(void) {
 }
 void BGM_quit(void) {
 	if (!bgm.running) return;
+	pthread_mutex_lock(&nap_lock);
 	bgm.quit = 1;
+	pthread_cond_signal(&nap_wake);
+	pthread_mutex_unlock(&nap_lock);
 	pthread_join(bgm.thread, NULL);
 	for (int waited=0; waited<FADE_OUT_MS+40 && bgm.level>0 && bgm.written!=bgm.read; waited+=10) SDL_Delay(10);
 	SFX_setMusic(NULL);
