@@ -1579,6 +1579,18 @@ void SFX_warmUp(void) {
 	if (pthread_create(&sfx_thread, NULL, SFX_warmThread, NULL)==0) sfx_thread_started = 1;
 	else sfx_warming = 0;
 }
+static int sfx_for_input = 0;
+void SFX_forInput(int enabled) {
+	sfx_for_input = enabled;
+	if (enabled) SFX_warmUp();
+}
+void SFX_afterInput(void) {
+	if (!sfx_for_input) return;
+	if (PAD_justRepeated(BTN_UP) || PAD_justRepeated(BTN_DOWN) || PAD_justRepeated(BTN_LEFT) || PAD_justRepeated(BTN_RIGHT)
+		|| PAD_justRepeated(BTN_L1) || PAD_justRepeated(BTN_R1)) SFX_play(SFX_TICK);
+	else if (PAD_justPressed(BTN_A)) SFX_play(SFX_CONFIRM);
+	else if (PAD_justPressed(BTN_B)) SFX_play(SFX_BACK);
+}
 void SFX_play(int sound) {
 	if (sound<0 || sound>=SFX_COUNT) return;
 	if (sound!=SFX_ACHIEVEMENT && !SFX_menuSoundsEnabled()) return;

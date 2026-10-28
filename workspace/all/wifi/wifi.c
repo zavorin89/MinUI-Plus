@@ -9,6 +9,7 @@
 
 #include "defines.h"
 #include "api.h"
+#include "bgm.h"
 #include "utils.h"
 #include "keyboard.h"
 
@@ -204,6 +205,8 @@ int main(int argc , char* argv[]) {
 	PAD_init();
 	PWR_init();
 	InitSettings();
+	SFX_forInput(1); // clicks for moving, choosing and going back
+	BGM_start(); // the menus' music, when it's on
 
 	readCreds();
 	int was_on = exists(FLAG_PATH);
@@ -356,6 +359,8 @@ int main(int argc , char* argv[]) {
 		system("wifi.sh down");
 	}
 
+	BGM_quit();
+	SFX_quit();
 	QuitSettings();
 	PWR_quit();
 	PAD_quit();

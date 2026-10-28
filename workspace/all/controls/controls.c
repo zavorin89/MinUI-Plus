@@ -6,6 +6,7 @@
 #include <msettings.h>
 #include "defines.h"
 #include "api.h"
+#include "bgm.h"
 #include "utils.h"
 
 static SDL_Surface* screen;
@@ -20,7 +21,7 @@ typedef struct Section {
 } Section;
 
 static Section sections[] = {
-	{ "Game lists", "Your games", {
+	{ "Game Lists", NULL, {
 		{ "L1 R1",			"Jump by letter" },
 		{ "L2 R2",			"Change the sort order" },
 		{ "SELECT",			"List or carousel view" },
@@ -29,14 +30,14 @@ static Section sections[] = {
 		{ "MENU + Y",		"Game menu: core, art, rename" },
 		{ "MENU + X",		"Delete game, or clear Play Time" },
 	}},
-	{ "Everywhere", "In games too", {
+	{ "Other", NULL, {
 		{ "MENU",			"Settings, or pause a game" },
 		{ "MENU",			"Hide an achievement popup" },
 		{ "hold MENU",		"Game switcher" },
 		{ "MENU + VOL",		"Brightness" },
 		{ "hold POWER",		"Power off" },
 	}},
-	{ "Typing", "On the keyboard", {
+	{ "Keyboard", NULL, {
 		{ "X",				"Shift, for one capital letter" },
 		{ "Y",				"Numbers and symbols" },
 		{ "L1 R1",			"Move the cursor" },
@@ -167,6 +168,8 @@ int main(int argc , char* argv[]) {
 	PAD_init();
 	PWR_init();
 	InitSettings();
+	SFX_forInput(1); // clicks for moving, choosing and going back
+	BGM_start(); // the menus' music, when it's on
 
 	int page = 0;
 	int dirty = 1;
@@ -178,12 +181,10 @@ int main(int argc , char* argv[]) {
 		if (PAD_justPressed(BTN_B)) break;
 		else if (PAD_justRepeated(BTN_LEFT) || PAD_justRepeated(BTN_L1)) {
 			page = (page + SECTION_COUNT - 1) % SECTION_COUNT;
-			SFX_play(SFX_TICK);
 			dirty = 1;
 		}
 		else if (PAD_justRepeated(BTN_RIGHT) || PAD_justRepeated(BTN_R1)) {
 			page = (page + 1) % SECTION_COUNT;
-			SFX_play(SFX_TICK);
 			dirty = 1;
 		}
 
@@ -201,6 +202,8 @@ int main(int argc , char* argv[]) {
 		else GFX_sync();
 	}
 
+	BGM_quit();
+	SFX_quit();
 	QuitSettings();
 	PWR_quit();
 	PAD_quit();

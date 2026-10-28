@@ -15,6 +15,7 @@
 
 #include "defines.h"
 #include "api.h"
+#include "bgm.h"
 #include "utils.h"
 #include "ra_http.h"
 #include "ra_cache.h" // RA_CA_PATH
@@ -861,9 +862,13 @@ int main(int argc , char* argv[]) {
 	PAD_init();
 	PWR_init();
 	InitSettings();
+	SFX_forInput(1); // clicks for moving, choosing and going back
+	BGM_start(); // the menus' music, when it's on
 
 	if (argc>1) { // one game, from the launcher's game menu
 		findOne(argv[1]);
+		BGM_quit();
+		SFX_quit();
 		QuitSettings();
 		PWR_quit();
 		PAD_quit();
@@ -953,6 +958,8 @@ int main(int argc , char* argv[]) {
 	}
 
 	free(scratch);
+	BGM_quit();
+	SFX_quit();
 	QuitSettings();
 	PWR_quit();
 	PAD_quit();

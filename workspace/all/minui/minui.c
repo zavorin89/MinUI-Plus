@@ -24,6 +24,7 @@
 
 #define TOOLS_DIR SDCARD_PATH "/Tools/" PLATFORM
 #define PLAY_TIME_NAME "Play Time" // Most Played, as it's listed in Tools
+#define PLAY_TIME_FLASH_MS 2200 // the total as Play Time opens
 #include "keyboard.h"
 #include "bgm.h"
 
@@ -1457,12 +1458,9 @@ static Array* getEntries(char* path){
 	else addEntries(entries, path); // just a subfolder
 	
 	if (exactMatch(path, TOOLS_DIR)) {
-		for (int i=0; i<entries->count; i++) { // the Wi-Fi tool opens from the settings' Wi-Fi row instead
+		for (int i=entries->count-1; i>=0; i--) { // Wi-Fi and Clock open from their rows in the settings instead
 			Entry* entry = entries->items[i];
-			if (suffixMatch("/Wi-Fi.pak", entry->path)) {
-				Entry_free(Array_remove(entries, i));
-				break;
-			}
+			if (suffixMatch("/Wi-Fi.pak", entry->path) || suffixMatch("/Clock.pak", entry->path)) Entry_free(Array_remove(entries, i));
 		}
 		Entry* play_time = Entry_new(FAUX_MOSTPLAYED_PATH, ENTRY_DIR);
 		free(play_time->name);
@@ -1888,6 +1886,7 @@ static void closeDirectory(void) {
 }
 
 static void showFlash(char* text, int big);
+static int flash_ms; // (defined with the popups below)
 static void Entry_open(Entry* self) {
 	recent_alias = self->name;  // yiiikes
 	if (self->type==ENTRY_ROM) {
@@ -1917,6 +1916,7 @@ static void Entry_open(Entry* self) {
 				formatPlayTime(total_seconds, played);
 				snprintf(line, sizeof(line), "%s played in all", played);
 				showFlash(line, 0);
+				flash_ms = PLAY_TIME_FLASH_MS; // a number to read, so it stays a little longer
 			}
 		}
 	}
@@ -3482,6 +3482,7 @@ static int marqueeOffset(char* key, int overflow, uint32_t now) {
 #define FLASH_FADE_MS 150 // its last moments, fading out
 static char flash_text[64];
 static int flash_big = 0;
+static int flash_ms = 0; // how long this one stays, 0 for the usual
 static uint32_t flash_until = 0;
 static TTF_Font* flash_font = NULL; // opened on first use
 static int flash_gpu = 0; // drawn as a GPU texture this frame (eg. over the carousel)
@@ -3491,11 +3492,12 @@ static int flash_texture_theme = -1;
 static void showFlash(char* text, int big) {
 	snprintf(flash_text, sizeof(flash_text), "%s", text);
 	flash_big = big;
+	flash_ms = 0;
 	flash_until = FLASH_WAITING;
 }
 static void blitFlash(SDL_Surface* screen) {
 	if (!flash_until) return;
-	if (flash_until==FLASH_WAITING) flash_until = SDL_GetTicks() + (flash_big ? FLASH_LETTER_MS : FLASH_TEXT_MS);
+	if (flash_until==FLASH_WAITING) flash_until = SDL_GetTicks() + (flash_ms ? flash_ms : (flash_big ? FLASH_LETTER_MS : FLASH_TEXT_MS));
 	int left = (int32_t)(flash_until - SDL_GetTicks());
 	int alpha = left>=FLASH_FADE_MS ? 255 : (left>0 ? 255 * left / FLASH_FADE_MS : 0);
 	if (flash_big && !flash_font) flash_font = TTF_OpenFont(FONT_PATH, SCALE1(FONT_LARGE*3));

@@ -285,7 +285,12 @@ extern PAD_Context pad;
 
 #define PAD_init PLAT_initInput
 #define PAD_quit PLAT_quitInput
-#define PAD_poll PLAT_pollInput
+// the tools' sounds: once a tool calls SFX_forInput(1), every PAD_poll clicks for moving, confirming and going back
+// (inline so it reads input the way the caller does)
+void SFX_forInput(int enabled); // also warms the sounds up, so the first plays without a wait
+void SFX_afterInput(void);
+static inline void PAD_pollWithSounds(void); // below, after PLAT_pollInput
+#define PAD_poll PAD_pollWithSounds
 #define PAD_wake PLAT_shouldWake
 
 void PAD_setAnalog(int neg, int pos, int value, int repeat_at); // internal
@@ -362,6 +367,10 @@ enum {
 void PLAT_initInput(void);
 void PLAT_quitInput(void);
 void PLAT_pollInput(void);
+static inline void PAD_pollWithSounds(void) {
+	PLAT_pollInput();
+	SFX_afterInput();
+}
 int PLAT_shouldWake(void);
 
 SDL_Surface* PLAT_initVideo(void);

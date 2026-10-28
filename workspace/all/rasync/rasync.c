@@ -15,6 +15,7 @@
 
 #include "defines.h"
 #include "api.h"
+#include "bgm.h"
 #include "utils.h"
 #include "ra_cache.h"
 #include "ra_http.h"
@@ -518,6 +519,8 @@ int main(int argc , char* argv[]) {
 	PAD_init();
 	PWR_init();
 	InitSettings();
+	SFX_forInput(1); // clicks for moving, choosing and going back
+	BGM_start(); // the menus' music, when it's on
 	
 	enum { ROW_ACCOUNT, ROW_SYNC, ROW_HARDCORE, ROW_COUNT };
 	int selected = 0;
@@ -578,7 +581,12 @@ int main(int argc , char* argv[]) {
 		
 		if (dirty) {
 			GFX_clear(screen);
-			int ow = GFX_blitHardwareGroup(screen, show_setting);
+			GFX_blitHardwareGroup(screen, show_setting);
+			// a title beside the time and battery, the rows below them at full width so a long name has room
+			SDL_Surface* title = TTF_RenderUTF8_Blended(font.large, "RetroAchievements", COLOR_WHITE);
+			SDL_BlitSurface(title, NULL, screen, &(SDL_Rect){ SCALE1(PADDING + BUTTON_PADDING), SCALE1(PADDING) + (SCALE1(PILL_SIZE) - title->h)/2 });
+			SDL_FreeSurface(title);
+			#define ROWS_TOP (PADDING + PILL_SIZE + 6)
 			
 			for (int i=0; i<ROW_COUNT; i++) {
 				char name[192], value[64] = "";
@@ -597,9 +605,8 @@ int main(int argc , char* argv[]) {
 					snprintf(name, sizeof(name), "Hardcore mode");
 					snprintf(value, sizeof(value), exists(RA_HARDCORE_PATH) ? "On" : "Off");
 				}
-				int y = SCALE1(PADDING + i*PILL_SIZE);
+				int y = SCALE1(ROWS_TOP + i*PILL_SIZE);
 				int width = screen->w - SCALE1(PADDING*2);
-				if (i==0) width -= ow;
 				int is_selected = i==selected;
 				if (is_selected) GFX_blitPill(ASSET_WHITE_PILL, screen, &(SDL_Rect){ SCALE1(PADDING), y, width, SCALE1(PILL_SIZE) });
 				
@@ -619,9 +626,9 @@ int main(int argc , char* argv[]) {
 			
 			// what offline play depends on, so it's clear why syncing matters
 			char* hint;
-			if (selected==ROW_HARDCORE) hint = "Unlocks count as hardcore on your profile\nGames with achievements start fresh, no save states\n(loading one switches that session to softcore)";
+			if (selected==ROW_HARDCORE) hint = "Unlocks count as hardcore: no save states or resume\n(loading one switches that session to softcore)";
 			else hint = signed_in ? "Syncing caches every game's achievements and badges\nso they work without Wi-Fi" : "Sign in with the on-screen keyboard\n(Wi-Fi needs to be on)";
-			int y = SCALE1(PADDING + ROW_COUNT*PILL_SIZE + PADDING);
+			int y = SCALE1(ROWS_TOP + ROW_COUNT*PILL_SIZE + 4);
 			GFX_blitMessage(font.small, hint, screen, &(SDL_Rect){ 0, y, screen->w, screen->h - y - SCALE1(PADDING+PILL_SIZE) });
 			
 			if (show_setting && !GetHDMI()) GFX_blitHardwareHints(screen, show_setting);
@@ -633,6 +640,8 @@ int main(int argc , char* argv[]) {
 		else GFX_sync();
 	}
 	
+	BGM_quit();
+	SFX_quit();
 	QuitSettings();
 	PWR_quit();
 	PAD_quit();

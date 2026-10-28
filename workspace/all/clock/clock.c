@@ -7,6 +7,7 @@
 
 #include "defines.h"
 #include "api.h"
+#include "bgm.h"
 #include "utils.h"
 
 enum {
@@ -26,6 +27,8 @@ int main(int argc , char* argv[]) {
 	PAD_init();
 	PWR_init();
 	InitSettings();
+	SFX_forInput(1); // clicks for moving, choosing and going back
+	BGM_start(); // the menus' music, when it's on
 	
 	// TODO: make use of SCALE1()
 	SDL_Surface* digits = SDL_CreateRGBSurface(SDL_SWSURFACE, SCALE2(120,16), FIXED_DEPTH,RGBA_MASK_AUTO);
@@ -311,6 +314,8 @@ int main(int argc , char* argv[]) {
 	
 	SDL_FreeSurface(digits);
 	
+	BGM_quit();
+	SFX_quit();
 	QuitSettings();
 	PWR_quit();
 	PAD_quit();
