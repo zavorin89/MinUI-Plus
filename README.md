@@ -50,7 +50,7 @@ were taken by the A30 itself, border and LCD grid included.
 | <img src="github/screenshots/box-art-download.png" width="320" alt="Downloading box art"> | <img src="github/screenshots/box-art-picker.png" width="320" alt="Box art picker"> |
 | **Box art** downloaded on the device | Every match side by side with yours, to pick from |
 | <img src="github/screenshots/game-menu.png" width="320" alt="Game menu"> | <img src="github/screenshots/settings.png" width="320" alt="Settings"> |
-| **Game menu**: core, box art, rename, delete | **Settings**: play time, themes, sounds, clock, music |
+| **Game menu**: core, box art, rename, delete | **Settings**: Wi-Fi, timers, themes, sounds, music, clock |
 | <img src="github/screenshots/ingame-gbc-native.jpg" width="320" alt="Game Boy Color native border"> | <img src="github/screenshots/ingame-gba-grid.jpg" width="320" alt="Game Boy Advance with LCD grid"> |
 | **Native borders**: the Kiwi lime Game Boy Color | **LCD grid** and border on the GBA |
 | <img src="github/screenshots/most-played.png" width="320" alt="Most Played"> | <img src="github/screenshots/ingame-ps.jpg" width="320" alt="PlayStation"> |
@@ -81,7 +81,8 @@ were taken by the A30 itself, border and LCD grid included.
 - **Preconfigured looks**: LCD grid and ghosting on handhelds, scanlines on TV consoles, Game Boy Pocket greys,
   color correction for GBC and GBA
 - **Auto CPU speed**: each game runs at the lowest speed that keeps it smooth, and remembers what it needed
-- **Wi-Fi** with an on-screen keyboard, offered automatically when a tool needs it
+- **Wi-Fi** in the settings: scan, pick a network and type its password on the on-screen keyboard. Choose whether
+  it connects at startup, and tools that need the internet offer to turn it on
 - **Built for speed**: tuned until the A30's menus feel instant. They're GPU drawn, art decodes ahead of you on
   its own thread, the CPU boosts the instant you touch a button, and saving and the game switcher are quick
 - **Efficient sleep**: the CPU drops to a crawl, audio and Wi-Fi switch off, the device lasts far longer asleep
@@ -133,9 +134,8 @@ kept.
 MinUI+ keeps track of how long you play every game, automatically, from the moment it starts:
 
 - **In the pause menu**: the game's total play time, this session, how many sessions, and your average session.
-- **Most Played**: every game you've played, ranked by hours, with its box art, its total and its average session.
-  Open it from the settings (Most played, A).
-- **In the settings**: your total play time across everything, and the game you've played most.
+- **Play Time** (in Tools): every game you've played, ranked by hours, with its box art, its total and its average
+  session, and your total across everything as it opens.
 - **Recently Played** is sorted by when you actually last played, and the time follows a game through a rename.
 
 
@@ -198,7 +198,7 @@ of where you left it. A picks a game up from that exact moment. In a game, holdi
 
 ### Settings (tap MENU)
 
-- **Play time** in total, and **Most played** (A opens the full list, X twice clears it)
+- **Wi-Fi**: the network you're on (or Off); A opens the Wi-Fi setup to scan, connect, or switch it off
 - **Sleep after** and **Power off after** timers
 - **Theme**: several color themes for the whole interface
 - **Menu sounds**: subtle clicks for moving, opening and going back
@@ -293,8 +293,7 @@ Everything can be changed per system or per game in the pause menu's Options, li
 
 ## Tools
 
-- **Wi-Fi**: scan, pick a network, type its password on the keyboard, connect. Choose whether it connects at
-  startup. Tools that need the internet offer to turn it on.
+- **Play Time**: every game ranked by the hours you've put in (see [Play time](#play-time)).
 - **RetroAchievements**: sign in, switch hardcore on or off, and sync your games' achievements and badges for
   offline play.
 - **Box Art**: downloads covers for every game missing one from the libretro thumbnail library (or replaces the
@@ -366,7 +365,7 @@ Everything on screen has a button hint. These are the ones you won't see:
 | `Saves/<TAG>` | In-game saves |
 | `BGM` | Music for the menus: mp3, ogg, flac or wav |
 | `Borders` | Screen borders, `<TAG>.png` and `<TAG>-native.png` |
-| `Tools` | Wi-Fi, RetroAchievements, Box Art, Controls and more |
+| `Tools` | Play Time, RetroAchievements, Box Art, Controls and more (Wi-Fi is in the settings) |
 | `.userdata` | Settings, save states, achievements, play time, logs (`.userdata/my282/logs`) |
 
 ## Building

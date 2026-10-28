@@ -51,7 +51,7 @@ The time shows beside Wi-Fi and the battery. Change its format (12-hour, 24-hour
 ----------------------------------------
 Play time
 
-MinUI+ tracks how long you play every game. The pause menu shows the game's total, this session, how many sessions and your average session. Most Played (in the settings, tap MENU) ranks every game by hours, and the settings show your total across everything.
+MinUI+ tracks how long you play every game. The pause menu shows the game's total, this session, how many sessions and your average session. Tools > Play Time ranks every game by hours, and shows your total across everything.
 
 ----------------------------------------
 Music
@@ -66,7 +66,7 @@ Every system starts with the look that suits it: a border, an LCD grid and LCD g
 ----------------------------------------
 RetroAchievements and Wi-Fi
 
-Connect in Tools > Wi-Fi, then sign in with Tools > RetroAchievements. Achievements then just work in games, offline too: unlocks are sent the next time you're online. The tool also syncs your games' achievements for offline play.
+Connect in the settings (tap MENU) > Wi-Fi, then sign in with Tools > RetroAchievements. Achievements then just work in games, offline too: unlocks are sent the next time you're online. The tool also syncs your games' achievements for offline play.
 
 ----------------------------------------
 Quicksave & auto-resume

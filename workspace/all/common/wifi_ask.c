@@ -1,4 +1,4 @@
-// "Turn on Wi-Fi?" for tools that need the internet, doing what Tools > Wi-Fi does to connect
+// "Turn on Wi-Fi?" for tools that need the internet, doing what the Wi-Fi setup (Settings > Wi-Fi) does to connect
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -53,7 +53,7 @@ int WIFI_offer(SDL_Surface* screen, char* why) {
 	savedNetwork(ssid, sizeof(ssid));
 	char message[512];
 	if (!ssid[0]) {
-		snprintf(message, sizeof(message), "%s\nNo Wi-Fi network is saved yet:\njoin one in Tools > Wi-Fi first", why);
+		snprintf(message, sizeof(message), "%s\nNo Wi-Fi network is saved yet:\njoin one in Settings > Wi-Fi first", why);
 		ask(screen, message, (char*[]){ "A","OKAY", NULL });
 		return 0;
 	}
@@ -70,7 +70,7 @@ int WIFI_offer(SDL_Surface* screen, char* why) {
 	unlink(WIFI_FLAG_PATH);
 	sync();
 	system("wifi.sh down >/dev/null 2>&1");
-	snprintf(message, sizeof(message), "Couldn't connect to %s\nCheck it in Tools > Wi-Fi", ssid);
+	snprintf(message, sizeof(message), "Couldn't connect to %s\nCheck it in Settings > Wi-Fi", ssid);
 	ask(screen, message, (char*[]){ "A","OKAY", NULL });
 	return 0;
 }

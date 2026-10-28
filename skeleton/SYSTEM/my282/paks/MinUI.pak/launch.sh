@@ -44,8 +44,8 @@ mount -o remount,noatime /mnt/SDCARD 2>/dev/null
 
 killall -9 tee
 rm -f "$SDCARD_PATH/update.log"
-WIFI_FLAG="$SHARED_USERDATA_PATH/.minui/wifi-on" # set by Tools/Wi-Fi.pak
-WIFI_AUTOSTART_OFF="$SHARED_USERDATA_PATH/.minui/wifi-autostart-off" # "Connect at startup: Off" in Tools/Wi-Fi.pak
+WIFI_FLAG="$SHARED_USERDATA_PATH/.minui/wifi-on" # set by the Wi-Fi setup (Tools/Wi-Fi.pak, opened from the settings)
+WIFI_AUTOSTART_OFF="$SHARED_USERDATA_PATH/.minui/wifi-autostart-off" # "Connect at startup: Off" in the Wi-Fi setup
 if [ -f "$WIFI_FLAG" ] && [ -f "$WIFI_AUTOSTART_OFF" ]; then
 	rm -f "$WIFI_FLAG" # start with wifi off, it's turned back on from the Wi-Fi tool
 fi

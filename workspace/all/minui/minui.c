@@ -21,6 +21,9 @@
 #include "defines.h"
 #include "api.h"
 #include "utils.h"
+
+#define TOOLS_DIR SDCARD_PATH "/Tools/" PLATFORM
+#define PLAY_TIME_NAME "Play Time" // Most Played, as it's listed in Tools
 #include "keyboard.h"
 #include "bgm.h"
 
@@ -1004,8 +1007,25 @@ static void toggleFavorite(void) {
 ///////////////////////////////////////
 
 #define MOST_PLAYED_COUNT 10
-static char info_top_name[256] = ""; // shown on the info screen's Most played row
-static int most_played_from_info = 0; // B in Most Played returns to the info screen
+#define WIFI_PAK TOOLS_DIR "/Wi-Fi.pak/launch.sh" // opened from the settings' Wi-Fi row
+#define WIFI_ON_PATH SHARED_USERDATA_PATH "/.minui/wifi-on" // set while Wi-Fi is on (see wifi.sh and launch.sh)
+#define WIFI_CREDS_PATH SHARED_USERDATA_PATH "/wifi.txt"
+static char wifi_status[128] = "Off"; // the settings' Wi-Fi row, read when they open and when the connection changes
+static void getWifiStatus(char* out, size_t size) { // the network's name when connected, else Off (or Not connected)
+	if (PLAT_isOnline()) {
+		char creds[512] = "";
+		if (exists(WIFI_CREDS_PATH)) getFile(WIFI_CREDS_PATH, creds, sizeof(creds));
+		char* ssid = strstr(creds, "ssid=");
+		if (ssid) {
+			ssid += 5;
+			int len = strcspn(ssid, "\r\n");
+			snprintf(out, size, "%.*s", len, ssid);
+			if (out[0]) return;
+		}
+		snprintf(out, size, "Connected");
+	}
+	else snprintf(out, size, exists(WIFI_ON_PATH) ? "Not connected" : "Off");
+}
 
 static void formatShortPlayTime(int seconds, char* out) { // minutes stop mattering past 10 hours and would crowd the hint bar
 	if (seconds>=10*3600) sprintf(out, "%ih", seconds/3600);
@@ -1246,8 +1266,7 @@ static Array* getRoot(void) {
 	}
 	Array_free(entries); // root now owns entries' entries
 	
-	char* tools_path = SDCARD_PATH "/Tools/" PLATFORM;
-	if (exists(tools_path) && !simple_mode) Array_push(root, Entry_new(tools_path, ENTRY_DIR));
+	if (exists(TOOLS_DIR) && !simple_mode) Array_push(root, Entry_new(TOOLS_DIR, ENTRY_DIR));
 	
 	return root;
 }
@@ -1436,6 +1455,20 @@ static Array* getEntries(char* path){
 		}
 	}
 	else addEntries(entries, path); // just a subfolder
+	
+	if (exactMatch(path, TOOLS_DIR)) {
+		for (int i=0; i<entries->count; i++) { // the Wi-Fi tool opens from the settings' Wi-Fi row instead
+			Entry* entry = entries->items[i];
+			if (suffixMatch("/Wi-Fi.pak", entry->path)) {
+				Entry_free(Array_remove(entries, i));
+				break;
+			}
+		}
+		Entry* play_time = Entry_new(FAUX_MOSTPLAYED_PATH, ENTRY_DIR);
+		free(play_time->name);
+		play_time->name = strdup(PLAY_TIME_NAME);
+		Array_push(entries, play_time);
+	}
 	
 	EntryArray_sort(entries);
 	return entries;
@@ -1854,6 +1887,7 @@ static void closeDirectory(void) {
 	restore_relative = top->selected;
 }
 
+static void showFlash(char* text, int big);
 static void Entry_open(Entry* self) {
 	recent_alias = self->name;  // yiiikes
 	if (self->type==ENTRY_ROM) {
@@ -1876,6 +1910,15 @@ static void Entry_open(Entry* self) {
 	}
 	else if (self->type==ENTRY_DIR) {
 		openDirectory(self->path, 1);
+		if (exactMatch(self->path, FAUX_MOSTPLAYED_PATH)) { // Play Time: everything played, all told
+			int total_seconds, top_seconds;
+			char top_path[MAX_PATH], played[32], line[64];
+			if (getPlayTimeTotals(&total_seconds, top_path, &top_seconds)) {
+				formatPlayTime(total_seconds, played);
+				snprintf(line, sizeof(line), "%s played in all", played);
+				showFlash(line, 0);
+			}
+		}
 	}
 }
 
@@ -1903,9 +1946,18 @@ static void loadLast(void) { // call after loading root directory
 	getFile(from, last_path, 256);
 	LOG_info("last place: %s%s\n", last_path, from==LAST_BACKUP_PATH ? " (from the card copy: /tmp had lost it)" : "");
 	
-	if (prefixMatch(FAUX_MOSTPLAYED_PATH "/", last_path)) { // not in the root, so reopen it directly
+	if (prefixMatch(FAUX_MOSTPLAYED_PATH "/", last_path)) { // in Tools (as Play Time), so through there
+		Directory* root = stack->items[0];
+		int tools = EntryArray_indexOf(root->entries, TOOLS_DIR);
+		if (tools!=-1) {
+			root->selected = tools;
+			Directory_reindex(root);
+			openDirectory(TOOLS_DIR, 0);
+			int play_time = EntryArray_indexOf(top->entries, FAUX_MOSTPLAYED_PATH);
+			if (play_time!=-1) top->selected = play_time;
+			Directory_reindex(top);
+		}
 		openDirectory(FAUX_MOSTPLAYED_PATH, 0);
-		most_played_from_info = 1;
 		char* filename = strrchr(last_path, '/');
 		for (int i=0; i<top->entries->count; i++) {
 			Entry* entry = top->entries->items[i];
@@ -4296,7 +4348,7 @@ int main (int argc, char *argv[]) {
 	int dirty = 1;
 	int scrolling = 0;
 	int show_version = 0;
-	#define INFO_ROW_MOST_PLAYED 0 // then one row per power timer
+	#define INFO_ROW_WIFI 0 // then one row per power timer
 	#define INFO_ROW_THEME (1 + PWR_TIMER_COUNT)
 	#define INFO_ROW_SOUNDS (2 + PWR_TIMER_COUNT)
 	#define INFO_ROW_MUSIC (3 + PWR_TIMER_COUNT)
@@ -4305,8 +4357,6 @@ int main (int argc, char *argv[]) {
 	#define INFO_ROWS_SHOWN 5 // the rest scroll into view
 	int info_row = 0; // selected row on the version screen
 	int info_start = 0; // first row shown
-	uint32_t clear_armed_at = 0; // first X press on Most played, a second one within CLEAR_CONFIRM_MS clears
-	#define CLEAR_CONFIRM_MS 3000
 	int show_setting = 0; // 1=brightness,2=volume
 	int was_online = PLAT_isOnline();
 	
@@ -4374,14 +4424,13 @@ int main (int argc, char *argv[]) {
 		}
 		
 		int is_online = PLAT_isOnline();
-		if (was_online!=is_online) dirty = 1;
+		if (was_online!=is_online) {
+			dirty = 1;
+			if (show_version) getWifiStatus(wifi_status, sizeof(wifi_status));
+		}
 		was_online = is_online;
 		
 		if (show_version) {
-			if (clear_armed_at && (now-clear_armed_at>=CLEAR_CONFIRM_MS || info_row!=INFO_ROW_MOST_PLAYED)) {
-				clear_armed_at = 0;
-				dirty = 1;
-			}
 			if (PAD_justPressed(BTN_B) || PAD_tappedMenu(now)) {
 				show_version = 0;
 				dirty = 1;
@@ -4434,25 +4483,16 @@ int main (int argc, char *argv[]) {
 				SFX_play(SFX_TICK);
 				dirty = 1;
 			}
-			else if (info_row==INFO_ROW_MOST_PLAYED && PAD_justPressed(BTN_X) && info_top_name[0]) {
-				if (clear_armed_at && now-clear_armed_at<CLEAR_CONFIRM_MS) {
-					// kept as a backup rather than deleted so a mistaken clear can be undone by hand
-					rename(PLAYTIME_PATH, PLAYTIME_PATH ".bak");
-					sync();
-					clear_armed_at = 0;
-					info_top_name[0] = '\0';
-					if (version) SDL_FreeSurface(version);
-					version = NULL; // rebuilt with the cleared play time
+			else if (info_row==INFO_ROW_WIFI && PAD_justPressed(BTN_A)) { // the Wi-Fi tool, then back here
+				if (exists(WIFI_PAK)) {
+					SFX_play(SFX_CONFIRM);
+					if (top->entries->count>0) saveLast(((Entry*)top->entries->items[top->selected])->path);
+					char pak[MAX_PATH], cmd[MAX_PATH*2];
+					strcpy(pak, WIFI_PAK);
+					snprintf(cmd, sizeof(cmd), "'%s'", escapeSingleQuotes(pak));
+					queueNext(cmd);
 				}
-				else clear_armed_at = now;
-				dirty = 1;
-			}
-			else if (info_row==INFO_ROW_MOST_PLAYED && PAD_justPressed(BTN_A) && info_top_name[0]) {
-				show_version = 0;
-				if (!HAS_POWER_BUTTON && !simple_mode) PWR_disableSleep();
-				most_played_from_info = 1;
-				openDirectory(FAUX_MOSTPLAYED_PATH, 0);
-				if (top->entries->count>0) readyResume(top->entries->items[top->selected]);
+				else showFlash("The Wi-Fi tool isn't installed", 0);
 				dirty = 1;
 			}
 			else if (info_row==INFO_ROW_THEME && (PAD_justRepeated(BTN_LEFT) || PAD_justRepeated(BTN_RIGHT))) {
@@ -4465,7 +4505,7 @@ int main (int argc, char *argv[]) {
 				version = NULL; // its text is drawn in the theme's colors
 				dirty = 1;
 			}
-			else if (info_row>INFO_ROW_MOST_PLAYED && info_row<INFO_ROW_THEME && (PAD_justRepeated(BTN_LEFT) || PAD_justRepeated(BTN_RIGHT))) { // power timers
+			else if (info_row>INFO_ROW_WIFI && info_row<INFO_ROW_THEME && (PAD_justRepeated(BTN_LEFT) || PAD_justRepeated(BTN_RIGHT))) { // power timers
 				// clamped rather than wrapped so holding left/right can't jump to Never by accident
 				int timer = info_row - 1;
 				int index = PWR_getTimer(timer) + (PAD_justRepeated(BTN_RIGHT) ? 1 : -1);
@@ -4479,6 +4519,7 @@ int main (int argc, char *argv[]) {
 		else {
 			if (PAD_tappedMenu(now)) {
 				show_version = 1;
+				getWifiStatus(wifi_status, sizeof(wifi_status));
 				dirty = 1;
 				SFX_play(SFX_CONFIRM);
 				if (!HAS_POWER_BUTTON && !simple_mode) PWR_enableSleep();
@@ -4729,13 +4770,7 @@ int main (int argc, char *argv[]) {
 			else if (PAD_justPressed(BTN_B) && stack->count>1) {
 				SFX_play(SFX_BACK);
 				random_everywhere = 0;
-				int from_most_played = exactMatch(top->path, FAUX_MOSTPLAYED_PATH);
 				closeDirectory();
-				if (from_most_played && most_played_from_info) {
-					most_played_from_info = 0;
-					show_version = 1;
-					if (!HAS_POWER_BUTTON && !simple_mode) PWR_enableSleep();
-				}
 				total = top->entries->count;
 				dirty = 1;
 				// can_resume = 0;
@@ -4841,51 +4876,7 @@ int main (int argc, char *argv[]) {
 			
 			if (show_version) {
 				if (!version) {
-					// minui restarts after every game so reading play time once here stays current
-					char played[32] = "None yet";
-					char top_path[MAX_PATH];
-					int total_seconds, top_seconds;
-					if (getPlayTimeTotals(&total_seconds, top_path, &top_seconds)) {
-						formatPlayTime(total_seconds, played);
-						if (top_path[0]) getDisplayName(top_path, info_top_name);
-					}
-					
-					// TODO: not sure if I want bare PLAT_* calls here
-					// the commit in version.txt is the stock release's, not this build's, so it's left out
-					char* keys[] = { "Play time" }; // release and model left off to make room for the settings rows
-					char* values[] = { played };
-					int line_count = 1;
-					
-					int l_width = 0;
-					for (int i=0; i<line_count; i++) {
-						int w;
-						TTF_SizeUTF8(font.large, keys[i], &w, NULL);
-						if (w>l_width) l_width = w;
-					}
-					int x = l_width + SCALE1(8);
-					int max_r_width = screen->w - SCALE1(PADDING*2 + BUTTON_PADDING*2) - x;
-					
-					SDL_Surface* key_txts[4];
-					SDL_Surface* val_txts[4];
-					int r_width = 0;
-					for (int i=0; i<line_count; i++) {
-						char value[256];
-						GFX_truncateText(font.large, values[i], value, max_r_width, 0);
-						key_txts[i] = TTF_RenderUTF8_Blended(font.large, keys[i], COLOR_DARK_TEXT);
-						val_txts[i] = TTF_RenderUTF8_Blended(font.large, value, COLOR_WHITE);
-						if (val_txts[i]->w>r_width) r_width = val_txts[i]->w;
-					}
-					
-					#define VERSION_LINE_HEIGHT 18 // two lines plus four rows fill the space between the top and bottom bars
-					int w = x + r_width;
-					int h = SCALE1(VERSION_LINE_HEIGHT*(line_count-1)) + val_txts[line_count-1]->h; // room for the last line's descenders
-					version = SDL_CreateRGBSurface(0,w,h,16,0,0,0,0);
-					for (int i=0; i<line_count; i++) {
-						SDL_BlitSurface(key_txts[i], NULL, version, &(SDL_Rect){0,SCALE1(VERSION_LINE_HEIGHT*i)});
-						SDL_BlitSurface(val_txts[i], NULL, version, &(SDL_Rect){x,SCALE1(VERSION_LINE_HEIGHT*i)});
-						SDL_FreeSurface(key_txts[i]);
-						SDL_FreeSurface(val_txts[i]);
-					}
+					version = TTF_RenderUTF8_Blended(font.large, "Settings", COLOR_DARK_TEXT); // (play time is in Tools now)
 				}
 				// most played and the power timers sit under the version info, the whole block centered
 				int rows_w = MAX(version->w, SCALE1(260));
@@ -4911,12 +4902,11 @@ int main (int argc, char *argv[]) {
 					}
 					char* name;
 					char value[256];
-					if (i==INFO_ROW_MOST_PLAYED) {
-						name = "Most played";
+					if (i==INFO_ROW_WIFI) {
+						name = "Wi-Fi";
 						int name_w;
 						TTF_SizeUTF8(font.large, name, &name_w, NULL);
-						char* shown = clear_armed_at ? "Press X again" : (info_top_name[0] ? info_top_name : "None yet");
-						GFX_truncateText(font.large, shown, value, rows_w - name_w - SCALE1(BUTTON_PADDING*2), 0);
+						GFX_truncateText(font.large, wifi_status, value, rows_w - name_w - SCALE1(BUTTON_PADDING*2), 0);
 					}
 					else if (i==INFO_ROW_THEME) {
 						name = "Theme";
@@ -4956,7 +4946,7 @@ int main (int argc, char *argv[]) {
 
 				// buttons (duped and trimmed from below)
 				int right_w = 0;
-				if (info_row==INFO_ROW_MOST_PLAYED && info_top_name[0]) right_w = GFX_blitButtonGroup((char*[]){ "B","BACK", "A","VIEW", NULL }, 1, screen, 1);
+				if (info_row==INFO_ROW_WIFI) right_w = GFX_blitButtonGroup((char*[]){ "B","BACK", "A","SET UP", NULL }, 1, screen, 1);
 				else if (info_row==INFO_ROW_MUSIC) right_w = GFX_blitButtonGroup((char*[]){ "B","BACK", "A",BGM_isEnabled() ? "OFF" : "ON", NULL }, 1, screen, 1);
 				else if (info_row==INFO_ROW_CLOCK) right_w = GFX_blitButtonGroup((char*[]){ "B","BACK", "A","SET TIME", NULL }, 1, screen, 1);
 				else right_w = GFX_blitButtonGroup((char*[]){ "B","BACK",  NULL }, 0, screen, 1);
@@ -4975,7 +4965,6 @@ int main (int argc, char *argv[]) {
 					SDL_BlitSurface(text, NULL, screen, &(SDL_Rect){ SCALE1(PADDING + BUTTON_PADDING), pill_y + (SCALE1(PILL_SIZE) - text->h) / 2 });
 					SDL_FreeSurface(text);
 				}
-				else if (info_row==INFO_ROW_MOST_PLAYED && info_top_name[0]) GFX_blitButtonGroup((char*[]){ "X","CLEAR", NULL }, 0, screen, 0);
 				else GFX_blitButtonGroup((char*[]){ BTN_SLEEP==BTN_POWER?"POWER":"MENU","SLEEP",  NULL }, 0, screen, 0);
 
 				flash_gpu = 0;
@@ -5078,6 +5067,7 @@ int main (int argc, char *argv[]) {
 				else {
 					// TODO: for some reason screen's dimensions end up being 0x0 in GFX_blitMessage...
 					if (inSwitcher()) GFX_blitMessage(font.small, "No games pinned yet\n\nHold SELECT on a game in a list,\nor press X in a game's menu", screen, &(SDL_Rect){0,0,screen->w,screen->h});
+					else if (exactMatch(top->path, FAUX_MOSTPLAYED_PATH)) GFX_blitMessage(font.small, "No play time yet\n\nPlay a game and it shows up here", screen, &(SDL_Rect){0,0,screen->w,screen->h});
 					else GFX_blitMessage(font.large, "Empty folder", screen, &(SDL_Rect){0,0,screen->w,screen->h}); //, NULL);
 				}
 			

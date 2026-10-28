@@ -26,6 +26,9 @@ mkdir -p "$STAGE"
 rsync -a --delete --exclude build --exclude releases --exclude '._*' --exclude .DS_Store "$REPO/" "$STAGE/"
 cd "$STAGE"
 find workspace -type d -name build -prune -exec rm -rf {} +
+# the releases already made, so a second one on the same day is numbered after them (MinUIPlus-<date>-1 and so on)
+mkdir -p releases
+for zip in "$REPO"/releases/MinUIPlus-*.zip; do [ -f "$zip" ] && touch "releases/$(basename "$zip")"; done
 
 echo "== setup"
 script -q /dev/null make setup </dev/null >/dev/null # (it checks for a terminal)
