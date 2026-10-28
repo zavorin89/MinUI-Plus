@@ -68,6 +68,8 @@ were taken by the A30 itself, border and LCD grid included.
 - **RetroAchievements**: unlock popups, an achievements list in the pause menu, hardcore mode, and playing offline
   (unlocks are sent later), PlayStation `.chd` discs included
 - **Game menu** (MENU + Y on a game): pick its emulator core, download its box art, rename it, delete it
+- **Multi-disc games merge themselves**: drop in "(Disc 1)", "(Disc 2)"... files and MinUI+ turns them into one
+  game, with a playlist and your saves carried over
 - **Rename any game** right on the device (MENU + Y, Rename) without breaking anything: its saves, save states,
   box art, play time and favorite all follow the new name
 - **Game switcher**: hold MENU anywhere, even mid-game, to jump between your pinned games, each shown as a picture of
@@ -147,6 +149,31 @@ MinUI+ keeps track of how long you play every game, automatically, from the mome
 - **Rename**: edit the game's name on the on-screen keyboard. Its box art, saves, save states, settings, border,
   play time, favorite, recents and collections all follow the new name. Multi-disc games too.
 - **Delete game**: asks first, then whether to also delete its saves, and its box art.
+
+### Multi-disc games
+
+Just copy every disc into the system's folder, named the usual way, and MinUI+ does the rest the next time the menu
+opens:
+
+```
+Roms/Sony PlayStation (PS)/Final Fantasy IX (Disc 1).chd
+Roms/Sony PlayStation (PS)/Final Fantasy IX (Disc 2).chd
+Roms/Sony PlayStation (PS)/Final Fantasy IX (Disc 3).chd
+Roms/Sony PlayStation (PS)/Final Fantasy IX (Disc 4).chd
+```
+
+becomes one game, **Final Fantasy IX**, in its own folder with a playlist (`Final Fantasy IX.m3u`):
+
+- It recognizes `(Disc 1)`, `(Disk 1)` and `(CD 1)`, in any case and with "of 4" or not, for `.chd`, `.cue`
+  (with its `.bin` tracks), `.ccd`, `.pbp`, `.iso` and `.img`, up to 9 discs.
+- **Your progress comes along**: the newest memory card and save states from any disc become the game's, and loading
+  a state starts the disc it was made on.
+- Recently Played, Favorites and the game switcher follow the game to its new place.
+- A folder that already has its discs but no playlist gets one too. One that has a playlist is left alone.
+- **Switching discs** in a game: in the pause menu, Continue shows the current disc. Press Left or Right to change it.
+
+You can still set a game up by hand: put its discs in a folder, and an `.m3u` with the folder's name listing each
+disc's file on its own line.
 
 ### Your own box art
 

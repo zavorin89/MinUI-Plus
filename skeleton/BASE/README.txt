@@ -105,7 +105,9 @@ To streamline launching multi-file disc-based games with MinUI place your bin/cu
     Harmful Park (English v1.0).bin
     Harmful Park (English v1.0).cue
 
-For multi-disc games, put all the files for all the discs in a single folder. Then create an m3u file in that folder (just a text file containing the relative path to each disc's cue file on a separate line) with the same name as the folder. Instead of showing the entire messy contents of the folder, MinUI will launch the appropriate cue file, eg. For a "Policenauts" folder structured like this:
+Multi-disc games set themselves up: copy every disc into the system's folder, named like "Final Fantasy IX (Disc 1).chd", "Final Fantasy IX (Disc 2).chd" (or "Disk 1", "CD 1"), and the next time the menu opens MinUI+ moves them into a "Final Fantasy IX" folder with an m3u, and carries your memory card and save states over to the merged game.
+
+To set one up by hand instead, put all the files for all the discs in a single folder. Then create an m3u file in that folder (just a text file containing the relative path to each disc's cue file on a separate line) with the same name as the folder. Instead of showing the entire messy contents of the folder, MinUI will launch the appropriate cue file, eg. For a "Policenauts" folder structured like this:
 
   Policenauts (English v1.0)/
     Policenauts (English v1.0).m3u
