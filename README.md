@@ -68,6 +68,8 @@ were taken by the A30 itself, border and LCD grid included.
 - **RetroAchievements**: unlock popups, an achievements list in the pause menu, hardcore mode, and playing offline
   (unlocks are sent later), PlayStation `.chd` discs included
 - **Game menu** (MENU + Y on a game): pick its emulator core, download its box art, rename it, delete it
+- **Rename any game** right on the device (MENU + Y, Rename) without breaking anything: its saves, save states,
+  box art, play time and favorite all follow the new name
 - **Game switcher**: hold MENU anywhere, even mid-game, to jump between your pinned games, each shown as a picture of
   exactly where you left it and picking up from that moment
 - **Favorites**: mark any game with Y and it joins one list with every system's favorites, with box art, in the
