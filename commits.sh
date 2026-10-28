@@ -1,6 +1,7 @@
 #!/bin/bash
 
 show() {
+	[ -d "$1" ] || return 0
 	pushd "$1" >> /dev/null
 	HASH=$(git rev-parse --short=8 HEAD)
 	NAME=$(basename $PWD)
@@ -12,6 +13,7 @@ show() {
 	printf '\055 %-24s%-10s%-12s%s\n' $NAME $HASH $DATE $REPO
 }
 list() {
+	[ -d "$1" ] || return 0 # (eg. no toolchains or core sources in this checkout)
 	pushd "$1" >> /dev/null
 	for D in ./*; do
 		show "$D"

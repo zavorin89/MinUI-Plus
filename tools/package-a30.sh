@@ -28,7 +28,7 @@ cd "$STAGE"
 find workspace -type d -name build -prune -exec rm -rf {} +
 
 echo "== setup"
-script -q /dev/null make setup >/dev/null # (it checks for a terminal)
+script -q /dev/null make setup </dev/null >/dev/null # (it checks for a terminal)
 
 echo "== building in my282-toolchain"
 # the cores are put in place below, the rest is the workspace makefile's list
