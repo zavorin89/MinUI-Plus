@@ -254,14 +254,18 @@ Everything on screen has a button hint. These are the ones you won't see:
 
 ## Building
 
-MinUI+ builds like MinUI, in Docker, on macOS or Linux:
+MinUI+ builds in Docker, with MinUI's my282 toolchain image (`make PLATFORM=my282 shell` sets it up once), on
+macOS or Linux:
 
 ```sh
-make
+tools/package-a30.sh <stock MinUI card or release>
 ```
 
-builds the A30 release into `releases/` as one `MinUIPlus-<date>.zip`. The first build also
-builds the emulator cores from the libretro sources, which takes a while.
+builds the A30 release into `releases/` as one `MinUIPlus-<date>.zip`. The stock emulator cores are MinUI's own
+builds, taken from a stock MinUI card or an unzipped MinUI release (its `.system/my282/cores` and `Emus/my282`);
+the two extra SNES cores are built from the libretro sources. The script copies the workspace into Docker instead of
+mounting it, so it also works from a drive Docker can't share. Plain `make` works too where the workspace can be
+mounted, and builds every core from source, which takes a while.
 
 Some extra pieces live in `tools/`:
 

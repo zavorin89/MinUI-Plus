@@ -15,6 +15,7 @@ ifeq (,$(PLATFORMS))
 # but MinUI+'s additions were only made and tested on the A30
 PLATFORMS = my282
 endif
+ALL_PLATFORMS = gkdpixel m17 magicmini miyoomini my282 my355 rg35xx rg35xxplus rg40xxcube rgb30 tg3040 tg5040 trimuismart zero28
 
 ###########################################################
 
@@ -162,6 +163,13 @@ package: tidy
 	cp ./workspace/readmes/EXTRAS-out.txt ./build/EXTRAS/README.txt
 	rm -rf ./workspace/readmes
 	
+	# only the platforms built here: the skeleton has every device's folders
+	for DIR in ./build/SYSTEM ./build/EXTRAS/Tools ./build/EXTRAS/Emus; do \
+		for P in $(ALL_PLATFORMS); do \
+			echo " $(PLATFORMS) " | grep -q " $$P " || rm -rf "$$DIR/$$P"; \
+		done; \
+	done
+
 	cd ./build/SYSTEM && echo "$(RELEASE_NAME)\n$(BUILD_HASH)" > version.txt
 	./commits.sh > ./build/SYSTEM/commits.txt
 	cd ./build && find . -type f -name '.DS_Store' -delete
