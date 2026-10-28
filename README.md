@@ -8,8 +8,14 @@ effects, Wi-Fi, a game switcher, per-game emulator cores, and a lot of work on s
 It's preconfigured to look its best from the first boot: every system has its border, LCD grid or scanlines,
 LCD ghosting and color correction already set up, and the CPU speed adjusts itself to each game.
 
+<p align="center">
+  <img src="github/screenshots/carousel.png" width="320" alt="Box art carousel">
+  <img src="github/screenshots/list.png" width="320" alt="Game list with box art">
+</p>
+
 > MinUI+ is made for and tested on the **Miyoo A30** only.
 
+- [Screenshots](#screenshots)
 - [Highlights](#highlights)
 - [Installing](#installing)
 - [The launcher](#the-launcher)
@@ -21,6 +27,28 @@ LCD ghosting and color correction already set up, and the CPU speed adjusts itse
 - [Folders on the card](#folders-on-the-card)
 - [Building](#building)
 - [Credits](#credits)
+
+## Screenshots
+
+The launcher screens are MinUI+'s own code drawing at the A30's 640x480, captured on a computer. The in-game ones
+were taken by the A30 itself, border and LCD grid included.
+
+| | |
+| :---: | :---: |
+| <img src="github/screenshots/carousel-gbc.png" width="320" alt="Carousel, Game Boy Color"> | <img src="github/screenshots/carousel-snes.png" width="320" alt="Carousel, Super Nintendo"> |
+| **Box art carousel**, sliding as you scroll | One look for every system, in any theme |
+| <img src="github/screenshots/systems.png" width="320" alt="System list with system art"> | <img src="github/screenshots/letter-jump.png" width="320" alt="Jump by letter"> |
+| **Systems** with their own art | **L1 / R1** jump by letter |
+| <img src="github/screenshots/box-art-download.png" width="320" alt="Downloading box art"> | <img src="github/screenshots/box-art-picker.png" width="320" alt="Box art picker"> |
+| **Box art** downloaded on the device | Every match side by side with yours, to pick from |
+| <img src="github/screenshots/game-menu.png" width="320" alt="Game menu"> | <img src="github/screenshots/settings.png" width="320" alt="Settings"> |
+| **Game menu**: core, box art, rename, delete | **Settings**: play time, themes, sounds, clock, music |
+| <img src="github/screenshots/ingame-gbc-native.jpg" width="320" alt="Game Boy Color native border"> | <img src="github/screenshots/ingame-gba-grid.jpg" width="320" alt="Game Boy Advance with LCD grid"> |
+| **Native borders**: the Kiwi lime Game Boy Color | **LCD grid** and border on the GBA |
+| <img src="github/screenshots/ingame-ps.jpg" width="320" alt="PlayStation"> | <img src="github/screenshots/controls.png" width="320" alt="Controls tool"> |
+| **PlayStation** at the speed it needs, no more | **Controls**: the shortcuts you can't see |
+
+<p align="center"><img src="github/screenshots/themes.png" width="640" alt="Color themes"><br><b>Color themes</b> for the whole interface (eleven in all)</p>
 
 ## Highlights
 
@@ -35,7 +63,8 @@ LCD ghosting and color correction already set up, and the CPU speed adjusts itse
   color correction for GBC and GBA
 - **Auto CPU speed**: each game runs at the lowest speed that keeps it smooth, and remembers what it needed
 - **Wi-Fi** with an on-screen keyboard, offered automatically when a tool needs it
-- **Fast and smooth**: art decodes on its own thread, menus are GPU drawn, saving and the game switcher are quick
+- **Built for speed**: tuned until the A30's menus feel instant. They're GPU drawn, art decodes ahead of you on
+  its own thread, the CPU boosts the instant you touch a button, and saving and the game switcher are quick
 - **Efficient sleep**: the CPU drops to a crawl, audio and Wi-Fi switch off, the device lasts far longer asleep
 
 ## Installing
@@ -193,6 +222,13 @@ Everything can be changed per system or per game in the pause menu's Options, li
 
 ## Speed and battery
 
+MinUI was already quick. MinUI+ goes after every last stutter, so the A30 feels instant: scrolling never hitches,
+menus open without a pause, art is there when you land on a game, and games start, save and switch fast. Then it
+gives the battery back everywhere it can.
+
+- **Instant response**: the CPU jumps to full speed the moment you press a button, switched in-process in a fraction
+  of a millisecond (no helper program, no shell), and only eases back down after five seconds of quiet, so scrolling
+  never starts slow.
 - **Smooth menus**: box art is decoded on a background thread ahead of where you're scrolling, menus are drawn by
   the GPU through a ring of textures so frames never wait on it, and the CPU gets a short boost while you navigate.
 - **Quick everything**: the pause menu opens without waiting, saves write their picture at half size as a 16-bit
