@@ -10,6 +10,9 @@ and battery life. All of it rebuilt to feel like MinUI: fast, quiet and out of t
 It's preconfigured to look its best from the first boot: every system has its border, LCD grid or scanlines,
 LCD ghosting and color correction already set up, and the CPU speed adjusts itself to each game.
 
+**Why:** the A30 is an underrated little handheld and a perfect everyday carry. It deserves an OS as polished and
+optimized as Onion, without the clunkiness that comes with running everything through RetroArch.
+
 <p align="center">
   <img src="github/screenshots/carousel.png" width="320" alt="Box art carousel">
   <img src="github/screenshots/list.png" width="320" alt="Game list with box art">
@@ -28,6 +31,7 @@ LCD ghosting and color correction already set up, and the CPU speed adjusts itse
 - [Controls](#controls)
 - [Folders on the card](#folders-on-the-card)
 - [Building](#building)
+- [Feedback and bugs](#feedback-and-bugs)
 - [Credits](#credits)
 
 ## Screenshots
@@ -142,6 +146,19 @@ MinUI+ keeps track of how long you play every game, automatically, from the mome
   play time, favorite, recents and collections all follow the new name. Multi-disc games too.
 - **Delete game**: asks first, then whether to also delete its saves, and its box art.
 
+### Your own box art
+
+Box art lives in a hidden `.res` folder inside each system's folder, as a PNG named after the game's file, extension
+and all:
+
+```
+Roms/Game Boy Advance (GBA)/Mario.gba
+Roms/Game Boy Advance (GBA)/.res/Mario.gba.png
+```
+
+The Box Art tool downloads covers for every game missing one (or replaces the ones you have, if you'd like) and
+resizes them to 250 pixels wide so they load fast. It can also shrink the art you already have to the same size.
+
 MENU + X deletes a game directly (still asking first).
 
 ### Game switcher (hold MENU)
@@ -170,6 +187,8 @@ decoded a little ahead on a lowest-priority thread, so it never slows the menus:
 ### Look and feel
 
 - Volume, brightness and every popup fade out smoothly
+- Long game names scroll across instead of running under the box art
+- Menu sounds: soft clicks for moving, opening and going back, switched on or off in the settings
 - MinUI keeps its place in the menus, even when you quit a game from its pause menu
 - MENU dismisses an achievement popup instead of opening the pause menu
 
@@ -216,7 +235,7 @@ Sign in with the RetroAchievements tool (on the on-screen keyboard), then just p
 | Game Boy Color | GBC | gambatte | |
 | Game Boy Advance | GBA | gpSP | mGBA |
 | NES | FC | FCEUmm | |
-| Super Nintendo | SFC | snes9x 2005 | snes9x 2010, snes9x (current), Supafaust |
+| Super Nintendo | SFC | snes9x 2005 | snes9x 2010, snes9x (current), Supafaust (the newer snes9x cores run ROM hacks the 2005 one can't) |
 | Genesis | MD | PicoDrive | |
 | PlayStation | PS | PCSX ReARMed | |
 | Game Gear, Master System | GG, SMS | PicoDrive | |
@@ -342,6 +361,14 @@ Some extra pieces live in `tools/`:
 - `tools/borders/make-native-borders.py` and `make-gba-logo.py` generate the native borders and the GBA logo
 - `tools/merge-core-folders.py` moves games from a core's own system folder (eg. an `SFC10` folder) into the main
   one, keeping each on its core and moving its saves, states and art along
+
+## Feedback and bugs
+
+MinUI+ is new, so bug reports help a lot. Open an issue at
+[github.com/zavorin89/MinUI-Plus/issues](https://github.com/zavorin89/MinUI-Plus/issues) with what you did, what
+happened and the game, and attach `.userdata/my282/logs` from the card if you can.
+
+MinUI+ was built with a lot of help from AI (Claude), and tested on a real A30 every step of the way.
 
 ## Credits
 
