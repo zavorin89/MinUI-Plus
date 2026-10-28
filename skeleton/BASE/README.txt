@@ -41,7 +41,7 @@ The Controls tool lists these too.
 ----------------------------------------
 Clock
 
-The time shows beside Wi-Fi and the battery. Change its format (12-hour, 24-hour or off) in the settings' Clock row, and press A there to set the time. The A30 has no clock battery: Wi-Fi keeps the time right, otherwise it carries on from when it was last on.
+The time shows beside Wi-Fi and the battery. Change its format (12-hour, 24-hour or off) in the settings' Clock row, and press A there to set the time. The time stays as you set it: Wi-Fi never changes it. If the clock ever loses power, it carries on from when the A30 was last on.
 
 ----------------------------------------
 Music

@@ -743,6 +743,7 @@ static int hasCollections(void) {
 	if (!exists(COLLECTIONS_PATH)) return has;
 	
 	DIR *dh = opendir(COLLECTIONS_PATH);
+	if (!dh) return has;
 	struct dirent *dp;
 	while((dp = readdir(dh)) != NULL) {
 		if (hide(dp->d_name)) continue;
@@ -4194,6 +4195,9 @@ static void openSwitcher(void) {
 	carousel_slide_from = 0;
 	if (top->entries->count>0) readyResume(top->entries->items[0]);
 }
+#ifdef __APPLE__
+#include <execinfo.h>
+#endif
 static int select_held = 0; // this SELECT press already pinned, so its release doesn't also switch views
 
 // on a crash, logs where it happened (and where minui is loaded) to minui.txt, so it can be traced to a line
@@ -4209,6 +4213,10 @@ static void crashHandler(int signal, siginfo_t* info, void* context) {
 	// minui.txt is replaced when minui restarts, so this goes to its own file too
 	int out = open(USERDATA_PATH "/logs/minui-crash.txt", O_WRONLY|O_CREAT|O_APPEND, 0644);
 	write(STDERR_FILENO, line, len);
+#ifdef __APPLE__
+	void* frames[32]; // the Mac build has no /proc/self/maps, but does have this
+	backtrace_symbols_fd(frames, backtrace(frames, 32), STDERR_FILENO);
+#endif
 	if (out>=0) write(out, line, len);
 	int maps = open("/proc/self/maps", O_RDONLY);
 	if (maps>=0) {
@@ -4833,17 +4841,6 @@ int main (int argc, char *argv[]) {
 			
 			if (show_version) {
 				if (!version) {
-					char release[256];
-					getFile(ROOT_SYSTEM_PATH "/version.txt", release, 256);
-					
-					char *tmp,*commit;
-					commit = strrchr(release, '\n');
-					commit[0] = '\0';
-					commit = strrchr(release, '\n')+1;
-					tmp = strchr(release, '\n');
-					tmp[0] = '\0';
-					
-					
 					// minui restarts after every game so reading play time once here stays current
 					char played[32] = "None yet";
 					char top_path[MAX_PATH];

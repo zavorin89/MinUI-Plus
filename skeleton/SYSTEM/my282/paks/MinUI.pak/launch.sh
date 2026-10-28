@@ -27,7 +27,7 @@ echo 0 > /sys/class/leds/led1/brightness
 reclock
 
 # stock firmware services a handheld has no use for, which compete with MinUI for the CPU right after boot:
-# a router's DHCP/DNS server, a clock sync that retries forever offline (wifi.sh sets the clock itself) and an empty cron
+# a router's DHCP/DNS server, a clock sync (it would replace the time that was set with UTC: there's no time zone) and an empty cron
 # (stopped through the service manager, since it restarts dnsmasq and ntpd when they're just killed)
 (for SERVICE in dnsmasq sysntpd cron; do /etc/init.d/$SERVICE stop; done) >/dev/null 2>&1 &
 

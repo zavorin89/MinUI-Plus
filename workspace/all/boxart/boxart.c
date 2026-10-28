@@ -729,7 +729,7 @@ static void findOne(char* path) {
 		showMessage("The box art library doesn't cover this system", 1);
 		return;
 	}
-	PWR_setCPUSpeed(CPU_SPEED_PERFORMANCE);
+	PWR_setCPUSpeed(CPU_SPEED_NORMAL);
 	showMessage("Finding box art...", 0);
 	ArtList list = {0};
 	if (!loadArtList(game.system, &list)) {
@@ -758,7 +758,7 @@ static void findOne(char* path) {
 
 static void findMissing(int replace) {
 	if (!hasWifi() && !WIFI_offer(screen, "Box art needs Wi-Fi")) return;
-	PWR_setCPUSpeed(CPU_SPEED_PERFORMANCE); // decoding and resizing is the slow part
+	PWR_setCPUSpeed(CPU_SPEED_NORMAL); // decoding and resizing is the slow part (not the top speed: minutes flat out there is asking for trouble)
 	PWR_disableAutosleep(); // a long run with no buttons pressed
 	log_file = fopen(LOG_PATH, "w");
 
@@ -826,7 +826,7 @@ static int collectResizable(Game* games) {
 	return count;
 }
 static void resizeAll(void) {
-	PWR_setCPUSpeed(CPU_SPEED_PERFORMANCE);
+	PWR_setCPUSpeed(CPU_SPEED_NORMAL);
 	PWR_disableAutosleep();
 	Game* games = calloc(MAX_GAMES, sizeof(Game));
 	int count = collectResizable(games);

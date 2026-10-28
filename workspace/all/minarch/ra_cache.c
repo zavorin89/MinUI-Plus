@@ -107,7 +107,11 @@ char* RACache_read(const char* key, size_t* length) {
 	fseek(file, 0, SEEK_END);
 	long size = ftell(file);
 	fseek(file, 0, SEEK_SET);
-	char* body = malloc(size+1);
+	char* body = size>=0 ? malloc(size+1) : NULL;
+	if (!body) {
+		fclose(file);
+		return NULL;
+	}
 	size_t got = fread(body, 1, size, file);
 	fclose(file);
 	body[got] = '\0';

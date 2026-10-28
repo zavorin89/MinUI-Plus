@@ -74,7 +74,8 @@ kept.
 - **Change core**: some systems have more than one emulator. Pick one per game, with a line about what each is good
   at; the system's default stays on top. Saves and states are kept per core, so switching never loses progress.
 - **Get box art** / **Replace box art**: downloads this game's cover from the libretro thumbnail library (turns
-  Wi-Fi on if you'd like). Covers are resized to 250 pixels wide so they load fast.
+  Wi-Fi on if you'd like). When there's more than one match (regions, revisions), every one is downloaded and shown
+  beside the art you have, to flip through and pick from. Covers are resized to 250 pixels wide so they load fast.
 - **Rename**: edit the game's name on the on-screen keyboard. Its box art, saves, save states, settings, border,
   play time, favorite, recents and collections all follow the new name. Multi-disc games too.
 - **Delete game**: asks first, then whether to also delete its saves, and its box art.
@@ -94,7 +95,7 @@ of where you left it. A picks a game up from that exact moment. In a game, holdi
 - **Theme**: several color themes for the whole interface
 - **Menu sounds**: subtle clicks for moving, opening and going back
 - **Clock**: shown beside Wi-Fi and the battery (at the top left in the carousel), 12-hour, 24-hour or off. A sets
-  the time
+  the time, which then stays as you set it (Wi-Fi never changes it)
 - **Music**: background music on or off, and its volume (Left/Right). Put songs in the `BGM` folder
 
 ### Music
@@ -142,7 +143,7 @@ Sign in with the RetroAchievements tool (on the on-screen keyboard), then just p
 - Games with no achievements, or that RetroAchievements doesn't know, show nothing at all
 - **Hardcore** mode (no save states, no fast forward), switched in the tool
 - **Offline**: unlocks earned without Wi-Fi are kept and sent the next time you're online. The tool syncs your games
-  ahead of time so their achievements and badges work offline
+  ahead of time so their achievements and badges work offline, and a rescan only looks at games that are new or changed
 - PlayStation `.chd` games are identified too
 
 ## Systems and cores
@@ -186,8 +187,8 @@ Everything can be changed per system or per game in the pause menu's Options, li
   startup. Tools that need the internet offer to turn it on.
 - **RetroAchievements**: sign in, switch hardcore on or off, and sync your games' achievements and badges for
   offline play.
-- **Box Art**: downloads covers for every game missing one from the libretro thumbnail library, or resizes the ones
-  you have.
+- **Box Art**: downloads covers for every game missing one from the libretro thumbnail library (or replaces the
+  ones you have, if you'd like), or resizes the ones you have.
 - **Controls**: a short reference of the shortcuts you can't see on screen.
 
 ## Speed and battery
