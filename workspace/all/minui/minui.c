@@ -4724,6 +4724,19 @@ int main (int argc, char *argv[]) {
 				if (total>0) readyResume(top->entries->items[top->selected]);
 				dirty = 1;
 			}
+			else if (total>0 && PAD_isPressed(BTN_MENU) && PAD_justPressed(BTN_X) && exactMatch(top->path, FAUX_MOSTPLAYED_PATH)) {
+				// Play Time: MENU + X clears it all, kept as a backup rather than deleted so a mistake can be undone by hand
+				if (askDelete(screen, "Clear all play time?", "Every game goes back to zero.", "CLEAR", "KEEP")) {
+					rename(PLAYTIME_PATH, PLAYTIME_PATH ".bak");
+					sync();
+					closeDirectory();
+					openDirectory(FAUX_MOSTPLAYED_PATH, 0); // empty now, which says so
+				}
+				total = top->entries->count;
+				can_resume = 0;
+				if (total>0) readyResume(top->entries->items[top->selected]);
+				dirty = 1;
+			}
 			else if (total>0 && inSwitcher() && PAD_justPressed(BTN_X)) {
 				// unpin the highlighted game, staying in the switcher
 				char pin_path[MAX_PATH];

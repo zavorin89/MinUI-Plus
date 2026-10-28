@@ -27,7 +27,7 @@ static Section sections[] = {
 		{ "hold SELECT",	"Pin to the game switcher" },
 		{ "START",			"Random game, any system" },
 		{ "MENU + Y",		"Game menu: core, art, rename" },
-		{ "MENU + X",		"Delete the game" },
+		{ "MENU + X",		"Delete game, or clear Play Time" },
 	}},
 	{ "Everywhere", "In games too", {
 		{ "MENU",			"Settings, or pause a game" },

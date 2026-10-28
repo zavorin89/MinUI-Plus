@@ -51,7 +51,7 @@ The time shows beside Wi-Fi and the battery. Change its format (12-hour, 24-hour
 ----------------------------------------
 Play time
 
-MinUI+ tracks how long you play every game. The pause menu shows the game's total, this session, how many sessions and your average session. Tools > Play Time ranks every game by hours, and shows your total across everything.
+MinUI+ tracks how long you play every game. The pause menu shows the game's total, this session, how many sessions and your average session. Tools > Play Time ranks every game by hours, and shows your total across everything. MENU + X there clears it all (it asks first).
 
 ----------------------------------------
 Music

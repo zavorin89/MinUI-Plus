@@ -135,7 +135,7 @@ MinUI+ keeps track of how long you play every game, automatically, from the mome
 
 - **In the pause menu**: the game's total play time, this session, how many sessions, and your average session.
 - **Play Time** (in Tools): every game you've played, ranked by hours, with its box art, its total and its average
-  session, and your total across everything as it opens.
+  session, and your total across everything as it opens. **MENU + X** there clears it all (it asks first).
 - **Recently Played** is sorted by when you actually last played, and the time follows a game through a rename.
 
 
@@ -336,7 +336,7 @@ Everything on screen has a button hint. These are the ones you won't see:
 | Hold SELECT | Pin to the game switcher |
 | START | Random game (in the system list: from any system) |
 | MENU + Y | Game menu: core, box art, rename, delete |
-| MENU + X | Delete the game |
+| MENU + X | Delete the game (in Play Time: clear all play time) |
 
 | Everywhere | |
 | --- | --- |
