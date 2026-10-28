@@ -39,6 +39,8 @@ were taken by the A30 itself, border and LCD grid included.
 | :---: | :---: |
 | <img src="github/screenshots/carousel-gbc.png" width="320" alt="Carousel, Game Boy Color"> | <img src="github/screenshots/carousel-snes.png" width="320" alt="Carousel, Super Nintendo"> |
 | **Box art carousel**, sliding as you scroll | One look for every system, in any theme |
+| <img src="github/screenshots/game-switcher.png" width="320" alt="Game switcher"> | <img src="github/screenshots/favorites.png" width="320" alt="Favorites"> |
+| **Game switcher**: hold MENU, pick up any game where you left it | **Favorites** from every system in one list |
 | <img src="github/screenshots/systems.png" width="320" alt="System list with system art"> | <img src="github/screenshots/letter-jump.png" width="320" alt="Jump by letter"> |
 | **Systems** with their own art | **L1 / R1** jump by letter |
 | <img src="github/screenshots/box-art-download.png" width="320" alt="Downloading box art"> | <img src="github/screenshots/box-art-picker.png" width="320" alt="Box art picker"> |
@@ -62,7 +64,10 @@ were taken by the A30 itself, border and LCD grid included.
 - **RetroAchievements**: unlock popups, an achievements list in the pause menu, hardcore mode, and playing offline
   (unlocks are sent later), PlayStation `.chd` discs included
 - **Game menu** (MENU + Y on a game): pick its emulator core, download its box art, rename it, delete it
-- **Game switcher**: hold MENU to jump between pinned games, each picking up right where you left off
+- **Game switcher**: hold MENU anywhere, even mid-game, to jump between your pinned games, each shown as a picture of
+  exactly where you left it and picking up from that moment
+- **Favorites**: mark any game with Y and it joins one list with every system's favorites, with box art, in the
+  list or the carousel, sorted A to Z, by system, or newest first
 - **Background music** in the menus and the pause menu, from your own mp3, ogg, flac or wav files
 - **Borders** for every handheld system, at aspect and at native scaling, in each console's own colors
 - **Preconfigured looks**: LCD grid and ghosting on handhelds, scanlines on TV consoles, Game Boy Pocket greys,
@@ -102,7 +107,18 @@ kept.
 - **L2 / R2** change the sort order: A to Z, Z to A, recently played, or favorites first.
 - **START** picks a random game. In the system list it picks a random system too, and keeps picking from every
   system each time you press it, until you open a system yourself.
-- **Favorites** (Y on a game), **Recently Played**, and **Most Played** (see [Play time](#play-time)).
+- **Favorites**, **Recently Played**, and **Most Played** (see [Favorites](#favorites) and [Play time](#play-time)).
+
+### Favorites
+
+- **Y** on any game, in any list, adds it to Favorites (or takes it off). Favorites show a dot beside their name.
+- **Favorites** is right below Recently Played in the system list: every favorite from every system in one place,
+  with its box art, as a list or a carousel.
+- **L2 / R2** in Favorites sort it A to Z, by system, or the ones you added most recently first.
+- In any system, **L2 / R2** can also sort **favorites first**, so your picks are always at the top.
+- Favorites follow a game through a rename.
+
+<p align="center"><img src="github/screenshots/favorites-carousel.png" width="480" alt="Favorites in the carousel"></p>
 
 ### Play time
 
