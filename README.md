@@ -53,10 +53,8 @@ were taken by the A30 itself, border and LCD grid included.
 | **Game menu**: core, box art, rename, delete | **Settings**: Wi-Fi, timers, themes, sounds, music, clock |
 | <img src="github/screenshots/ingame-gbc-native.jpg" width="320" alt="Game Boy Color native border"> | <img src="github/screenshots/ingame-gba-grid.jpg" width="320" alt="Game Boy Advance with LCD grid"> |
 | **Native borders**: the Kiwi lime Game Boy Color | **LCD grid** and border on the GBA |
-| <img src="github/screenshots/most-played.png" width="320" alt="Most Played"> | <img src="github/screenshots/ingame-ps.jpg" width="320" alt="PlayStation"> |
-| **Most Played**: your games ranked by play time | **PlayStation** at the speed it needs, no more |
-| <img src="github/screenshots/controls.png" width="320" alt="Controls tool"> | |
-| **Controls**: the shortcuts you can't see | |
+| <img src="github/screenshots/most-played.png" width="320" alt="Play Time"> | <img src="github/screenshots/controls.png" width="320" alt="Controls tool"> |
+| **Play Time**: your games ranked by hours played | **Controls**: the shortcuts you can't see |
 
 <p align="center"><img src="github/screenshots/themes.png" width="640" alt="Color themes"><br><b>Color themes</b> for the whole interface (eleven in all)</p>
 
