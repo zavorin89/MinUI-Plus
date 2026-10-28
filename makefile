@@ -183,7 +183,7 @@ package: tidy
 	# MinUI+ is one package for the A30: the extras (more systems, the tools, the borders) go in with the base, and only
 	# the A30's boot folder (miyoo) of the ones for MinUI's other devices
 	cd ./build/EXTRAS && cp -R Bios Emus Roms Saves Tools Borders ../BASE/
-	cd ./build/BASE && zip -r ../../releases/$(RELEASE_NAME).zip Bios Roms Saves BGM Emus Tools Borders miyoo MinUI.zip README.txt
+	cd ./build/BASE && zip -r ../../releases/$(RELEASE_NAME).zip .res Bios Roms Saves BGM Emus Tools Borders miyoo MinUI.zip README.txt
 	echo "$(RELEASE_NAME)" > ./build/latest.txt
 	
 ###########################################################

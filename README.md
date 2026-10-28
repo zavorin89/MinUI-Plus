@@ -1,9 +1,11 @@
 # MinUI+
 
-**MinUI+ is a fork of [MinUI](https://github.com/shauninman/MinUI) for the Miyoo A30.** It keeps what makes MinUI
-great: one simple launcher, the same quick in-game menu everywhere, instant sleep and resume. It adds what you'd
-miss coming from other handheld firmware: a box art carousel, RetroAchievements, menu music, borders and screen
-effects, Wi-Fi, a game switcher, per-game emulator cores, and a lot of work on speed and battery life.
+**MinUI+ is a fork of [MinUI](https://github.com/shauninman/MinUI) for the Miyoo A30 that brings together the best
+of MinUI, [Onion](https://github.com/OnionUI/Onion) and [spruce](https://github.com/spruceUI/spruceOS).** It keeps
+what makes MinUI great: one simple launcher, the same quick in-game menu everywhere, instant sleep and resume. Then it
+adds what people love about Onion and spruce: a box art carousel, RetroAchievements, play time tracking, a game
+switcher, menu music, borders and screen effects, Wi-Fi, per-game emulator cores, themes, and a lot of work on speed
+and battery life. All of it rebuilt to feel like MinUI: fast, quiet and out of the way.
 
 It's preconfigured to look its best from the first boot: every system has its border, LCD grid or scanlines,
 LCD ghosting and color correction already set up, and the CPU speed adjusts itself to each game.
@@ -45,14 +47,18 @@ were taken by the A30 itself, border and LCD grid included.
 | **Game menu**: core, box art, rename, delete | **Settings**: play time, themes, sounds, clock, music |
 | <img src="github/screenshots/ingame-gbc-native.jpg" width="320" alt="Game Boy Color native border"> | <img src="github/screenshots/ingame-gba-grid.jpg" width="320" alt="Game Boy Advance with LCD grid"> |
 | **Native borders**: the Kiwi lime Game Boy Color | **LCD grid** and border on the GBA |
-| <img src="github/screenshots/ingame-ps.jpg" width="320" alt="PlayStation"> | <img src="github/screenshots/controls.png" width="320" alt="Controls tool"> |
-| **PlayStation** at the speed it needs, no more | **Controls**: the shortcuts you can't see |
+| <img src="github/screenshots/most-played.png" width="320" alt="Most Played"> | <img src="github/screenshots/ingame-ps.jpg" width="320" alt="PlayStation"> |
+| **Most Played**: your games ranked by play time | **PlayStation** at the speed it needs, no more |
+| <img src="github/screenshots/controls.png" width="320" alt="Controls tool"> | |
+| **Controls**: the shortcuts you can't see | |
 
 <p align="center"><img src="github/screenshots/themes.png" width="640" alt="Color themes"><br><b>Color themes</b> for the whole interface (eleven in all)</p>
 
 ## Highlights
 
 - **Box art carousel**, plus box art beside the list, with art downloaded right on the device
+- **Play time tracking** for every game: total hours, sessions, average session and this session, a **Most Played**
+  ranking, and your all-time total
 - **RetroAchievements**: unlock popups, an achievements list in the pause menu, hardcore mode, and playing offline
   (unlocks are sent later), PlayStation `.chd` discs included
 - **Game menu** (MENU + Y on a game): pick its emulator core, download its box art, rename it, delete it
@@ -96,7 +102,18 @@ kept.
 - **L2 / R2** change the sort order: A to Z, Z to A, recently played, or favorites first.
 - **START** picks a random game. In the system list it picks a random system too, and keeps picking from every
   system each time you press it, until you open a system yourself.
-- **Favorites** (Y on a game), **Recently Played**, and **Most Played** with play time for each game.
+- **Favorites** (Y on a game), **Recently Played**, and **Most Played** (see [Play time](#play-time)).
+
+### Play time
+
+MinUI+ keeps track of how long you play every game, automatically, from the moment it starts:
+
+- **In the pause menu**: the game's total play time, this session, how many sessions, and your average session.
+- **Most Played**: every game you've played, ranked by hours, with its box art, its total and its average session.
+  Open it from the settings (Most played, A).
+- **In the settings**: your total play time across everything, and the game you've played most.
+- **Recently Played** is sorted by when you actually last played, and the time follows a game through a rename.
+
 
 ### The game menu (MENU + Y)
 
@@ -313,6 +330,12 @@ Some extra pieces live in `tools/`:
 ## Credits
 
 - **[MinUI](https://github.com/shauninman/MinUI)** by Shaun Inman: everything MinUI+ is built on.
+- **[Onion](https://github.com/OnionUI/Onion)** and **[spruce](https://github.com/spruceUI/spruceOS)**: the
+  inspiration for much of what MinUI+ adds. Their code isn't included; the features are rebuilt for MinUI.
+- **System art** from the **Nao-Black** theme by **Naotib**, in the
+  [NextUI Themes](https://github.com/Leviathanium/NextUI-Themes) collection (MIT license), trimmed for MinUI. The art
+  for the systems it doesn't cover (Virtual Boy, Super Game Boy, Pokémon mini, Pico-8) and the Kiwi lime Game Boy
+  Color were made for MinUI+ in the same style. See `Roms/.res/CREDITS.txt`.
 - **Screen borders** by **drkhrse**, from the [drkhrse Miyoo bezels](https://github.com/drkhrse/drkhrse_miyoo_bezels).
   The native borders are made for MinUI+ around their logos and power lights.
 - **Emulator cores** from **[libretro](https://github.com/libretro)** and their authors: gambatte, gpSP, mGBA,

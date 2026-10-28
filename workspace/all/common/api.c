@@ -267,7 +267,7 @@ SDL_Surface* GFX_init(int mode) {
 	
 	// the saved theme, by name so reordering the list doesn't change anyone's pick
 	gfx.theme = 0;
-	char theme_name[64] = "";
+	char theme_name[64] = "Lime"; // until one is picked
 	if (exists(THEME_PATH)) getFile(THEME_PATH, theme_name, sizeof(theme_name));
 	for (int i=0; i<THEME_COUNT; i++) {
 		if (prefixMatch((char*)themes[i].name, theme_name)) gfx.theme = i;

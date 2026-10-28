@@ -2315,7 +2315,7 @@ static void Menu_init(void) {
 	if (favorites_sort<0 || favorites_sort>=FAVORITES_SORT_COUNT) favorites_sort = FAVORITES_SORT_NAME;
 	folder_sort = getInt(FOLDER_SORT_PATH);
 	if (folder_sort<0 || folder_sort>=FOLDER_SORT_COUNT) folder_sort = FOLDER_SORT_AZ;
-	view_mode = getInt(VIEW_MODE_PATH)==VIEW_CAROUSEL ? VIEW_CAROUSEL : VIEW_LIST;
+	view_mode = !exists(VIEW_MODE_PATH) || getInt(VIEW_MODE_PATH)==VIEW_CAROUSEL ? VIEW_CAROUSEL : VIEW_LIST; // the carousel until one is picked
 
 	openDirectory(SDCARD_PATH, 0);
 	loadLast(); // restore state when available

@@ -1,7 +1,12 @@
-MinUI+ is a fork of MinUI for the Miyoo A30: the same simple launcher and in-game menu, plus a box art carousel, RetroAchievements, menu music, borders and screen effects, Wi-Fi, a game switcher, per-game emulator cores, and lots of work on speed and battery life. It comes set up to look its best from the first boot.
+MinUI+ is a fork of MinUI for the Miyoo A30 that brings together the best of MinUI, Onion and spruce: the same simple launcher and in-game menu, plus a box art carousel, RetroAchievements, play time tracking, menu music, borders and screen effects, Wi-Fi, a game switcher, per-game emulator cores, themes, and lots of work on speed and battery life. It comes set up to look its best from the first boot.
+
+MinUI+:
+https://github.com/zavorin89/MinUI-Plus
 
 MinUI by Shaun Inman:
 https://github.com/shauninman/minui
+
+System art from the Nao-Black theme by Naotib (NextUI Themes, MIT license). Credits for all of it are in Roms/.res/CREDITS.txt.
 
 ----------------------------------------
 Installing
@@ -42,6 +47,11 @@ The Controls tool lists these too.
 Clock
 
 The time shows beside Wi-Fi and the battery. Change its format (12-hour, 24-hour or off) in the settings' Clock row, and press A there to set the time. The time stays as you set it: Wi-Fi never changes it. If the clock ever loses power, it carries on from when the A30 was last on.
+
+----------------------------------------
+Play time
+
+MinUI+ tracks how long you play every game. The pause menu shows the game's total, this session, how many sessions and your average session. Most Played (in the settings, tap MENU) ranks every game by hours, and the settings show your total across everything.
 
 ----------------------------------------
 Music
