@@ -522,7 +522,8 @@ int main(int argc , char* argv[]) {
 	SFX_forInput(1); // clicks for moving, choosing and going back
 	BGM_start(); // the menus' music, when it's on
 	
-	enum { ROW_ACCOUNT, ROW_SYNC, ROW_HARDCORE, ROW_COUNT };
+	enum { ROW_ACCOUNT, ROW_SYNC, ROW_HARDCORE }; // (hardcore hidden while RA_HARDCORE_AVAILABLE is 0)
+	#define ROW_COUNT (RA_HARDCORE_AVAILABLE ? ROW_HARDCORE+1 : ROW_HARDCORE)
 	int selected = 0;
 	int dirty = 1;
 	int show_setting = 0;

@@ -35,6 +35,9 @@
 #define CHUNK_FRAMES 1024 // decoded per step
 #define FADE_IN_MS 1500
 #define FADE_OUT_MS 120
+#define RESUME_FADE_IN_MS 300 // picking a song up where the last menu (a tool, the launcher) left it
+#define BGM_RESUME_PATH "/tmp/minui_music_at" // <frame>\n<song path>: where the last menu stopped, cleared at boot
+static int fade_in_ms = FADE_IN_MS;
 
 enum { SONG_NONE, SONG_MP3, SONG_OGG, SONG_FLAC, SONG_WAV };
 
@@ -70,6 +73,8 @@ static struct {
 	int rate;
 	uint32_t phase; // the resampler's place between the last frame and the next, Q16
 	int16_t previous[2];
+	uint64_t decoded; // the song's own frames decoded so far
+	int index; // in bgm.songs
 } song;
 
 static void BGM_mix(int16_t* stream, int frames);
@@ -208,6 +213,57 @@ static int openSong(char* path) {
 	}
 	return 1;
 }
+static int seekSong(uint64_t frame) {
+	switch (song.type) {
+		case SONG_MP3: {
+			// a table of seek points from the frame headers alone (no decoding), then only a frame or two to decode
+			static drmp3_seek_point points[64];
+			drmp3_uint32 count = 64;
+			if (drmp3_calculate_seek_points(&song.mp3, &count, points)) drmp3_bind_seek_table(&song.mp3, count, points);
+			return drmp3_seek_to_pcm_frame(&song.mp3, frame);
+		}
+		case SONG_OGG: return stb_vorbis_seek(song.ogg, (unsigned int)frame);
+		case SONG_FLAC: return drflac_seek_to_pcm_frame(song.flac, frame);
+		case SONG_WAV: return drwav_seek_to_pcm_frame(&song.wav, frame);
+	}
+	return 0;
+}
+// the song the last menu was playing, at the point it got to, so moving between the launcher and the tools
+// carries on with it instead of starting over (once: the next song is the shuffle's)
+static int resumeSong(void) {
+	if (!exists(BGM_RESUME_PATH)) return 0;
+	char saved[MAX_PATH+32] = "";
+	getFile(BGM_RESUME_PATH, saved, sizeof(saved));
+	unlink(BGM_RESUME_PATH);
+	char* path = strchr(saved, '\n');
+	if (!path) return 0;
+	*path++ = '\0';
+	uint64_t frame = strtoull(saved, NULL, 10);
+	for (int i=0; i<bgm.song_count; i++) {
+		if (!exactMatch(bgm.songs[i], path)) continue;
+		if (!openSong(bgm.songs[i])) return 0;
+		song.index = i;
+		if (frame && !seekSong(frame)) {
+			closeSong();
+			return 0;
+		}
+		song.decoded = frame;
+		fade_in_ms = RESUME_FADE_IN_MS;
+		LOG_info("music: %s, picked up at %.1fs\n", bgm.songs[i], (double)frame / song.rate);
+		return 1;
+	}
+	return 0;
+}
+// where this menu stopped, for the next one: what's been heard, not what's waiting in the ring
+static void saveResume(void) {
+	uint32_t queued = bgm.written - bgm.read; // at the device's rate
+	uint64_t ahead = (uint64_t)queued * song.rate / bgm.rate;
+	uint64_t heard = song.decoded>ahead ? song.decoded - ahead : 0;
+	char line[MAX_PATH+32];
+	snprintf(line, sizeof(line), "%llu\n%s", (unsigned long long)heard, bgm.songs[song.index]);
+	putFile(BGM_RESUME_PATH, line);
+}
+
 // every song once in a shuffled order, then shuffled again; the first is never the one last launch ended on
 // (kept in /tmp), nor does a new order start with the song that just played
 static int order[SONG_MAX];
@@ -236,6 +292,7 @@ static int nextSong(void) {
 		last = pick;
 		putFile(BGM_LAST_PATH, bgm.songs[pick]);
 		if (openSong(bgm.songs[pick])) {
+			song.index = pick;
 			LOG_info("music: %s\n", bgm.songs[pick]);
 			return 1;
 		}
@@ -304,6 +361,7 @@ static void* BGM_run(void* arg) {
 
 	static int16_t chunk[CHUNK_FRAMES * 2];
 	int playing = 0;
+	int first = 1; // the first song can be the last menu's, picked up where it was
 	// what decoding costs, logged per song: CPU time against the time it plays for
 	struct timespec cpu_from;
 	uint32_t written_from = 0;
@@ -316,12 +374,14 @@ static void* BGM_run(void* arg) {
 			continue;
 		}
 		if (!playing) {
-			playing = nextSong();
+			playing = (first && resumeSong()) || nextSong();
+			first = 0;
 			if (!playing) break; // nothing that plays
 			clock_gettime(CLOCK_THREAD_CPUTIME_ID, &cpu_from);
 			written_from = bgm.written;
 		}
 		int frames = decode(chunk);
+		if (frames>0) song.decoded += frames;
 		if (frames>0) resampleInto(chunk, frames);
 		if (frames<=0) {
 			logCost(&cpu_from, written_from);
@@ -330,6 +390,7 @@ static void* BGM_run(void* arg) {
 		}
 	}
 	if (playing) {
+		if (bgm.quit) saveResume(); // stopped, not finished: the next menu carries on from here
 		logCost(&cpu_from, written_from);
 		closeSong();
 	}
@@ -343,7 +404,7 @@ static void BGM_mix(int16_t* stream, int frames) {
 	__sync_synchronize();
 	int count = MIN((uint32_t)frames, ready);
 	int level = bgm.level;
-	int up = bgm.gain / (bgm.rate * FADE_IN_MS / 1000) + 1; // the same time to fade in at any volume
+	int up = bgm.gain / (bgm.rate * fade_in_ms / 1000) + 1; // the same time to fade in at any volume
 	int down = 65536 / (bgm.rate * FADE_OUT_MS / 1000) + 1;
 	uint32_t at = bgm.read;
 	for (int i=0; i<count; i++) {

@@ -326,7 +326,7 @@ void RA_init(const char* core_tag, const char* rom_path, const void* rom_data, s
 	RA_getDiscReader(&hash_callbacks.cdreader);
 	hash_callbacks.error_message = hashError; // why a game couldn't be identified, in the log
 	rc_client_set_hash_callbacks(client, &hash_callbacks);
-	hardcore = exists(RA_HARDCORE_PATH);
+	hardcore = RA_HARDCORE_AVAILABLE && exists(RA_HARDCORE_PATH);
 	load_finished = 0;
 	hash_retry = 0;
 	rc_client_set_hardcore_enabled(client, hardcore); // hardcore games start fresh instead of resuming a state, see minarch

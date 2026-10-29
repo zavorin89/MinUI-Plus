@@ -620,7 +620,7 @@ static void State_resume(void) {
 	
 	int slot = getInt(RESUME_SLOT_PATH);
 	unlink(RESUME_SLOT_PATH);
-	if (exists(RA_HARDCORE_PATH) && RA_isLoading()) {
+	if (RA_HARDCORE_AVAILABLE && exists(RA_HARDCORE_PATH) && RA_isLoading()) {
 		deferred_resume_slot = slot;
 		deferred_resume_at = SDL_GetTicks();
 		return;

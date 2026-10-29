@@ -63,7 +63,7 @@ were taken by the A30 itself, border and LCD grid included.
 - **Box art carousel**, plus box art beside the list, with art downloaded right on the device
 - **Play time tracking** for every game: total hours, sessions, average session and this session, a **Most Played**
   ranking, and your all-time total
-- **RetroAchievements**: unlock popups, an achievements list in the pause menu, hardcore mode, and playing offline
+- **RetroAchievements**: unlock popups, an achievements list in the pause menu, and playing offline
   (unlocks are sent later), PlayStation `.chd` discs included
 - **Game menu** (MENU + Y on a game): pick its emulator core, download its box art, rename it, delete it
 - **Multi-disc games merge themselves**: drop in "(Disc 1)", "(Disc 2)"... files and MinUI+ turns them into one
@@ -249,7 +249,9 @@ Sign in with the RetroAchievements tool (on the on-screen keyboard), then just p
 
 - Unlock popups with the achievement's badge and a chime, and a summary when a game starts
 - Games with no achievements, or that RetroAchievements doesn't know, show nothing at all
-- **Hardcore** mode (no save states, no fast forward), switched in the tool
+- **No hardcore mode yet**: RetroAchievements only counts hardcore unlocks from emulators it has approved, and
+  MinUI+ isn't one, so unlocks are softcore. A MinUI+ hardcore of its own (hardcore rules on the A30, unlocks still
+  sent as softcore) is planned
 - **Offline**: unlocks earned without Wi-Fi are kept and sent the next time you're online. The tool syncs your games
   ahead of time so their achievements and badges work offline, and a rescan only looks at games that are new or changed
 - PlayStation `.chd` games are identified too
@@ -292,7 +294,7 @@ Everything can be changed per system or per game in the pause menu's Options, li
 ## Tools
 
 - **Play Time**: every game ranked by the hours you've put in (see [Play time](#play-time)).
-- **RetroAchievements**: sign in, switch hardcore on or off, and sync your games' achievements and badges for
+- **RetroAchievements**: sign in, and sync your games' achievements and badges for
   offline play.
 - **Box Art**: downloads covers for every game missing one from the libretro thumbnail library (or replaces the
   ones you have, if you'd like), or resizes the ones you have.

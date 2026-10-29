@@ -1887,6 +1887,39 @@ static void closeDirectory(void) {
 
 static void showFlash(char* text, int big);
 static int flash_ms; // (defined with the popups below)
+
+// hardcore mode, shown in the game switcher: a pixel skull and HARDCORE in a pill beside the time and battery
+#define RA_HARDCORE_FLAG SHARED_USERDATA_PATH "/.achievements/hardcore.txt" // (set by the RetroAchievements tool)
+#define RA_LOGIN_PATH SHARED_USERDATA_PATH "/retroachievements.txt"
+static void blitHardcoreBadge(SDL_Surface* screen, int hardware_w) {
+	static const char* skull[] = { // the menu font has no skull, so it's drawn
+		".XXXXX.",
+		"XXXXXXX",
+		"X..X..X",
+		"X..X..X",
+		"XXX.XXX",
+		".XXXXX.",
+		".X.X.X.",
+	};
+	int dot = SCALE1(2);
+	int skull_w = 7 * dot, skull_h = 7 * dot;
+	SDL_Surface* text = TTF_RenderUTF8_Blended(font.small, "HARDCORE", COLOR_WHITE);
+	if (!text) return;
+	int gap = SCALE1(4);
+	int w = SCALE1(BUTTON_PADDING) + skull_w + gap + text->w + SCALE1(BUTTON_PADDING);
+	int h = SCALE1(PILL_SIZE);
+	int x = screen->w - SCALE1(PADDING) - hardware_w - SCALE1(4) - w;
+	int y = SCALE1(PADDING);
+	GFX_blitPill(ASSET_DARK_GRAY_PILL, screen, &(SDL_Rect){ x, y, w, h });
+	int sx = x + SCALE1(BUTTON_PADDING), sy = y + (h - skull_h) / 2;
+	for (int r=0; r<7; r++) {
+		for (int c=0; c<7; c++) {
+			if (skull[r][c]=='X') SDL_FillRect(screen, &(SDL_Rect){ sx + c*dot, sy + r*dot, dot, dot }, RGB_WHITE);
+		}
+	}
+	SDL_BlitSurface(text, NULL, screen, &(SDL_Rect){ sx + skull_w + gap, y + (h - text->h) / 2 });
+	SDL_FreeSurface(text);
+}
 static void Entry_open(Entry* self) {
 	recent_alias = self->name;  // yiiikes
 	if (self->type==ENTRY_ROM) {
@@ -4888,6 +4921,7 @@ int main (int argc, char *argv[]) {
 			
 			GFX_setClockLeft(carousel && !show_version); // the carousel's art covers the top right
 			int ow = GFX_blitHardwareGroup(screen, show_setting);
+			if (RA_HARDCORE_AVAILABLE && inSwitcher() && !show_version && exists(RA_HARDCORE_FLAG) && exists(RA_LOGIN_PATH)) blitHardcoreBadge(screen, ow);
 			
 			if (show_version) {
 				if (!version) {

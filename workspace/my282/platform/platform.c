@@ -464,6 +464,7 @@ static void updateEffect(void) {
 	char* effect_path;
 	int opacity = 128; // 1 - 1/2 = 50%
 	if (effect.type==EFFECT_LINE) {
+		opacity = 88; // ~35%: the lines without darkening the picture as much (50% read as too dark)
 		if (effect.scale<3) {
 			effect_path = RES_PATH "/line-2.png";
 		}

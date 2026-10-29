@@ -28,6 +28,9 @@
 #define BGM_VOLUME_PATH SHARED_USERDATA_PATH "/.minui/music_volume.txt"
 #define BGM_LAST_PATH "/tmp/minui_music" // the song played last, so the next launch starts another
 #define CLOCK_PATH SHARED_USERDATA_PATH "/.minui/clock.txt" // the clock beside wifi and the battery: 0 off, 1 12 hour, 2 24 hour
+// RetroAchievements only counts hardcore unlocks from emulators it has approved, and MinUI+ isn't one, so hardcore is
+// hidden (and an old "on" ignored) until MinUI+ has its own: hardcore rules kept on this A30, unlocks sent as softcore
+#define RA_HARDCORE_AVAILABLE 0
 #define SWITCHER_PATH SHARED_USERDATA_PATH "/.minui/switcher.txt" // games picked for the game switcher, paths without SDCARD_PATH
 #define SWITCHER_MAX 10
 #define SWITCHER_OPEN_PATH "/tmp/open_switcher" // left by minarch so the launcher opens straight into the switcher
