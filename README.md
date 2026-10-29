@@ -249,9 +249,8 @@ Sign in with the RetroAchievements tool (on the on-screen keyboard), then just p
 
 - Unlock popups with the achievement's badge and a chime, and a summary when a game starts
 - Games with no achievements, or that RetroAchievements doesn't know, show nothing at all
-- **No hardcore mode yet**: RetroAchievements only counts hardcore unlocks from emulators it has approved, and
-  MinUI+ isn't one, so unlocks are softcore. A MinUI+ hardcore of its own (hardcore rules on the A30, unlocks still
-  sent as softcore) is planned
+- **No hardcore mode**: RetroAchievements only counts hardcore unlocks from emulators it has approved, and
+  MinUI+ isn't one, so unlocks are softcore. Possibly in the future.
 - **Offline**: unlocks earned without Wi-Fi are kept and sent the next time you're online. The tool syncs your games
   ahead of time so their achievements and badges work offline, and a rescan only looks at games that are new or changed
 - PlayStation `.chd` games are identified too
