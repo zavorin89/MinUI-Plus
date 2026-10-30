@@ -209,11 +209,11 @@ install_update() {
 	stop_show
 	rm -f "$PROGRESS"
 	if say.elf --confirm "Update ready
-Restart the A30 to finish."; then
-		log "restart confirmed: $TAG"
-		reboot
+Shut down, then turn the A30 on to finish."; then
+		log "shutdown confirmed: $TAG"
+		shutdown
 	else
-		log "restart deferred: $TAG"
+		log "shutdown deferred: $TAG"
 	fi
 }
 

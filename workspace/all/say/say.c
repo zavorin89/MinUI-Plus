@@ -37,7 +37,7 @@ int main(int argc , char* argv[]) {
 			GFX_clear(screen);
 			
 			GFX_blitMessage(font.large, msg, screen,&(SDL_Rect){0,0,screen->w,screen->h-SCALE1(PADDING + PILL_SIZE + PADDING)});
-			if (confirm) GFX_blitButtonGroup((char*[]){ "B","LATER", "A","RESTART", NULL }, 1, screen, 1);
+			if (confirm) GFX_blitButtonGroup((char*[]){ "B","LATER", "A","SHUT DOWN", NULL }, 1, screen, 1);
 			else GFX_blitButtonGroup((char*[]){ "A","OKAY", NULL }, 1, screen, 1);
 			
 			GFX_flip(screen);
