@@ -64,6 +64,18 @@ done
 # system row. As above, an existing folder with games is preserved for manual migration.
 rmdir "$SDCARD_PATH/Roms/Super Nintendo (SUPA)" 2>/dev/null || true
 
+# MinUI+ only exposes its own focused tools. Older packages also installed six stock Extras that were never part of
+# that set. Move them into hidden userdata instead of deleting them, so an existing user can recover one manually.
+REMOVED_TOOLS_PATH="$SHARED_USERDATA_PATH/.minui/removed-official-tools"
+mkdir -p "$REMOVED_TOOLS_PATH"
+for OFFICIAL_TOOL in "Bootlogo.pak" "Bootlogo.pak.disabled" "Clock.pak" "Files.pak" "Input.pak" "Remove Loading.pak" "Reset Stick.pak"; do
+	SOURCE_TOOL="$SDCARD_PATH/Tools/$PLATFORM/$OFFICIAL_TOOL"
+	[ -e "$SOURCE_TOOL" ] || continue
+	DEST_TOOL="$REMOVED_TOOLS_PATH/$OFFICIAL_TOOL"
+	[ -e "$DEST_TOOL" ] && DEST_TOOL="$DEST_TOOL.$(date +%s)"
+	mv "$SOURCE_TOOL" "$DEST_TOOL"
+done
+
 killall -9 tee
 rm -f "$SDCARD_PATH/update.log"
 WIFI_FLAG="$SHARED_USERDATA_PATH/.minui/wifi-on" # set by the Wi-Fi setup (Tools/Wi-Fi.pak, opened from the settings)

@@ -55,8 +55,11 @@ system:
 	cp ./workspace/all/minarch/build/$(PLATFORM)/minarch.elf ./build/SYSTEM/$(PLATFORM)/bin/
 	cp ./workspace/all/syncsettings/build/$(PLATFORM)/syncsettings.elf ./build/SYSTEM/$(PLATFORM)/bin/
 	cp ./workspace/all/say/build/$(PLATFORM)/say.elf ./build/SYSTEM/$(PLATFORM)/bin/
+
+ifneq ($(PLATFORM),my282)
 	cp ./workspace/all/clock/build/$(PLATFORM)/clock.elf ./build/EXTRAS/Tools/$(PLATFORM)/Clock.pak/
 	cp ./workspace/all/minput/build/$(PLATFORM)/minput.elf ./build/EXTRAS/Tools/$(PLATFORM)/Input.pak/
+endif
 ifeq ($(PLATFORM),my282)
 	cp ./workspace/all/rasync/build/$(PLATFORM)/rasync.elf "./build/EXTRAS/Tools/$(PLATFORM)/RetroAchievements.pak/"
 	cp ./workspace/all/wifi/build/$(PLATFORM)/wifi.elf "./build/EXTRAS/Tools/$(PLATFORM)/Wi-Fi.pak/"
