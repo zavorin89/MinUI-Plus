@@ -83,7 +83,7 @@ MinUI will create a quicksave when powering off in-game. The next time you power
 ----------------------------------------
 Roms
 
-Included in this zip is a "Roms" folder containing folders for each console MinUI currently supports. You can rename these folders but you must keep the uppercase tag name in parentheses in order to retain the mapping to the correct emulator (eg. "Nintendo Entertainment System (FC)" could be renamed to "Nintendo (FC)", "NES (FC)", or "Famicom (FC)"). 
+Included in this zip is a clean "Roms" folder containing one fully named folder for each console MinUI+ supports (eg. "Game Boy Advance (GBA)"). Put games directly in these descriptive folders; short aliases such as "GBA" are not needed. You can rename a folder, but you must keep the uppercase tag in parentheses so it stays mapped to the correct emulator (eg. "Nintendo Entertainment System (FC)" could be renamed to "NES (FC)").
 
 When one or more folder share the same display name (eg. "Game Boy Advance (GBA)" and "Game Boy Advance (MGBA)") they will be combined into a single menu item containing the roms from both folders (continuing the previous example, "Game Boy Advance"). This allows opening specific roms with an alternate pak.
 
@@ -137,10 +137,10 @@ Collections
 
 A collection is just a text file containing an ordered list of full paths to rom, cue, or m3u files. These text files live in the "Collections" folder at the root of your SD card, eg. "/Collections/Metroid series.txt" might look like this:
 
-  /Roms/GBA/Metroid Zero Mission.gba
-  /Roms/GB/Metroid II.gb
-  /Roms/SNES (SFC)/Super Metroid.sfc
-  /Roms/GBA/Metroid Fusion.gba
+  /Roms/Game Boy Advance (GBA)/Metroid Zero Mission.gba
+  /Roms/Game Boy (GB)/Metroid II.gb
+  /Roms/Super Nintendo (SFC)/Super Metroid.sfc
+  /Roms/Game Boy Advance (GBA)/Metroid Fusion.gba
 
 ----------------------------------------
 

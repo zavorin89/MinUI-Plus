@@ -92,7 +92,8 @@ MinUI+ is one download with everything in it: every system, the borders and the 
 1. Format a microSD card as **FAT32**.
 2. Unzip `MinUIPlus-<date>.zip` and copy everything in it to the root of the card: the `miyoo` folder,
    `MinUI.zip` (leave it zipped), and the `Bios`, `Roms`, `Saves`, `BGM`, `Emus`, `Tools` and `Borders` folders.
-3. Put your games in the system folders in `Roms`, any BIOS files your systems need in `Bios`, insert the card
+3. Put your games in the fully named system folders in `Roms` (for example, `Game Boy Advance (GBA)`). Do not
+   create shorter duplicate folders such as `GBA`. Put any BIOS files your systems need in `Bios`, insert the card
    and turn the A30 on. The first start installs MinUI+.
 
 To update, copy the new `MinUI.zip` to the root of the card (leave it zipped). Your games, saves and settings are
