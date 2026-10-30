@@ -1,6 +1,7 @@
 // my282
 #include <stdio.h>
 #include <stdlib.h>
+#include <signal.h>
 #include <string.h>
 #include <unistd.h>
 #include <SDL2/SDL.h>
@@ -13,6 +14,13 @@
 #define FIXED_PITCH		(FIXED_WIDTH * FIXED_BPP)
 
 #define RGBA_MASK_565	0xF800, 0x07E0, 0x001F, 0x0000
+
+static volatile sig_atomic_t quit = 0;
+
+static void handle_signal(int signal) {
+	(void)signal;
+	quit = 1;
+}
 
 int main(int argc , char* argv[]) {
 	if (argc<2) {
@@ -27,6 +35,11 @@ int main(int argc , char* argv[]) {
 	int delay = argc>2 ? atoi(argv[2]) : 2;
 	char* progress_path = argc>3 ? argv[3] : NULL;
 	
+	// SDL normally turns SIGINT/SIGTERM into SDL_QUIT events. This small viewer used to ignore those events, so the
+	// updater could wait on its progress screen until the full delay expired. Own the signals and poll window events.
+	SDL_SetHint(SDL_HINT_NO_SIGNAL_HANDLERS, "1");
+	signal(SIGINT, handle_signal);
+	signal(SIGTERM, handle_signal);
 	SDL_Init(SDL_INIT_VIDEO);
 	SDL_ShowCursor(0);
 	
@@ -48,6 +61,12 @@ int main(int argc , char* argv[]) {
 	uint32_t until = SDL_GetTicks() + delay * 1000;
 	int last_progress = -1;
 	do {
+		SDL_Event event;
+		while (SDL_PollEvent(&event)) {
+			if (event.type==SDL_QUIT) quit = 1;
+		}
+		if (quit) break;
+
 		int progress = -1;
 		if (progress_path) {
 			FILE* file = fopen(progress_path, "r");
@@ -81,7 +100,7 @@ int main(int argc , char* argv[]) {
 		}
 		if (!progress_path) break;
 		SDL_Delay(100);
-	} while ((int32_t)(until-SDL_GetTicks())>0);
+	} while (!quit && (int32_t)(until-SDL_GetTicks())>0);
 	SDL_FreeSurface(img);
 	if (!progress_path) sleep(delay);
 	

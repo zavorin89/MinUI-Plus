@@ -121,12 +121,25 @@ fail() {
 	log "install failed: $*"
 	rm -f "$PART" "$PROGRESS"
 	if [ -n "$DOWNLOAD_PID" ]; then kill "$DOWNLOAD_PID" 2>/dev/null; wait "$DOWNLOAD_PID" 2>/dev/null; fi
-	if [ -n "$SHOW_PID" ]; then kill "$SHOW_PID" 2>/dev/null; wait "$SHOW_PID" 2>/dev/null; fi
+	stop_show
 	say.elf "Update failed
 $*
 
 Nothing was installed."
 	exit 1
+}
+
+stop_show() {
+	[ -n "$SHOW_PID" ] || return 0
+	kill "$SHOW_PID" 2>/dev/null
+	# A display helper must never prevent an error or restart prompt. Fixed show.elf exits cleanly on the first
+	# signal; this watchdog is only a fallback for an old or damaged binary.
+	(sleep 3; kill -9 "$SHOW_PID" 2>/dev/null) &
+	SHOW_WATCHDOG_PID=$!
+	wait "$SHOW_PID" 2>/dev/null
+	kill "$SHOW_WATCHDOG_PID" 2>/dev/null
+	wait "$SHOW_WATCHDOG_PID" 2>/dev/null
+	SHOW_PID=
 }
 
 install_update() {
@@ -193,9 +206,7 @@ install_update() {
 	echo 100 > "$PROGRESS"
 	sync
 	log "installed: $TAG; waiting for restart confirmation"
-	kill "$SHOW_PID" 2>/dev/null
-	wait "$SHOW_PID" 2>/dev/null
-	SHOW_PID=
+	stop_show
 	rm -f "$PROGRESS"
 	if say.elf --confirm "Update ready
 Restart the A30 to finish."; then
