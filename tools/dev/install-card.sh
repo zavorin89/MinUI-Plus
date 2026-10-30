@@ -8,8 +8,7 @@ C="${CARD:-/Volumes/MIN UI}"; O="$REPO/tools/dev/out/all"
 [ -d "$C/.system" ] || { echo "card not mounted at $C"; exit 1; }
 for pair in "minui/build/my282/minui.elf:.system/my282/bin/minui.elf" "minarch/build/my282/minarch.elf:.system/my282/bin/minarch.elf" \
 	"rasync/build/my282/rasync.elf:Tools/my282/RetroAchievements.pak/rasync.elf" "wifi/build/my282/wifi.elf:Tools/my282/Wi-Fi.pak/wifi.elf" \
-	"boxart/build/my282/boxart.elf:Tools/my282/Box Art.pak/boxart.elf" "controls/build/my282/controls.elf:Tools/my282/Controls.pak/controls.elf" \
-	"clock/build/my282/clock.elf:Tools/my282/Clock.pak/clock.elf"; do
+	"boxart/build/my282/boxart.elf:Tools/my282/Box Art.pak/boxart.elf" "controls/build/my282/controls.elf:Tools/my282/Controls.pak/controls.elf"; do
 	src="$O/${pair%%:*}"; dst="$C/${pair#*:}"
 	[ -d "$(dirname "$dst")" ] || { echo "skipped ${pair#*:} (not on this card)"; continue; }
 	cp "$src" "$dst" && cmp "$src" "$dst" && echo "ok ${pair#*:}"

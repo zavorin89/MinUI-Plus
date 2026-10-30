@@ -373,7 +373,7 @@ Everything on screen has a button hint. These are the ones you won't see:
 | `Saves/<TAG>` | In-game saves |
 | `BGM` | Music for the menus: mp3, ogg, flac or wav |
 | `Borders` | Screen borders, `<TAG>.png` and `<TAG>-native.png` |
-| `Tools` | Play Time, RetroAchievements, Box Art, Controls and more (Wi-Fi is in the settings) |
+| `Tools` | Play Time, RetroAchievements, Box Art and Controls (Wi-Fi is in the settings) |
 | `.userdata` | Settings, save states, achievements, play time, logs (`.userdata/my282/logs`) |
 
 ## Building
