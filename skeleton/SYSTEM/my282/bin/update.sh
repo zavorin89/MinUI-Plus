@@ -21,6 +21,7 @@ UNZIP="$SDCARD_PATH/.tmp_update/my282/unzip"
 DOWNLOAD="$SDCARD_PATH/.minui-update.zip"
 PART="$DOWNLOAD.part"
 UPDATE_IMAGE="$SDCARD_PATH/.tmp_update/my282/updating.png"
+PROGRESS="$RUNTIME_PATH/minui_update_progress"
 
 mkdir -p "$STATE_DIR" "$(dirname "$LOG")"
 
@@ -118,7 +119,8 @@ check() {
 
 fail() {
 	log "install failed: $*"
-	rm -f "$PART"
+	rm -f "$PART" "$PROGRESS"
+	if [ -n "$DOWNLOAD_PID" ]; then kill "$DOWNLOAD_PID" 2>/dev/null; wait "$DOWNLOAD_PID" 2>/dev/null; fi
 	if [ -n "$SHOW_PID" ]; then kill "$SHOW_PID" 2>/dev/null; wait "$SHOW_PID" 2>/dev/null; fi
 	say.elf "Update failed
 $*
@@ -141,6 +143,7 @@ install_update() {
 	case "$DIGEST" in *[!0-9a-fA-F]*|'') fail "The update has no SHA-256" ;; esac
 	[ ${#DIGEST} -eq 64 ] || fail "The update SHA-256 is invalid"
 	case "$SIZE" in *[!0-9]*|'') fail "The update size is invalid" ;; esac
+	[ "$SIZE" -gt 0 ] || fail "The update size is invalid"
 	[ -x "$HTTPS" ] || fail "The HTTPS downloader is missing"
 	[ -f "$CA_CERT" ] || fail "The CA bundle is missing"
 	[ -x "$UNZIP" ] || fail "The system unzip tool is missing"
@@ -149,13 +152,27 @@ install_update() {
 	NEEDED_KB=$((SIZE / 1024 * 3 + 16384)) # download plus room to merge its compressed and uncompressed contents
 	[ "$FREE_KB" -ge "$NEEDED_KB" ] || fail "The card needs more free space"
 
-	show.elf "$UPDATE_IMAGE" 600 &
+	echo 2 > "$PROGRESS"
+	show.elf "$UPDATE_IMAGE" 600 "$PROGRESS" &
 	SHOW_PID=$!
 	log "downloading: $TAG ($ASSET)"
 	rm -f "$PART" "$DOWNLOAD"
-	CA_CERT_PATH="$CA_CERT" "$HTTPS" -t 10m "$URL" "$PART" 2>>"$LOG" || fail "The download did not finish"
+	CA_CERT_PATH="$CA_CERT" "$HTTPS" -t 10m "$URL" "$PART" 2>>"$LOG" &
+	DOWNLOAD_PID=$!
+	while kill -0 "$DOWNLOAD_PID" 2>/dev/null; do
+		BYTES=0
+		[ -f "$PART" ] && BYTES=$(wc -c < "$PART" 2>/dev/null)
+		case "$BYTES" in *[!0-9]*|'') BYTES=0 ;; esac
+		PERCENT=$((5 + BYTES / (SIZE / 70 + 1))) # avoids overflowing the A30's 32-bit shell arithmetic
+		[ "$PERCENT" -gt 75 ] && PERCENT=75
+		echo "$PERCENT" > "$PROGRESS"
+		sleep 1
+	done
+	wait "$DOWNLOAD_PID" || fail "The download did not finish"
+	DOWNLOAD_PID=
 	mv "$PART" "$DOWNLOAD"
 
+	echo 80 > "$PROGRESS"
 	command -v sha256sum >/dev/null 2>&1 || fail "SHA-256 verification is unavailable"
 	ACTUAL=$(sha256sum "$DOWNLOAD" | sed 's/ .*//')
 	[ "$ACTUAL" = "$DIGEST" ] || fail "The download did not verify"
@@ -165,20 +182,28 @@ install_update() {
 	# are replaced, while the folders people make their own (system art, borders, songs, BIOS, saves) only gain what's
 	# new, so a customized one is never overwritten. The first-install miyoo folder isn't needed on an installed card.
 	# (unzip exits 11 when a pattern matches nothing, 1 for warnings: neither is a failure)
+	echo 88 > "$PROGRESS"
 	"$UNZIP" -o "$DOWNLOAD" MinUI.zip README.txt 'Tools/*' 'Emus/*' '.res/*' -d "$SDCARD_PATH" >>"$LOG" 2>&1
 	case $? in 0|1|11) ;; *) fail "The update could not be unpacked" ;; esac
+	echo 94 > "$PROGRESS"
 	"$UNZIP" -n "$DOWNLOAD" 'Roms/*' 'Borders/*' 'BGM/*' 'Bios/*' 'Saves/*' -d "$SDCARD_PATH" >>"$LOG" 2>&1
 	case $? in 0|1|11) ;; *) fail "The update could not be unpacked" ;; esac
 	[ -f "$SDCARD_PATH/MinUI.zip" ] || fail "The update did not contain MinUI.zip"
 	rm -f "$DOWNLOAD" "$AVAILABLE" "$NOTES"
+	echo 100 > "$PROGRESS"
 	sync
-	log "installed: $TAG; rebooting to finish"
+	log "installed: $TAG; waiting for restart confirmation"
 	kill "$SHOW_PID" 2>/dev/null
 	wait "$SHOW_PID" 2>/dev/null
 	SHOW_PID=
-	reboot
-	say.elf "Update ready
-Restart the A30 to finish."
+	rm -f "$PROGRESS"
+	if say.elf --confirm "Update ready
+Restart the A30 to finish."; then
+		log "restart confirmed: $TAG"
+		reboot
+	else
+		log "restart deferred: $TAG"
+	fi
 }
 
 case "$1" in
