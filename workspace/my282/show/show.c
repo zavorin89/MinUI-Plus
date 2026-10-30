@@ -1,5 +1,7 @@
 // my282
 #include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 #include <unistd.h>
 #include <SDL2/SDL.h>
 #include <SDL2/SDL_image.h>
@@ -14,7 +16,7 @@
 
 int main(int argc , char* argv[]) {
 	if (argc<2) {
-		puts("Usage: show.elf image.png delay");
+		puts("Usage: show.elf image.png [delay] [progress-file]");
 		return 0;
 	}
 	
@@ -23,6 +25,7 @@ int main(int argc , char* argv[]) {
 	if (access(path, F_OK)!=0) return 0; // nothing to show :(
 	
 	int delay = argc>2 ? atoi(argv[2]) : 2;
+	char* progress_path = argc>3 ? argv[3] : NULL;
 	
 	SDL_Init(SDL_INIT_VIDEO);
 	SDL_ShowCursor(0);
@@ -41,18 +44,46 @@ int main(int argc , char* argv[]) {
 	SDL_Texture* texture = SDL_CreateTexture(renderer,SDL_PIXELFORMAT_RGB565, SDL_TEXTUREACCESS_STREAMING, w,h);
 	SDL_Surface* screen = SDL_CreateRGBSurfaceFrom(NULL, w,h, FIXED_DEPTH, p, RGBA_MASK_565);
 	
-	SDL_LockTexture(texture,NULL,&screen->pixels,&screen->pitch);
-	SDL_FillRect(screen, NULL, 0);
 	SDL_Surface* img = IMG_Load(path);
-	SDL_BlitSurface(img, NULL, screen, &(SDL_Rect){(screen->w-img->w)/2,(screen->h-img->h)/2});
-	SDL_FreeSurface(img);
-	SDL_UnlockTexture(texture);
+	uint32_t until = SDL_GetTicks() + delay * 1000;
+	int last_progress = -1;
+	do {
+		int progress = -1;
+		if (progress_path) {
+			FILE* file = fopen(progress_path, "r");
+			if (file) {
+				if (fscanf(file, "%d", &progress)!=1) progress = 0;
+				fclose(file);
+			}
+			if (progress<0) progress = 0;
+			if (progress>100) progress = 100;
+		}
+		if (!progress_path || progress!=last_progress) {
+			SDL_LockTexture(texture,NULL,&screen->pixels,&screen->pitch);
+			SDL_FillRect(screen, NULL, 0);
+			SDL_BlitSurface(img, NULL, screen, &(SDL_Rect){(screen->w-img->w)/2,(screen->h-img->h)/2});
+			if (progress_path) {
+				SDL_Rect outside = { 158, 286, 324, 14 };
+				SDL_Rect inside = { 160, 288, 320, 10 };
+				SDL_Rect filled = { 160, 288, 320 * progress / 100, 10 };
+				SDL_FillRect(screen, &outside, SDL_MapRGB(screen->format, 96, 96, 96));
+				SDL_FillRect(screen, &inside, SDL_MapRGB(screen->format, 24, 24, 24));
+				if (filled.w) SDL_FillRect(screen, &filled, SDL_MapRGB(screen->format, 255, 255, 255));
+			}
+			char* shot = getenv("MINUI_SHOW_SHOT"); // desktop test harness; unset on the A30
+			if (shot) SDL_SaveBMP(screen, shot);
+			SDL_UnlockTexture(texture);
 
-	if (rotate) SDL_RenderCopyEx(renderer,texture,NULL,&(SDL_Rect){0,w,w,h},rotate*90,&(SDL_Point){0,0},SDL_FLIP_NONE);
-	else SDL_RenderCopy(renderer, texture, NULL,NULL);
-	SDL_RenderPresent(renderer);
-	
-	sleep(delay);
+			if (rotate) SDL_RenderCopyEx(renderer,texture,NULL,&(SDL_Rect){0,w,w,h},rotate*90,&(SDL_Point){0,0},SDL_FLIP_NONE);
+			else SDL_RenderCopy(renderer, texture, NULL,NULL);
+			SDL_RenderPresent(renderer);
+			last_progress = progress;
+		}
+		if (!progress_path) break;
+		SDL_Delay(100);
+	} while ((int32_t)(until-SDL_GetTicks())>0);
+	SDL_FreeSurface(img);
+	if (!progress_path) sleep(delay);
 	
 	SDL_FreeSurface(screen);
 	SDL_DestroyTexture(texture);

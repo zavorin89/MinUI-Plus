@@ -4503,7 +4503,8 @@ int main (int argc, char *argv[]) {
 	#define INFO_ROW_MUSIC (4 + PWR_TIMER_COUNT)
 	#define INFO_ROW_CLOCK (5 + PWR_TIMER_COUNT)
 	#define INFO_ROW_TIME_ZONE (6 + PWR_TIMER_COUNT) // for syncing the clock over Wi-Fi
-	#define INFO_ROW_COUNT (7 + PWR_TIMER_COUNT)
+	#define INFO_ROW_VERSION (7 + PWR_TIMER_COUNT) // deliberately last: subtle, but always findable
+	#define INFO_ROW_COUNT (8 + PWR_TIMER_COUNT)
 	#define INFO_ROWS_SHOWN 5 // the rest scroll into view
 	int info_row = 0; // selected row on the version screen
 	int info_start = 0; // first row shown
@@ -5118,13 +5119,18 @@ int main (int argc, char *argv[]) {
 						if (BGM_isEnabled()) sprintf(value, "%i%%", BGM_getVolume() * 100 / BGM_VOLUME_MAX);
 						else strcpy(value, "Off");
 					}
+					else if (i==INFO_ROW_VERSION) {
+						name = "MinUI+";
+						strcpy(value, "v1.04");
+					}
 					else {
 						char* timer_names[PWR_TIMER_COUNT] = { "Sleep after", "Power off after" };
 						name = timer_names[i-1];
 						strcpy(value, PWR_getTimerLabel(i-1, PWR_getTimer(i-1)));
 					}
-					SDL_Surface* name_txt = TTF_RenderUTF8_Blended(font.large, name, selected ? COLOR_BLACK : COLOR_DARK_TEXT);
-					SDL_Surface* value_txt = TTF_RenderUTF8_Blended(font.large, value, selected ? COLOR_BLACK : COLOR_WHITE);
+					TTF_Font* row_font = i==INFO_ROW_VERSION ? font.small : font.large;
+					SDL_Surface* name_txt = TTF_RenderUTF8_Blended(row_font, name, selected ? COLOR_BLACK : COLOR_DARK_TEXT);
+					SDL_Surface* value_txt = TTF_RenderUTF8_Blended(row_font, value, selected ? COLOR_BLACK : COLOR_WHITE);
 					int ty = y + (SCALE1(PILL_SIZE) - name_txt->h) / 2;
 					SDL_BlitSurface(name_txt, NULL, screen, &(SDL_Rect){block_x, ty});
 					SDL_BlitSurface(value_txt, NULL, screen, &(SDL_Rect){block_x + rows_w - value_txt->w, ty});

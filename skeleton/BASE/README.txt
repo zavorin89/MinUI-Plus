@@ -51,7 +51,9 @@ The clock is part of Wi-Fi: it shows beside Wi-Fi and the battery once Wi-Fi has
 ----------------------------------------
 Updates
 
-After Wi-Fi connects, MinUI+ quietly checks its latest GitHub release. When a newer version exists, "Update Available!" appears above the systems. Open it to read the patch notes and confirm the update. The download is verified, installed, and the A30 restarts to finish.
+After Wi-Fi connects, MinUI+ quietly checks its latest GitHub release. When a newer version exists, "Update Available!" appears above the systems. Open it to read the patch notes and confirm the update. A progress bar follows the download and installation. When it is ready, choose Restart to finish immediately or Later to return to MinUI+ and restart when convenient.
+
+The installed MinUI+ version appears as a subtle final row at the bottom of Settings.
 
 ----------------------------------------
 Play time
