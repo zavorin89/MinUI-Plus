@@ -60,6 +60,9 @@ mount -o remount,noatime /mnt/SDCARD 2>/dev/null
 for LEGACY_ROMS in ARCADE FC GB GBA MD MS NEOGEO PCE PS SFC; do
 	rmdir "$SDCARD_PATH/Roms/$LEGACY_ROMS" 2>/dev/null || true
 done
+# Supafaust is available from the main Super Nintendo folder's per-game Core setting; it no longer needs a second
+# system row. As above, an existing folder with games is preserved for manual migration.
+rmdir "$SDCARD_PATH/Roms/Super Nintendo (SUPA)" 2>/dev/null || true
 
 killall -9 tee
 rm -f "$SDCARD_PATH/update.log"
