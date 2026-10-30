@@ -5121,7 +5121,7 @@ int main (int argc, char *argv[]) {
 					}
 					else if (i==INFO_ROW_VERSION) {
 						name = "MinUI+";
-						strcpy(value, "v1.04");
+						strcpy(value, "v1.05");
 					}
 					else {
 						char* timer_names[PWR_TIMER_COUNT] = { "Sleep after", "Power off after" };
