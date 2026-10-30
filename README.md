@@ -200,8 +200,8 @@ of where you left it. A picks a game up from that exact moment. In a game, holdi
 - **Wi-Fi**: the network you're on (or Off); A opens the Wi-Fi setup to scan, connect, or switch it off
 - **Updates**: after Wi-Fi connects, MinUI+ quietly checks its latest GitHub release. When a newer one exists,
   **Update Available!** appears above the systems. Open it to read the patch notes and confirm the update; the
-  progress bar follows the verified download and installation. When it is ready, choose **Restart** to finish now
-  or **Later** to return to MinUI+ and restart when convenient
+  progress bar follows the verified download and installation. When it is ready, choose **Shut Down**, then turn
+  the A30 back on to finish, or choose **Later** to return to MinUI+ and shut down when convenient
 - **Sleep after** and **Power off after** timers
 - **Theme**: several color themes for the whole interface
 - **Menu sounds**: subtle clicks for moving, opening and going back
