@@ -54,6 +54,13 @@ echo "boot: the clock said $BOOT_CLOCK, last saved $(cat "$DATETIME_PATH" 2>/dev
 # don't write a file's last-access date to the card every time art or a game is read
 mount -o remount,noatime /mnt/SDCARD 2>/dev/null
 
+# Older MinUI cards and some third-party packs created short or obsolete Roms folders alongside MinUI+'s
+# descriptive folders (eg. both GBA and Game Boy Advance (GBA)). An empty alias still becomes a duplicate system
+# in the menu. rmdir is intentionally used here: a folder containing any game or other file is never touched.
+for LEGACY_ROMS in ARCADE FC GB GBA MD MS NEOGEO PCE PS SFC; do
+	rmdir "$SDCARD_PATH/Roms/$LEGACY_ROMS" 2>/dev/null || true
+done
+
 killall -9 tee
 rm -f "$SDCARD_PATH/update.log"
 WIFI_FLAG="$SHARED_USERDATA_PATH/.minui/wifi-on" # set by the Wi-Fi setup (Tools/Wi-Fi.pak, opened from the settings)
