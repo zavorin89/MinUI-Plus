@@ -1000,6 +1000,13 @@ void PLAT_getBatteryStatus(int* is_charging, int* charge) {
 }
 
 #define LED_PATH "/sys/class/leds/led1/brightness"
+// the sleep light on or off: it reports a max_brightness of 255, but any value lights it fully (tried on the A30)
+static int sleepLightValue(int level) {
+	return level>SLEEP_LIGHT_OFF ? 255 : 0;
+}
+void PLAT_showSleepLight(int level) {
+	putInt(LED_PATH, level<0 ? 0 : sleepLightValue(level));
+}
 void PLAT_enableBacklight(int enable) {
 	if (enable) {
 		SetBrightness(GetBrightness());
@@ -1007,7 +1014,7 @@ void PLAT_enableBacklight(int enable) {
 	}
 	else {
 		SetRawBrightness(0);
-		putInt(LED_PATH, 255);
+		putInt(LED_PATH, sleepLightValue(PWR_getSleepLight()));
 	}
 }
 
@@ -1165,8 +1172,39 @@ void PLAT_powerSave(int state) {
 }
 
 #define RUMBLE_PATH "/sys/devices/virtual/timed_output/vibrator/enable"
+// The A30's timed-output driver exposes duration, not voltage or amplitude. Honor libretro's strength by pulsing the
+// fixed-strength motor at a gentler duty cycle instead of treating every non-zero request as full power.
+static pthread_once_t rumble_once = PTHREAD_ONCE_INIT;
+static pthread_mutex_t rumble_mutex = PTHREAD_MUTEX_INITIALIZER;
+static int rumble_strength = 0;
+static void* rumbleThread(void* arg) {
+	(void)arg;
+	while (1) {
+		pthread_mutex_lock(&rumble_mutex);
+		int strength = rumble_strength;
+		pthread_mutex_unlock(&rumble_mutex);
+		if (!strength) {
+			SDL_Delay(12);
+			continue;
+		}
+		// 4-9ms on in a 23ms cycle: about 15% stronger than the first reduced-rumble pass, while maximum rumble is
+		// still under 40% of the old continuous drive.
+		int on_ms = 4 + ((strength > 65535 ? 65535 : strength) * 5 / 65535);
+		putInt(RUMBLE_PATH, on_ms);
+		SDL_Delay(23);
+	}
+	return NULL;
+}
+static void startRumbleThread(void) {
+	pthread_t thread;
+	if (pthread_create(&thread, NULL, rumbleThread, NULL)==0) pthread_detach(thread);
+}
 void PLAT_setRumble(int strength) {
-	putInt(RUMBLE_PATH, strength?1000:0);
+	pthread_once(&rumble_once, startRumbleThread);
+	pthread_mutex_lock(&rumble_mutex);
+	rumble_strength = strength > 0 ? strength : 0;
+	pthread_mutex_unlock(&rumble_mutex);
+	if (!strength) putInt(RUMBLE_PATH, 0);
 }
 
 int PLAT_pickSampleRate(int requested, int max) {

@@ -46,7 +46,12 @@ The Controls tool lists these too.
 ----------------------------------------
 Clock
 
-The time shows beside Wi-Fi and the battery. Change its format (12-hour, 24-hour or off) in the settings' Clock row, and press A there to set the time. The time stays as you set it: Wi-Fi never changes it. If the clock ever loses power, it carries on from when the A30 was last on.
+The clock is part of Wi-Fi: it shows beside Wi-Fi and the battery once Wi-Fi has set it since the A30 was turned on, and syncs every time Wi-Fi connects. Change its format (12-hour, 24-hour or off) in the settings' Clock row. The time zone is found automatically the first time, or pick yours in the Time zone row (daylight saving included). The A30's clock stops while it's powered off (asleep it keeps going), so after a power-off the clock stays hidden until Wi-Fi syncs it again.
+
+----------------------------------------
+Updates
+
+After Wi-Fi connects, MinUI+ quietly checks its latest GitHub release. When a newer version exists, "Update Available!" appears above the systems. Open it to read the patch notes and confirm the update. The download is verified, installed, and the A30 restarts to finish.
 
 ----------------------------------------
 Play time

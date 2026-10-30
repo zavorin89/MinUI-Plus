@@ -3,6 +3,7 @@
 #include <math.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
+#include <sys/stat.h>
 
 #include <fcntl.h>
 #include <unistd.h>
@@ -356,6 +357,7 @@ void GFX_sync(void) {
 }
 
 FALLBACK_IMPLEMENTATION int PLAT_supportsOverscan(void) { return 0; }
+FALLBACK_IMPLEMENTATION void PLAT_showSleepLight(int level) { }
 FALLBACK_IMPLEMENTATION int PLAT_supportsBorder(void) { return 0; }
 FALLBACK_IMPLEMENTATION void PLAT_setBorder(const char* path) { }
 FALLBACK_IMPLEMENTATION void PLAT_setNotification(SDL_Surface* overlay) { }
@@ -890,9 +892,101 @@ int GFX_getClockMode(void) {
 	if (clock_mode<CLOCK_OFF || clock_mode>CLOCK_24H) clock_mode = CLOCK_12H;
 	return clock_mode;
 }
+int PWR_getSleepLight(void) {
+	if (!exists(SLEEP_LIGHT_PATH)) return SLEEP_LIGHT_ON; // as it always was
+	return getInt(SLEEP_LIGHT_PATH) ? SLEEP_LIGHT_ON : SLEEP_LIGHT_OFF; // (an earlier dim/medium/bright counts as on)
+}
+void PWR_setSleepLight(int level) {
+	putInt(SLEEP_LIGHT_PATH, level);
+}
 void GFX_setClockMode(int mode) {
 	clock_mode = mode;
 	putInt(CLOCK_PATH, mode);
+}
+// named zones with their daylight saving rules (POSIX TZ), so the clock follows the season by itself
+static const struct { const char* name; const char* rule; } time_zones[] = {
+	{ "Hawaii",			"HST10" },
+	{ "Alaska",			"AKST9AKDT,M3.2.0,M11.1.0" },
+	{ "US Pacific",		"PST8PDT,M3.2.0,M11.1.0" },
+	{ "US Mountain",	"MST7MDT,M3.2.0,M11.1.0" },
+	{ "Arizona",		"MST7" },
+	{ "US Central",		"CST6CDT,M3.2.0,M11.1.0" },
+	{ "US Eastern",		"EST5EDT,M3.2.0,M11.1.0" },
+	{ "Atlantic",		"AST4ADT,M3.2.0,M11.1.0" },
+	{ "Brazil",			"<-03>3" },
+	{ "UTC",			"UTC0" },
+	{ "UK & Ireland",	"GMT0BST,M3.5.0/1,M10.5.0" },
+	{ "Central Europe",	"CET-1CEST,M3.5.0,M10.5.0/3" },
+	{ "Eastern Europe",	"EET-2EEST,M3.5.0/3,M10.5.0/4" },
+	{ "Moscow",			"MSK-3" },
+	{ "India",			"IST-5:30" },
+	{ "China",			"CST-8" },
+	{ "Japan",			"JST-9" },
+	{ "Korea",			"KST-9" },
+	{ "Australia East",	"AEST-10AEDT,M10.1.0,M4.1.0/3" },
+	{ "New Zealand",	"NZST-12NZDT,M9.5.0,M4.1.0/3" },
+};
+#define TIME_ZONE_COUNT (int)(sizeof(time_zones)/sizeof(time_zones[0]))
+int GFX_getTimeZoneCount(void) {
+	return TIME_ZONE_COUNT;
+}
+const char* GFX_getTimeZoneName(int zone) {
+	if (zone>=0 && zone<TIME_ZONE_COUNT) return time_zones[zone].name;
+	if (zone==-2) { // looked up, not listed: its offset, eg. "<UTC+0800>-8" as UTC+08:00
+		static char name[16];
+		char rule[64] = "";
+		getFile(TIME_ZONE_PATH, rule, sizeof(rule));
+		if (strlen(rule)>=9 && prefixMatch("<UTC", rule)) {
+			snprintf(name, sizeof(name), "UTC%c%c%c:%c%c", rule[4], rule[5], rule[6], rule[7], rule[8]);
+			return name;
+		}
+	}
+	return "Automatic";
+}
+int GFX_getTimeZone(void) {
+	if (!exists(TIME_ZONE_PATH)) return -1;
+	char rule[64] = "";
+	getFile(TIME_ZONE_PATH, rule, sizeof(rule));
+	trimTrailingNewlines(rule);
+	for (int i=0; i<TIME_ZONE_COUNT; i++) if (exactMatch((char*)time_zones[i].rule, rule)) return i;
+	return rule[0] ? -2 : -1;
+}
+// the zone wifi.sh looked up (or another program set) while this one runs, used as soon as it's there
+static int clock_set_seen = -1; // whether CLOCK_SET_PATH was there at the last check
+static int refreshClock(void) { // 1 when the clock should be drawn again
+	static time_t zone_mtime = -1;
+	struct stat st;
+	time_t mtime = stat(TIME_ZONE_PATH, &st)==0 ? st.st_mtime : 0;
+	int changed = 0;
+	if (mtime!=zone_mtime) {
+		zone_mtime = mtime;
+		char rule[64] = "";
+		if (mtime) getFile(TIME_ZONE_PATH, rule, sizeof(rule));
+		trimTrailingNewlines(rule);
+		if (rule[0]) setenv("TZ", rule, 1);
+		else unsetenv("TZ");
+		tzset();
+		changed = 1;
+	}
+	int set = exists(CLOCK_SET_PATH);
+	if (set!=clock_set_seen) {
+		clock_set_seen = set;
+		changed = 1;
+	}
+	return changed;
+}
+void GFX_setTimeZone(int zone) {
+	if (zone>=0 && zone<TIME_ZONE_COUNT) {
+		putFile(TIME_ZONE_PATH, (char*)time_zones[zone].rule);
+		setenv("TZ", time_zones[zone].rule, 1); // launch.sh hands it to everything started later
+	}
+	else {
+		unlink(TIME_ZONE_PATH);
+		unsetenv("TZ");
+	}
+	tzset();
+	clock_drawn_minute = 0; // redrawn in the new zone
+	if (PLAT_isOnline()) system("wifi.sh time >/dev/null 2>&1 &"); // synced in the new zone (automatic: looked up first)
 }
 int GFX_blitHardwareGroup(SDL_Surface* dst, int show_setting) {
 	if (show_setting) setting_fade_until = 0;
@@ -972,7 +1066,8 @@ static int GFX_blitHardwareGroupNow(SDL_Surface* dst, int show_setting) {
 		// the time, before wifi and the battery
 		char clock[16] = "";
 		int clock_mode = GFX_getClockMode();
-		if (clock_mode) {
+		if (clock_mode && clock_set_seen==-1) refreshClock();
+		if (clock_mode && clock_set_seen==1) { // only when wifi has set it since this boot: the A30 loses the time when off
 			time_t now = time(NULL);
 			struct tm* local = localtime(&now);
 			if (clock_mode==CLOCK_24H) strftime(clock, sizeof(clock), "%H:%M", local);
@@ -1958,6 +2053,7 @@ void VIB_quit(void) {
 	VIB_setStrength(0);
 	pthread_cancel(vib.pt);
 	pthread_join(vib.pt, NULL);
+	PLAT_setRumble(0); // VIB_setStrength is queued; make certain the motor stops before exit
 }
 void VIB_setStrength(int strength) {
 	if (vib.queued_strength==strength) return;
@@ -1965,6 +2061,41 @@ void VIB_setStrength(int strength) {
 }
 int VIB_getStrength(void) {
 	return vib.strength;
+}
+
+struct VIB_Pulse {
+	int strength;
+	int milliseconds;
+	unsigned generation;
+};
+static pthread_mutex_t vib_pulse_mutex = PTHREAD_MUTEX_INITIALIZER;
+static unsigned vib_pulse_generation = 0;
+static void* VIB_pulseThread(void* arg) {
+	struct VIB_Pulse* pulse = arg;
+	int strength = pulse->strength;
+	int milliseconds = pulse->milliseconds;
+	unsigned generation = pulse->generation;
+	free(pulse);
+
+	PLAT_setRumble(strength);
+	SDL_Delay(milliseconds);
+	pthread_mutex_lock(&vib_pulse_mutex);
+	if (generation==vib_pulse_generation) PLAT_setRumble(vib.initialized ? vib.strength : 0);
+	pthread_mutex_unlock(&vib_pulse_mutex);
+	return NULL;
+}
+void VIB_pulse(int strength, int milliseconds) {
+	if (strength<=0 || milliseconds<=0) return;
+	struct VIB_Pulse* pulse = malloc(sizeof(struct VIB_Pulse));
+	if (!pulse) return;
+	pulse->strength = strength;
+	pulse->milliseconds = milliseconds;
+	pthread_mutex_lock(&vib_pulse_mutex);
+	pulse->generation = ++vib_pulse_generation;
+	pthread_mutex_unlock(&vib_pulse_mutex);
+	pthread_t thread;
+	if (pthread_create(&thread, NULL, VIB_pulseThread, pulse)==0) pthread_detach(thread);
+	else free(pulse);
 }
 
 ///////////////////////////////
@@ -2202,6 +2333,11 @@ void PWR_update(int* _dirty, int* _show_setting, PWR_callback_t before_sleep, PW
 	
 	if (show_setting) dirty = 1; // shm is slow or keymon is catching input on the next frame
 	if (clock_drawn_minute && GFX_getClockMode() && time(NULL) / 60 != clock_drawn_minute) dirty = 1; // the clock moved on
+	static uint32_t clock_checked = 0;
+	if (GFX_getClockMode() && now - clock_checked > 2000) { // wifi just synced it, or found the time zone
+		clock_checked = now;
+		if (refreshClock()) dirty = 1;
+	}
 	int was_showing = _show_setting ? *_show_setting : 0;
 	if (was_showing && !show_setting) setting_fade_until = now + SETTING_FADE_MS; // GFX_blitHardwareGroup fades it out
 	if (setting_fade_until) { // frames while it fades, and one more once it's gone so none of it is left on screen
@@ -2347,7 +2483,7 @@ int PWR_getBattery(void) { // 10-100 in 10-20% fragments
 // TODO: tmp? move to individual platforms or allow overriding like PAD_poll/PAD_wake?
 int PLAT_setDateTime(int y, int m, int d, int h, int i, int s) {
 	char cmd[512];
-	sprintf(cmd, "date -s '%d-%d-%d %d:%d:%d'; hwclock --utc -w", y,m,d,h,i,s);
+	sprintf(cmd, "date -s '%d-%d-%d %d:%d:%d'; hwclock --utc -w; touch " CLOCK_SET_PATH, y,m,d,h,i,s); // (in TZ, when one's picked)
 	system(cmd);
 	return 0; // why does this return an int?
 }

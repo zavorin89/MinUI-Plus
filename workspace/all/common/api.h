@@ -214,8 +214,17 @@ void GFX_blitMessage(TTF_Font* font, char* msg, SDL_Surface* dst, SDL_Rect* dst_
 int GFX_blitHardwareGroup(SDL_Surface* dst, int show_setting);
 int GFX_settingFading(void); // the volume/brightness bar is still fading out (GFX_blitHardwareGroup draws it)
 enum { CLOCK_OFF, CLOCK_12H, CLOCK_24H };
+enum { SLEEP_LIGHT_OFF, SLEEP_LIGHT_ON, SLEEP_LIGHT_COUNT }; // (the A30's LED is on or off: it doesn't dim)
+int PWR_getSleepLight(void); // SLEEP_LIGHT_ON unless changed
+void PWR_setSleepLight(int level); // also saves it
 int GFX_getClockMode(void); // the clock in the hardware group (CLOCK_12H unless changed)
 void GFX_setClockMode(int mode); // also saves it
+// the time zone the clock syncs over Wi-Fi in: -1 for automatic (looked up from the connection at the next sync),
+// -2 for one that was looked up and isn't in the list (shown as its offset)
+int GFX_getTimeZoneCount(void);
+const char* GFX_getTimeZoneName(int zone);
+int GFX_getTimeZone(void);
+void GFX_setTimeZone(int zone); // saved, used right away, and the clock syncs if Wi-Fi is on
 void GFX_setClockLeft(int left); // the clock in its own pill at the top left instead (eg. the carousel)
 void GFX_blitHardwareHints(SDL_Surface* dst, int show_setting);
 int GFX_blitButtonGroup(char** hints, int primary, SDL_Surface* dst, int align_right);
@@ -312,7 +321,8 @@ int PAD_tappedMenu(uint32_t now); // special case, returns 1 on release of BTN_M
 void VIB_init(void);
 void VIB_quit(void);
 void VIB_setStrength(int strength);
- int VIB_getStrength(void);
+int VIB_getStrength(void);
+void VIB_pulse(int strength, int milliseconds); // asynchronous, for short UI feedback
 	
 ///////////////////////////////
 
@@ -412,6 +422,7 @@ void PLAT_enableOverlay(int enable);
 #define PWR_LOW_CHARGE 10
 void PLAT_getBatteryStatus(int* is_charging, int* charge); // 0,1 and 0,10,20,40,60,80,100
 void PLAT_enableBacklight(int enable);
+void PLAT_showSleepLight(int level); // the sleep light as SLEEP_LIGHT_* now (the settings' preview), -1 for off
 void PLAT_powerOff(void);
 	
 void PLAT_setCPUSpeed(int speed); // enum

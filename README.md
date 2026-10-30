@@ -197,11 +197,17 @@ of where you left it. A picks a game up from that exact moment. In a game, holdi
 ### Settings (tap MENU)
 
 - **Wi-Fi**: the network you're on (or Off); A opens the Wi-Fi setup to scan, connect, or switch it off
+- **Updates**: after Wi-Fi connects, MinUI+ quietly checks its latest GitHub release. When a newer one exists,
+  **Update Available!** appears above the systems. Open it to read the patch notes and confirm the update; the
+  download is verified, installed, and the A30 restarts to finish
 - **Sleep after** and **Power off after** timers
 - **Theme**: several color themes for the whole interface
 - **Menu sounds**: subtle clicks for moving, opening and going back
-- **Clock**: shown beside Wi-Fi and the battery (at the top left in the carousel), 12-hour, 24-hour or off. A sets
-  the time, which then stays as you set it (Wi-Fi never changes it)
+- **Clock**: part of Wi-Fi. It shows (beside Wi-Fi and the battery, or at the top left in the carousel) once Wi-Fi
+  has set it, and syncs every time Wi-Fi connects. 12-hour, 24-hour or off. The A30's clock stops while it's powered
+  off (asleep it keeps going), so after a power-off the clock stays hidden until Wi-Fi syncs it again
+- **Time zone**: Automatic (looked up from your connection the first time it syncs) or pick yours, daylight saving
+  included
 - **Music**: background music on or off, and its volume (Left/Right). Put songs in the `BGM` folder
 
 ### Music

@@ -25,6 +25,8 @@
 #define TOOLS_DIR SDCARD_PATH "/Tools/" PLATFORM
 #define PLAY_TIME_NAME "Play Time" // Most Played, as it's listed in Tools
 #define PLAY_TIME_FLASH_MS 2200 // the total as Play Time opens
+#define UPDATE_SCRIPT SYSTEM_PATH "/bin/update.sh"
+#include "wifi_ask.h"
 #include "keyboard.h"
 #include "bgm.h"
 
@@ -309,7 +311,7 @@ static void Directory_index(Directory* self) {
 				}
 			}
 			fclose(file);
-			
+
 			int resort = 0;
 			int filter = 0;
 			for (int i=0; i<self->entries->count; i++) {
@@ -971,6 +973,7 @@ static void updateRootFavorites(void) { // show or hide Favorites in the root wi
 	int has = hasFavorites();
 	if (has && i==-1) {
 		int at = EntryArray_indexOf(root->entries, FAUX_RECENT_PATH) + 1; // after Recently Played (or first)
+		if (at==0 && EntryArray_indexOf(root->entries, FAUX_UPDATE_PATH)==0) at = 1; // the update always stays first
 		Array_insert(root->entries, at, Entry_new(FAUX_FAVORITES_PATH, ENTRY_DIR));
 		if (root->selected>=at) root->selected += 1;
 	}
@@ -980,6 +983,22 @@ static void updateRootFavorites(void) { // show or hide Favorites in the root wi
 	}
 	else return;
 	Directory_reindex(root);
+}
+static int updateRootUpdate(void) { // the background checker can finish while the launcher is already open
+	Directory* root = stack->items[0];
+	int i = EntryArray_indexOf(root->entries, FAUX_UPDATE_PATH);
+	int has = exists(UPDATE_AVAILABLE_PATH);
+	if (has && i==-1) {
+		Array_insert(root->entries, 0, Entry_new(FAUX_UPDATE_PATH, ENTRY_DIR)); // above everything else
+		root->selected += 1; // stay on the same system
+	}
+	else if (!has && i!=-1) {
+		Entry_free(Array_remove(root->entries, i));
+		if (root->selected>i) root->selected -= 1;
+	}
+	else return 0;
+	Directory_reindex(root);
+	return 1;
 }
 static void toggleFavorite(void) {
 	Entry* entry = top->entries->items[top->selected];
@@ -1159,6 +1178,7 @@ static int getSwitcherPath(Entry* entry, char* path) {
 static Array* getRoot(void) {
 	Array* root = Array_new();
 	
+	if (exists(UPDATE_AVAILABLE_PATH)) Array_push(root, Entry_new(FAUX_UPDATE_PATH, ENTRY_DIR));
 	if (hasRecents()) Array_push(root, Entry_new(FAUX_RECENT_PATH, ENTRY_DIR));
 	if (hasFavorites()) Array_push(root, Entry_new(FAUX_FAVORITES_PATH, ENTRY_DIR));
 
@@ -1886,6 +1906,7 @@ static void closeDirectory(void) {
 }
 
 static void showFlash(char* text, int big);
+static void showUpdate(SDL_Surface* screen);
 static int flash_ms; // (defined with the popups below)
 
 // hardcore mode, shown in the game switcher: a pixel skull and HARDCORE in a pill beside the time and battery
@@ -1920,9 +1941,12 @@ static void blitHardcoreBadge(SDL_Surface* screen, int hardware_w) {
 	SDL_BlitSurface(text, NULL, screen, &(SDL_Rect){ sx + skull_w + gap, y + (h - text->h) / 2 });
 	SDL_FreeSurface(text);
 }
-static void Entry_open(Entry* self) {
+static void Entry_open(Entry* self, SDL_Surface* screen) {
 	recent_alias = self->name;  // yiiikes
-	if (self->type==ENTRY_ROM) {
+	if (exactMatch(self->path, FAUX_UPDATE_PATH)) {
+		showUpdate(screen);
+	}
+	else if (self->type==ENTRY_ROM) {
 		char *last = NULL;
 		if (prefixMatch(COLLECTIONS_PATH, top->path) || exactMatch(FAUX_FAVORITES_PATH, top->path) || exactMatch(FAUX_MOSTPLAYED_PATH, top->path)) {
 			char* tmp;
@@ -3628,6 +3652,97 @@ static int askDelete(SDL_Surface* screen, char* title, char* detail, char* yes, 
 	return result;
 }
 
+// The latest GitHub release's patch notes, saved by update.sh. A is followed by a separate confirmation so merely
+// opening the category can never start a download.
+static void showUpdate(SDL_Surface* screen) {
+	char metadata[1024] = "";
+	char notes[8192+4] = "No patch notes were included with this release.";
+	getFile(UPDATE_AVAILABLE_PATH, metadata, sizeof(metadata));
+	if (exists(UPDATE_NOTES_PATH)) getFile(UPDATE_NOTES_PATH, notes, sizeof(notes)-4);
+	trimTrailingNewlines(metadata);
+	trimTrailingNewlines(notes);
+	char* newline = strchr(metadata, '\n');
+	if (newline) *newline = '\0';
+	char tag[64];
+	snprintf(tag, sizeof(tag), "%s", metadata[0] ? metadata : "Update");
+
+	GFX_wrapText(font.small, notes, screen->w - SCALE1(PADDING*4), 0);
+	#define UPDATE_NOTE_LINES 256
+	char* lines[UPDATE_NOTE_LINES];
+	int line_count = 0;
+	char* line = notes;
+	while (line_count<UPDATE_NOTE_LINES) {
+		lines[line_count++] = line;
+		char* end = strchr(line, '\n');
+		if (!end) break;
+		*end = '\0';
+		line = end + 1;
+	}
+
+	int line_h = TTF_FontHeight(font.small) + SCALE1(2);
+	int body_top = SCALE1(PADDING + PILL_SIZE + 8);
+	int body_bottom = screen->h - SCALE1(PADDING + PILL_SIZE + 6);
+	int shown = MAX(1, (body_bottom - body_top) / line_h);
+	int start = 0;
+	int dirty = 1;
+	int show_setting = 0;
+	int result = 0;
+	while (!result) {
+		GFX_startFrame();
+		PAD_poll();
+		if (PAD_justPressed(BTN_B)) result = -1;
+		else if (PAD_justPressed(BTN_A)) result = 1;
+		else if (PAD_justRepeated(BTN_UP)) { start = MAX(0, start-1); dirty = 1; SFX_play(SFX_TICK); }
+		else if (PAD_justRepeated(BTN_DOWN)) { start = MIN(MAX(0, line_count-shown), start+1); dirty = 1; SFX_play(SFX_TICK); }
+		else if (PAD_justRepeated(BTN_L1)) { start = MAX(0, start-shown); dirty = 1; SFX_play(SFX_TICK); }
+		else if (PAD_justRepeated(BTN_R1)) { start = MIN(MAX(0, line_count-shown), start+shown); dirty = 1; SFX_play(SFX_TICK); }
+		PWR_update(&dirty, &show_setting, NULL, NULL);
+		if (dirty) {
+			GFX_clear(screen);
+			int ow = GFX_blitHardwareGroup(screen, show_setting);
+			SDL_Surface* title = TTF_RenderUTF8_Blended(font.large, "Update Available!", COLOR_WHITE);
+			SDL_BlitSurface(title, NULL, screen, &(SDL_Rect){ SCALE1(PADDING+BUTTON_PADDING), SCALE1(PADDING) + (SCALE1(PILL_SIZE)-title->h)/2 });
+			int title_w = title->w;
+			SDL_FreeSurface(title);
+			SDL_Surface* version = TTF_RenderUTF8_Blended(font.small, tag, COLOR_DARK_TEXT);
+			if (version && SCALE1(PADDING*3+BUTTON_PADDING)+title_w+version->w<screen->w-ow) {
+				SDL_BlitSurface(version, NULL, screen, &(SDL_Rect){ SCALE1(PADDING*2+BUTTON_PADDING)+title_w, SCALE1(PADDING) + (SCALE1(PILL_SIZE)-version->h)/2 });
+			}
+			if (version) SDL_FreeSurface(version);
+
+			int y = body_top;
+			for (int i=start; i<line_count && i<start+shown; i++) {
+				if (lines[i][0]) {
+					SDL_Surface* text = TTF_RenderUTF8_Blended(font.small, lines[i], COLOR_WHITE);
+					if (text) {
+						SDL_BlitSurface(text, NULL, screen, &(SDL_Rect){ SCALE1(PADDING*2), y });
+						SDL_FreeSurface(text);
+					}
+				}
+				y += line_h;
+			}
+			if (show_setting && !GetHDMI()) GFX_blitHardwareHints(screen, show_setting);
+			else if (line_count>shown) GFX_blitButtonGroup((char*[]){ "L1 R1","PAGE", NULL }, 0, screen, 0);
+			GFX_blitButtonGroup((char*[]){ "B","BACK", "A","UPDATE", NULL }, 1, screen, 1);
+			GFX_flip(screen);
+			dirty = 0;
+		}
+		else GFX_sync();
+	}
+	if (result<0) { SFX_play(SFX_BACK); return; }
+
+	char title[128];
+	snprintf(title, sizeof(title), "Install MinUI+ %s?", tag);
+	if (!askDelete(screen, title, "Downloads, installs, and restarts the A30.", "UPDATE", "BACK")) return;
+	if (!exists(UPDATE_SCRIPT)) { showFlash("The updater isn't installed", 0); return; }
+	// the notice outlives the connection it was found on: offer Wi-Fi rather than fail the download
+	if (!PLAT_isOnline() && !WIFI_offer(screen, "Updating needs Wi-Fi")) return;
+	char script[MAX_PATH], cmd[MAX_PATH*2];
+	snprintf(script, sizeof(script), "%s", UPDATE_SCRIPT);
+	snprintf(cmd, sizeof(cmd), "'%s' install", escapeSingleQuotes(script));
+	queueNext(cmd);
+}
+
 // a file of game name: the name, then '.' or '-' (eg. "Zelda.gb.sav", "Zelda.gb-a30.cfg" but not "Zelda.gbc.sav")
 static int isFileOf(const char* file, const char* name) {
 	int len = strlen(name);
@@ -4124,8 +4239,6 @@ static void pickCore(SDL_Surface* screen) {
 
 // the game menu (MENU + Y): change its core, get its box art, rename or delete it
 #define BOX_ART_PAK SDCARD_PATH "/Tools/" PLATFORM "/Box Art.pak/launch.sh"
-#define CLOCK_PAK SDCARD_PATH "/Tools/" PLATFORM "/Clock.pak/launch.sh" // setting the time, from the settings' Clock row
-#define CLOCK_PAK_SYSTEM PAKS_PATH "/Clock.pak/launch.sh" // or where stock MinUI keeps it
 static void gameMenu(SDL_Surface* screen) {
 	Entry* entry = top->entries->items[top->selected];
 	char rel_path[MAX_PATH];
@@ -4384,11 +4497,13 @@ int main (int argc, char *argv[]) {
 	int scrolling = 0;
 	int show_version = 0;
 	#define INFO_ROW_WIFI 0 // then one row per power timer
-	#define INFO_ROW_THEME (1 + PWR_TIMER_COUNT)
-	#define INFO_ROW_SOUNDS (2 + PWR_TIMER_COUNT)
-	#define INFO_ROW_MUSIC (3 + PWR_TIMER_COUNT)
-	#define INFO_ROW_CLOCK (4 + PWR_TIMER_COUNT)
-	#define INFO_ROW_COUNT (5 + PWR_TIMER_COUNT)
+	#define INFO_ROW_SLEEP_LIGHT (1 + PWR_TIMER_COUNT) // under the timers it goes with
+	#define INFO_ROW_THEME (2 + PWR_TIMER_COUNT)
+	#define INFO_ROW_SOUNDS (3 + PWR_TIMER_COUNT)
+	#define INFO_ROW_MUSIC (4 + PWR_TIMER_COUNT)
+	#define INFO_ROW_CLOCK (5 + PWR_TIMER_COUNT)
+	#define INFO_ROW_TIME_ZONE (6 + PWR_TIMER_COUNT) // for syncing the clock over Wi-Fi
+	#define INFO_ROW_COUNT (7 + PWR_TIMER_COUNT)
 	#define INFO_ROWS_SHOWN 5 // the rest scroll into view
 	int info_row = 0; // selected row on the version screen
 	int info_start = 0; // first row shown
@@ -4417,6 +4532,11 @@ int main (int argc, char *argv[]) {
 			LOG_info("slow frame: %ums, %llums after start\n", frame_gap, (unsigned long long)(getMicroseconds()-main_begin)/1000);
 		}
 		last_frame_at = now;
+		static uint32_t update_checked_at = 0;
+		if (now-update_checked_at>=1000) {
+			update_checked_at = now;
+			if (updateRootUpdate()) dirty = 1;
+		}
 		
 		PAD_poll();
 		
@@ -4439,11 +4559,17 @@ int main (int argc, char *argv[]) {
 		// any other button pressed meanwhile makes it a combo instead (eg. MENU + volume for brightness)
 		static uint32_t menu_down_at = 0;
 		static int menu_combo = 0;
+		static int switcher_ready = 0;
 		if (PAD_justPressed(BTN_MENU)) {
 			menu_down_at = now;
 			menu_combo = 0;
+			switcher_ready = 0;
 		}
 		else if (PAD_isPressed(BTN_MENU) && PAD_justPressed(BTN_ANY)) menu_combo = 1;
+		if (!menu_combo && !switcher_ready && PAD_isPressed(BTN_MENU) && now-menu_down_at>=SWITCHER_HOLD_MS) {
+			switcher_ready = 1;
+			VIB_pulse(32768, 60);
+		}
 		if (PAD_justReleased(BTN_MENU) && !menu_combo && now-menu_down_at>=SWITCHER_HOLD_MS) {
 			if (show_version) {
 				show_version = 0;
@@ -4465,6 +4591,14 @@ int main (int argc, char *argv[]) {
 		}
 		was_online = is_online;
 		
+		// the sleep light shows its level while its row is picked, so it can be judged without sleeping
+		static int sleep_light_shown = -1;
+		int sleep_light = show_version && info_row==INFO_ROW_SLEEP_LIGHT ? PWR_getSleepLight() : -1;
+		if (sleep_light!=sleep_light_shown) {
+			PLAT_showSleepLight(sleep_light);
+			sleep_light_shown = sleep_light;
+		}
+
 		if (show_version) {
 			if (PAD_justPressed(BTN_B) || PAD_tappedMenu(now)) {
 				show_version = 0;
@@ -4493,17 +4627,13 @@ int main (int argc, char *argv[]) {
 				SFX_play(SFX_TICK);
 				dirty = 1;
 			}
-			else if (info_row==INFO_ROW_CLOCK && PAD_justPressed(BTN_A)) { // setting the time: the Clock tool, then back here
-				char* clock_pak = exists(CLOCK_PAK) ? CLOCK_PAK : exists(CLOCK_PAK_SYSTEM) ? CLOCK_PAK_SYSTEM : NULL;
-				if (clock_pak) {
-					SFX_play(SFX_CONFIRM);
-					if (top->entries->count>0) saveLast(((Entry*)top->entries->items[top->selected])->path);
-					char pak[MAX_PATH], cmd[MAX_PATH*2];
-					strcpy(pak, clock_pak);
-					snprintf(cmd, sizeof(cmd), "'%s'", escapeSingleQuotes(pak));
-					queueNext(cmd);
-				}
-				else showFlash("The Clock tool isn't installed", 0);
+			else if (info_row==INFO_ROW_TIME_ZONE && (PAD_justRepeated(BTN_LEFT) || PAD_justRepeated(BTN_RIGHT))) {
+				int zones = GFX_getTimeZoneCount() + 1; // and Automatic, first
+				int at = MAX(GFX_getTimeZone(), -1); // (one that was looked up and isn't listed sits by Automatic)
+				at += 1; // kept separate: the project's MAX macro does not parenthesize its ternary expression
+				at = (at + (PAD_justRepeated(BTN_RIGHT) ? 1 : zones - 1)) % zones;
+				GFX_setTimeZone(at - 1);
+				SFX_play(SFX_TICK);
 				dirty = 1;
 			}
 			else if (info_row==INFO_ROW_MUSIC && PAD_justPressed(BTN_A)) {
@@ -4540,7 +4670,12 @@ int main (int argc, char *argv[]) {
 				version = NULL; // its text is drawn in the theme's colors
 				dirty = 1;
 			}
-			else if (info_row>INFO_ROW_WIFI && info_row<INFO_ROW_THEME && (PAD_justRepeated(BTN_LEFT) || PAD_justRepeated(BTN_RIGHT))) { // power timers
+			else if (info_row==INFO_ROW_SLEEP_LIGHT && (PAD_justPressed(BTN_A) || PAD_justPressed(BTN_LEFT) || PAD_justPressed(BTN_RIGHT))) {
+				PWR_setSleepLight(PWR_getSleepLight()==SLEEP_LIGHT_ON ? SLEEP_LIGHT_OFF : SLEEP_LIGHT_ON);
+				dirty = 1;
+				SFX_play(SFX_TICK);
+			}
+			else if (info_row>INFO_ROW_WIFI && info_row<INFO_ROW_SLEEP_LIGHT && (PAD_justRepeated(BTN_LEFT) || PAD_justRepeated(BTN_RIGHT))) { // power timers
 				// clamped rather than wrapped so holding left/right can't jump to Never by accident
 				int timer = info_row - 1;
 				int index = PWR_getTimer(timer) + (PAD_justRepeated(BTN_RIGHT) ? 1 : -1);
@@ -4795,7 +4930,7 @@ int main (int argc, char *argv[]) {
 			else if (total>0 && can_resume && PAD_justReleased(BTN_RESUME) && !inSwitcher()) {
 				SFX_play(SFX_CONFIRM);
 				should_resume = 1;
-				Entry_open(top->entries->items[top->selected]);
+				Entry_open(top->entries->items[top->selected], screen);
 				dirty = 1;
 			}
 			else if (total>0 && PAD_justPressed(BTN_A)) {
@@ -4809,7 +4944,7 @@ int main (int argc, char *argv[]) {
 						resume_slot = slot;
 					}
 				}
-				Entry_open(top->entries->items[top->selected]);
+				Entry_open(top->entries->items[top->selected], screen);
 				total = top->entries->count;
 				dirty = 1;
 
@@ -4970,6 +5105,14 @@ int main (int argc, char *argv[]) {
 						int mode = GFX_getClockMode();
 						strcpy(value, mode==CLOCK_12H ? "12-hour" : (mode==CLOCK_24H ? "24-hour" : "Off"));
 					}
+					else if (i==INFO_ROW_SLEEP_LIGHT) {
+						name = "Sleep light";
+						strcpy(value, PWR_getSleepLight()==SLEEP_LIGHT_ON ? "On" : "Off");
+					}
+					else if (i==INFO_ROW_TIME_ZONE) {
+						name = "Time zone";
+						strcpy(value, GFX_getTimeZoneName(GFX_getTimeZone()));
+					}
 					else if (i==INFO_ROW_MUSIC) {
 						name = "Music";
 						if (BGM_isEnabled()) sprintf(value, "%i%%", BGM_getVolume() * 100 / BGM_VOLUME_MAX);
@@ -4997,15 +5140,19 @@ int main (int argc, char *argv[]) {
 				int right_w = 0;
 				if (info_row==INFO_ROW_WIFI) right_w = GFX_blitButtonGroup((char*[]){ "B","BACK", "A","SET UP", NULL }, 1, screen, 1);
 				else if (info_row==INFO_ROW_MUSIC) right_w = GFX_blitButtonGroup((char*[]){ "B","BACK", "A",BGM_isEnabled() ? "OFF" : "ON", NULL }, 1, screen, 1);
-				else if (info_row==INFO_ROW_CLOCK) right_w = GFX_blitButtonGroup((char*[]){ "B","BACK", "A","SET TIME", NULL }, 1, screen, 1);
 				else right_w = GFX_blitButtonGroup((char*[]){ "B","BACK",  NULL }, 0, screen, 1);
 
 				if (show_setting && !GetHDMI()) GFX_blitHardwareHints(screen, show_setting);
-				else if (info_row==INFO_ROW_MUSIC) { // where the songs go, in place of the left hints
-					int songs = BGM_countSongs();
+				else if (info_row==INFO_ROW_MUSIC || info_row==INFO_ROW_TIME_ZONE || info_row==INFO_ROW_CLOCK || info_row==INFO_ROW_SLEEP_LIGHT) { // a line about the row, in place of the left hints
 					char hint[64], shown[64];
-					if (songs) snprintf(hint, sizeof(hint), "%i song%s in /BGM", songs, songs==1 ? "" : "s");
-					else strcpy(hint, "Put songs in /BGM");
+					if (info_row==INFO_ROW_TIME_ZONE) strcpy(hint, "Automatic, or pick yours");
+					else if (info_row==INFO_ROW_CLOCK) strcpy(hint, "Automatic; needs Wi-Fi");
+					else if (info_row==INFO_ROW_SLEEP_LIGHT) strcpy(hint, "The light while asleep");
+					else {
+						int songs = BGM_countSongs();
+						if (songs) snprintf(hint, sizeof(hint), "%i song%s in /BGM", songs, songs==1 ? "" : "s");
+						else strcpy(hint, "Put songs in /BGM");
+					}
 					int pill_w = screen->w - SCALE1(PADDING*3) - right_w;
 					GFX_truncateText(font.small, hint, shown, pill_w - SCALE1(BUTTON_PADDING*2), 0);
 					SDL_Surface* text = TTF_RenderUTF8_Blended(font.small, shown, COLOR_WHITE);

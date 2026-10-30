@@ -124,7 +124,9 @@
 
 ///////////////////////////////
 
+#ifndef SDCARD_PATH
 #define SDCARD_PATH "/Users/shauninman/Projects/Personal/MinUI/workspace/macos/FAKESD"
+#endif
 #define MUTE_VOLUME_RAW 63 // 0 unintuitively is 100% volume
 
 ///////////////////////////////

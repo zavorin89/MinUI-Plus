@@ -28,6 +28,11 @@
 #define BGM_VOLUME_PATH SHARED_USERDATA_PATH "/.minui/music_volume.txt"
 #define BGM_LAST_PATH "/tmp/minui_music" // the song played last, so the next launch starts another
 #define CLOCK_PATH SHARED_USERDATA_PATH "/.minui/clock.txt" // the clock beside wifi and the battery: 0 off, 1 12 hour, 2 24 hour
+#define SLEEP_LIGHT_PATH SHARED_USERDATA_PATH "/.minui/sleep-light.txt" // the light while asleep: 0 off, else on
+#define TIME_ZONE_PATH SHARED_USERDATA_PATH "/.minui/time-zone.txt" // the TZ rule picked in the settings (none: no syncing)
+#define CLOCK_SET_PATH "/tmp/minui_clock_set" // wifi synced the time since this boot: the clock shows only then
+#define UPDATE_AVAILABLE_PATH SHARED_USERDATA_PATH "/.minui/update-available.txt" // tag, asset, URL, SHA-256 and size from GitHub
+#define UPDATE_NOTES_PATH SHARED_USERDATA_PATH "/.minui/update-notes.txt" // latest release's notes, shown before installing
 // RetroAchievements only counts hardcore unlocks from emulators it has approved, and MinUI+ isn't one, so hardcore is
 // hidden (and an old "on" ignored) until MinUI+ has its own: hardcore rules kept on this A30, unlocks sent as softcore
 #define RA_HARDCORE_AVAILABLE 0
@@ -43,6 +48,7 @@
 #define FAUX_FAVORITES_PATH SDCARD_PATH "/Favorites"
 #define FAUX_MOSTPLAYED_PATH SDCARD_PATH "/Most Played" // opened from the info screen, not listed in the root
 #define FAUX_SWITCHER_PATH SDCARD_PATH "/Game Switcher" // opened by holding MENU, not listed in the root
+#define FAUX_UPDATE_PATH SDCARD_PATH "/Update Available!" // first in the system list only when GitHub has a newer release
 #define COLLECTIONS_PATH SDCARD_PATH "/Collections"
 #define BORDERS_PATH SDCARD_PATH "/Borders"
 

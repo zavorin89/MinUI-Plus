@@ -1856,8 +1856,10 @@ static void input_poll_callback(void) {
 
 	// I _think_ this can stay as is...
 	static uint32_t menu_down_at = 0;
+	static int switcher_ready = 0;
 	if (PAD_justPressed(BTN_MENU)) {
 		ignore_menu = 0;
+		switcher_ready = 0;
 		menu_down_at = SDL_GetTicks();
 		if (RA_dismissNotification()) ignore_menu = 1; // a popup's up: MENU clears it instead of opening the menu
 	}
@@ -1935,6 +1937,11 @@ static void input_poll_callback(void) {
 	
 	// any other button while MENU is down makes it a combo (eg. MENU + volume for brightness), not a menu press
 	if (PAD_isPressed(BTN_MENU) && !PAD_justPressed(BTN_MENU) && PAD_justPressed(BTN_ANY)) ignore_menu = 1;
+	// A gentle cue at the threshold says the switcher is ready; releasing MENU still performs the save and opens it.
+	if (!ignore_menu && !switcher_ready && PAD_isPressed(BTN_MENU) && SDL_GetTicks()-menu_down_at>=SWITCHER_HOLD_MS) {
+		switcher_ready = 1;
+		VIB_pulse(32768, 60);
+	}
 	
 	// held, then let go: off to the game switcher
 	if (!ignore_menu && PAD_justReleased(BTN_MENU) && SDL_GetTicks()-menu_down_at>=SWITCHER_HOLD_MS) {
@@ -2061,10 +2068,23 @@ static void Input_init(const struct retro_input_descriptor *vars) {
 	input_initialized = 1;
 }
 
+#define RUMBLE_PORT_COUNT 4
+static uint16_t rumble_channels[RUMBLE_PORT_COUNT][2];
 static bool set_rumble_state(unsigned port, enum retro_rumble_effect effect, uint16_t strength) {
-	// TODO: handle other args? not sure I can
-	VIB_setStrength(strength);
-	return 1;
+	if (port>=RUMBLE_PORT_COUNT || (effect!=RETRO_RUMBLE_STRONG && effect!=RETRO_RUMBLE_WEAK)) return false;
+	rumble_channels[port][effect==RETRO_RUMBLE_WEAK] = strength;
+
+	// The A30 has one motor. Keep the variable low-frequency/strong channel intact, and mix the high-frequency/weak
+	// channel at half strength instead of letting its common 0xffff on/off value flatten everything to maximum.
+	unsigned mixed = 0;
+	for (int i=0; i<RUMBLE_PORT_COUNT; i++) {
+		unsigned strong = rumble_channels[i][0];
+		unsigned weak = rumble_channels[i][1] / 2;
+		unsigned level = MAX(strong, weak);
+		if (level>mixed) mixed = level;
+	}
+	VIB_setStrength(mixed);
+	return true;
 }
 // the core's memory layout, which RetroAchievements needs to find each console's RAM
 static struct retro_memory_map memory_map = {0};

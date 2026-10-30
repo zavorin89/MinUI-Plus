@@ -19,11 +19,13 @@ STOCK="$1"
 	exit 1
 }
 STOCK="$(cd "$STOCK" && pwd)"
+"$REPO/tools/dev/build-https.sh"
 STAGE="${STAGE:-$(mktemp -d)}/MinUI-src"
 
 echo "== staging in $STAGE"
 mkdir -p "$STAGE"
 rsync -a --delete --exclude build --exclude releases --exclude '._*' --exclude .DS_Store "$REPO/" "$STAGE/"
+cp "$REPO/tools/dev/out/all/https/build/my282/https.elf" "$STAGE/skeleton/SYSTEM/my282/bin/https.elf"
 cd "$STAGE"
 find workspace -type d -name build -prune -exec rm -rf {} +
 # the releases already made, so a second one on the same day is numbered after them (MinUIPlus-<date>-1 and so on)
