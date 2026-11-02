@@ -15,6 +15,7 @@
 
 #include "defines.h"
 #include "api.h"
+#include "tools.h"
 #include "bgm.h"
 #include "utils.h"
 #include "ra_http.h"
@@ -856,24 +857,11 @@ static void resizeAll(void) {
 
 ///////////////////////////////
 
-int main(int argc , char* argv[]) {
-	PWR_setCPUSpeed(CPU_SPEED_MENU);
-	screen = GFX_init(MODE_MAIN);
-	PAD_init();
-	PWR_init();
-	InitSettings();
-	SFX_forInput(1); // clicks for moving, choosing and going back
-	BGM_start(); // the menus' music, when it's on
-
-	if (argc>1) { // one game, from the launcher's game menu
-		findOne(argv[1]);
-		BGM_quit();
-		SFX_quit();
-		QuitSettings();
-		PWR_quit();
-		PAD_quit();
-		GFX_quit();
-		return EXIT_SUCCESS;
+void BoxArt_open(SDL_Surface* main_screen, char* game) {
+	screen = main_screen;
+	if (game) { // one game, from the launcher's game menu
+		findOne(game);
+		return;
 	}
 
 	enum { ROW_MISSING, ROW_RESIZE, ROW_COUNT };
@@ -911,7 +899,7 @@ int main(int argc , char* argv[]) {
 
 		if (dirty) {
 			GFX_clear(screen);
-			int ow = GFX_blitHardwareGroup(screen, show_setting);
+			GFX_blitHeader(screen, "Box Art", GFX_blitHardwareGroup(screen, show_setting)); // the rows below
 
 			for (int i=0; i<ROW_COUNT; i++) {
 				char name[64], value[64];
@@ -925,9 +913,8 @@ int main(int argc , char* argv[]) {
 					if (resizable) sprintf(value, "%i to resize", resizable);
 					else strcpy(value, "All sized");
 				}
-				int y = SCALE1(PADDING + i*PILL_SIZE);
+				int y = SCALE1(PADDING + (i+1)*PILL_SIZE);
 				int width = screen->w - SCALE1(PADDING*2);
-				if (i==0) width -= ow;
 				int is_selected = i==selected;
 				if (is_selected) GFX_blitPill(ASSET_WHITE_PILL, screen, &(SDL_Rect){ SCALE1(PADDING), y, width, SCALE1(PILL_SIZE) });
 
@@ -946,7 +933,7 @@ int main(int argc , char* argv[]) {
 			char* hint = selected==ROW_MISSING
 				? "Downloads art from the libretro thumbnail library\nfor games missing it, or all of them\n(Wi-Fi needs to be on)"
 				: "Shrinks or grows existing art to the same width\nso lists and the carousel load quickly";
-			int y = SCALE1(PADDING + ROW_COUNT*PILL_SIZE + PADDING);
+			int y = SCALE1(PADDING + (ROW_COUNT+1)*PILL_SIZE + PADDING);
 			GFX_blitMessage(font.small, hint, screen, &(SDL_Rect){ 0, y, screen->w, screen->h - y - SCALE1(PADDING+PILL_SIZE) });
 
 			if (show_setting && !GetHDMI()) GFX_blitHardwareHints(screen, show_setting);
@@ -958,6 +945,18 @@ int main(int argc , char* argv[]) {
 	}
 
 	free(scratch);
+}
+
+#ifndef MINUI_TOOLS
+int main(int argc , char* argv[]) {
+	PWR_setCPUSpeed(CPU_SPEED_MENU);
+	SDL_Surface* screen = GFX_init(MODE_MAIN);
+	PAD_init();
+	PWR_init();
+	InitSettings();
+	SFX_forInput(1); // clicks for moving, choosing and going back
+	BGM_start(); // the menus' music, when it's on
+	BoxArt_open(screen, argc>1 ? argv[1] : NULL); // a game's path finds art for just that game
 	BGM_quit();
 	SFX_quit();
 	QuitSettings();
@@ -966,3 +965,4 @@ int main(int argc , char* argv[]) {
 	GFX_quit();
 	return EXIT_SUCCESS;
 }
+#endif

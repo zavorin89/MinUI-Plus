@@ -28,6 +28,7 @@
 #define UPDATE_SCRIPT SYSTEM_PATH "/bin/update.sh"
 #include "wifi_ask.h"
 #include "keyboard.h"
+#include "tools.h"
 #include "bgm.h"
 
 ///////////////////////////////////////
@@ -264,6 +265,11 @@ static int favorites_sort = FAVORITES_SORT_NAME;
 #define VIEW_CAROUSEL 1
 #define VIEW_MODE_PATH SHARED_USERDATA_PATH "/.minui/view.txt"
 static int view_mode = VIEW_LIST;
+
+// in game lists X resumes and A opens, unless these are swapped in the settings: A resumes (or opens when there's no
+// save) and X opens
+#define SWAP_AX_PATH SHARED_USERDATA_PATH "/.minui/swap_ax.txt"
+static int swap_ax = 0;
 
 
 // plain game folders can be re-sorted with L2/R2 (Favorites cycles its own sorts)
@@ -1027,22 +1033,17 @@ static void toggleFavorite(void) {
 ///////////////////////////////////////
 
 #define MOST_PLAYED_COUNT 10
-#define WIFI_PAK TOOLS_DIR "/Wi-Fi.pak/launch.sh" // opened from the settings' Wi-Fi row
 #define WIFI_ON_PATH SHARED_USERDATA_PATH "/.minui/wifi-on" // set while Wi-Fi is on (see wifi.sh and launch.sh)
-#define WIFI_CREDS_PATH SHARED_USERDATA_PATH "/wifi.txt"
 static char wifi_status[128] = "Off"; // the settings' Wi-Fi row, read when they open and when the connection changes
 static void getWifiStatus(char* out, size_t size) { // the network's name when connected, else Off (or Not connected)
-	if (PLAT_isOnline()) {
-		char creds[512] = "";
-		if (exists(WIFI_CREDS_PATH)) getFile(WIFI_CREDS_PATH, creds, sizeof(creds));
-		char* ssid = strstr(creds, "ssid=");
-		if (ssid) {
-			ssid += 5;
-			int len = strcspn(ssid, "\r\n");
-			snprintf(out, size, "%.*s", len, ssid);
-			if (out[0]) return;
+	if (PLAT_isOnline()) { // which of the saved networks it joined, from wifi.sh
+		out[0] = '\0';
+		FILE* pipe = popen("wifi.sh ssid 2>/dev/null", "r");
+		if (pipe) {
+			if (fgets(out, size, pipe)) trimTrailingNewlines(out);
+			pclose(pipe);
 		}
-		snprintf(out, size, "Connected");
+		if (!out[0]) snprintf(out, size, "Connected");
 	}
 	else snprintf(out, size, exists(WIFI_ON_PATH) ? "Not connected" : "Off");
 }
@@ -1620,6 +1621,29 @@ static int autoResume(void) {
 	return 1;
 }
 
+// the built-in tools (tools.h) open right here and come back to the list just as it was, without a launcher restart.
+// Their paks stay in Tools so they're listed there (and their launch.sh still runs each alone)
+static void freeThumbs(void);
+static void Carousel_quit(void);
+static void openTool(SDL_Surface* screen, char* name, char* game) {
+	SFX_forInput(1); // the tools click for moving, choosing and going back by themselves
+	if (exactMatch(name, "Controls.pak")) Controls_open(screen);
+	else if (exactMatch(name, "Wi-Fi.pak")) Wifi_open(screen);
+	else if (exactMatch(name, "Box Art.pak")) BoxArt_open(screen, game);
+	else if (exactMatch(name, "RetroAchievements.pak")) RetroAchievements_open(screen);
+	SFX_forInput(0);
+	PAD_reset();
+	if (exactMatch(name, "Box Art.pak")) { // art it found or resized is read again
+		freeThumbs();
+		Carousel_quit();
+	}
+}
+static int isTool(char* path) {
+	if (!prefixMatch(TOOLS_DIR "/", path)) return 0;
+	char* name = strrchr(path, '/') + 1;
+	return exactMatch(name, "Controls.pak") || exactMatch(name, "Wi-Fi.pak") || exactMatch(name, "Box Art.pak") || exactMatch(name, "RetroAchievements.pak");
+}
+
 static void openPak(char* path) {
 	// NOTE: escapeSingleQuotes() modifies the passed string 
 	// so we need to save the path before we call that
@@ -1701,23 +1725,28 @@ typedef struct Core {
 } Core;
 #define CORE_MAX 8
 // the core a pak's launch.sh runs, by a friendlier name when it's a known one
-static void getCoreName(char* tag, char* name, const char** about) {
-	snprintf(name, 64, "%s", tag);
-	*about = NULL;
+// the core (EMU_EXE) a pak's launch.sh runs, 0 when it names none (eg. a native pak, not run by minarch)
+static int getPakExe(char* tag, char* exe) {
+	exe[0] = '\0';
 	char pak[MAX_PATH];
 	getEmuPath(tag, pak);
 	FILE* file = fopen(pak, "r");
-	if (!file) return;
+	if (!file) return 0;
 	char line[256];
-	char exe[64] = "";
 	while (fgets(line, sizeof(line), file)) {
 		if (!prefixMatch("EMU_EXE=", line)) continue;
 		trimTrailingNewlines(line);
-		snprintf(exe, sizeof(exe), "%s", line + 8);
+		snprintf(exe, 64, "%s", line + 8);
 		break;
 	}
 	fclose(file);
-	if (!exe[0]) return;
+	return exe[0]!='\0';
+}
+static void getCoreName(char* tag, char* name, const char** about) {
+	snprintf(name, 64, "%s", tag);
+	*about = NULL;
+	char exe[64];
+	if (!getPakExe(tag, exe)) return;
 	static const char* known[][3] = {
 		{"snes9x2005_plus","Snes9x 2005 Plus",	"The fastest. Runs nearly every game at full speed,\nwith a few accuracy fixes over the original 2005."},
 		{"snes9x2005","Snes9x 2005",			"Very fast, made for low-powered handhelds."},
@@ -1962,7 +1991,8 @@ static void Entry_open(Entry* self, SDL_Surface* screen) {
 		openRom(self->path, last);
 	}
 	else if (self->type==ENTRY_PAK) {
-		openPak(self->path);
+		if (isTool(self->path)) openTool(screen, strrchr(self->path, '/') + 1, NULL);
+		else openPak(self->path);
 	}
 	else if (self->type==ENTRY_DIR) {
 		openDirectory(self->path, 1);
@@ -2425,6 +2455,7 @@ static void Menu_init(void) {
 	folder_sort = getInt(FOLDER_SORT_PATH);
 	if (folder_sort<0 || folder_sort>=FOLDER_SORT_COUNT) folder_sort = FOLDER_SORT_AZ;
 	view_mode = !exists(VIEW_MODE_PATH) || getInt(VIEW_MODE_PATH)==VIEW_CAROUSEL ? VIEW_CAROUSEL : VIEW_LIST; // the carousel until one is picked
+	swap_ax = getInt(SWAP_AX_PATH);
 
 	openDirectory(SDCARD_PATH, 0);
 	loadLast(); // restore state when available
@@ -2463,6 +2494,37 @@ static SDL_Surface* loadArt(char* res_path, SDL_Surface* screen) {
 	}
 	SDL_FreeSurface(image);
 	return art;
+}
+// The system wallpapers are right-aligned strips, often with a large black area before the hardware. On the root
+// system menu only, labels may use that empty area without touching the visible art. Returns the first non-black
+// column in the requested rows (or art->w when the rows are entirely black).
+static int firstVisibleArtX(SDL_Surface* art, int y, int h) {
+	if (!art || h<=0 || y>=art->h || y+h<=0) return art ? art->w : 0;
+	if (y<0) { h += y; y = 0; }
+	if (y+h>art->h) h = art->h-y;
+	int first = art->w;
+	int bpp = art->format->BytesPerPixel;
+	uint32_t rgb_mask = art->format->Rmask | art->format->Gmask | art->format->Bmask;
+	if (SDL_MUSTLOCK(art) && SDL_LockSurface(art)<0) return 0;
+	for (int row_y=y; row_y<y+h; row_y++) {
+		uint8_t* row = (uint8_t*)art->pixels + row_y * art->pitch;
+		for (int x=0; x<first; x++) {
+			uint32_t pixel;
+			if (bpp==2) pixel = ((uint16_t*)row)[x];
+			else if (bpp==4) pixel = ((uint32_t*)row)[x];
+			else if (bpp==3) {
+#if SDL_BYTEORDER == SDL_BIG_ENDIAN
+				pixel = row[x*3] << 16 | row[x*3+1] << 8 | row[x*3+2];
+#else
+				pixel = row[x*3] | row[x*3+1] << 8 | row[x*3+2] << 16;
+#endif
+			}
+			else pixel = row[x];
+			if (pixel & rgb_mask) { first = x; break; }
+		}
+	}
+	if (SDL_MUSTLOCK(art)) SDL_UnlockSurface(art);
+	return first;
 }
 static int Decoder_take(char* path, SDL_Surface** art, SDL_Surface** grey, int wait);
 // the art, from the cache or the decoding thread; when it's neither and can_decode is off, NULL for now
@@ -3652,7 +3714,7 @@ static int askDelete(SDL_Surface* screen, char* title, char* detail, char* yes, 
 	return result;
 }
 
-// The latest GitHub release's patch notes, saved by update.sh. A is followed by a separate confirmation so merely
+// The latest release's patch notes, saved by update.sh. A is followed by a separate confirmation so merely
 // opening the category can never start a download.
 static void showUpdate(SDL_Surface* screen) {
 	char metadata[1024] = "";
@@ -3700,7 +3762,7 @@ static void showUpdate(SDL_Surface* screen) {
 		if (dirty) {
 			GFX_clear(screen);
 			int ow = GFX_blitHardwareGroup(screen, show_setting);
-			SDL_Surface* title = TTF_RenderUTF8_Blended(font.large, "Update Available!", COLOR_WHITE);
+			SDL_Surface* title = TTF_RenderUTF8_Blended(font.large, "Update Available!", COLOR_DARK_TEXT); // grey, as every header
 			SDL_BlitSurface(title, NULL, screen, &(SDL_Rect){ SCALE1(PADDING+BUTTON_PADDING), SCALE1(PADDING) + (SCALE1(PILL_SIZE)-title->h)/2 });
 			int title_w = title->w;
 			SDL_FreeSurface(title);
@@ -4237,8 +4299,104 @@ static void pickCore(SDL_Surface* screen) {
 	showFlash(cores[selected].name, 0);
 }
 
-// the game menu (MENU + Y): change its core, get its box art, rename or delete it
-#define BOX_ART_PAK SDCARD_PATH "/Tools/" PLATFORM "/Box Art.pak/launch.sh"
+// a game's CPU speed, read from and written to the files minarch itself uses, so the game menu and the in-game
+// options always agree: minarch reads system.cfg, then the system pak's default.cfg, then the game's own .cfg when it
+// has one (else the system's minarch.cfg), each overriding the last. Changing it here saves it for this game, as
+// minarch's "Save for this game" does: the game's .cfg, started from the system's settings when it has none yet
+#define GAME_SPEED_KEY "minarch_cpu_speed"
+static char* game_speed_labels[] = { "Powersave", "Normal", "Performance", "Auto" }; // minarch's overclock_labels
+#define GAME_SPEED_COUNT 4
+#define GAME_SPEED_PERFORMANCE 2
+#define GAME_SPEED_AUTO 3 // minarch's default
+#define RUMBLE_KEY "minarch_rumble_strength"
+static char* rumble_labels[] = { "Off", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10" }; // minarch's rumble_level_labels
+#define RUMBLE_COUNT 11
+#define RUMBLE_DEFAULT 7
+typedef struct { char game[MAX_PATH]; char console[MAX_PATH]; char system_default[MAX_PATH]; char exe[64]; } GameConfig;
+static int getGameConfig(char* sd_path, GameConfig* cfg) {
+	char system_tag[MAX_PATH];
+	getEmuName(sd_path, system_tag);
+	char tag[64];
+	if (!getGameCore(sd_path, tag)) snprintf(tag, sizeof(tag), "%s", system_tag);
+	char exe[64];
+	if (!getPakExe(tag, exe)) return 0;
+	snprintf(cfg->exe, sizeof(cfg->exe), "%s", exe);
+	char m3u_path[MAX_PATH];
+	char* name = strrchr(sd_path, '/') + 1;
+	if (!suffixMatch(".m3u", sd_path) && hasM3u(sd_path, m3u_path)) name = strrchr(m3u_path, '/') + 1; // minarch goes by a disc's .m3u
+	char* device = getenv("DEVICE");
+	char suffix[64] = "";
+	if (device) snprintf(suffix, sizeof(suffix), "-%s", device);
+	snprintf(cfg->game, MAX_PATH, USERDATA_PATH "/%s-%s/%s%s.cfg", system_tag, exe, name, suffix);
+	snprintf(cfg->console, MAX_PATH, USERDATA_PATH "/%s-%s/minarch%s.cfg", system_tag, exe, suffix);
+	getEmuPath(system_tag, cfg->system_default); // the system's pak, even when another core runs it (as minarch does)
+	char* slash = strrchr(cfg->system_default, '/');
+	if (slash) strcpy(slash, "/default.cfg");
+	return 1;
+}
+// a key's value in a .cfg as minarch reads it ("key = value", "-key = value" when locked), 0 when it's not there
+static int getCfgValue(char* path, char* key, char* value, int* locked) {
+	char* cfg = allocFile(path);
+	if (!cfg) return 0;
+	int found = 0;
+	char* tmp = cfg;
+	while ((tmp = strstr(tmp, key))) {
+		if (tmp>cfg && *(tmp-1)=='-') *locked = 1;
+		tmp += strlen(key);
+		if (!strncmp(tmp, " = ", 3)) { found = 1; break; }
+	}
+	if (found) {
+		snprintf(value, 64, "%s", tmp + 3);
+		char* end = strpbrk(value, "\r\n");
+		if (end) *end = '\0';
+	}
+	free(cfg);
+	return found;
+}
+// which of a setting's labels applies to a game, as minarch would pick it
+static int getGameOption(GameConfig* cfg, char* key, char** labels, int count, int fallback, int* locked) {
+	char* paths[] = { SYSTEM_PATH "/system.cfg", cfg->system_default, exists(cfg->game) ? cfg->game : cfg->console };
+	int picked = fallback;
+	*locked = 0;
+	for (int i=0; i<3; i++) {
+		char value[64];
+		if (!getCfgValue(paths[i], key, value, locked)) continue;
+		for (int j=0; j<count; j++) if (exactMatch(value, labels[j])) picked = j;
+	}
+	return picked;
+}
+static void setGameOption(GameConfig* cfg, char* key, char* label) {
+	char prefix[64];
+	snprintf(prefix, sizeof(prefix), "%s = ", key);
+	char* from = allocFile(exists(cfg->game) ? cfg->game : cfg->console);
+	size_t size = (from ? strlen(from) : 0) + 64;
+	char* out = malloc(size);
+	out[0] = '\0';
+	int replaced = 0;
+	char* line = from;
+	while (line && *line) {
+		char* next = strchr(line, '\n');
+		size_t len = next ? (size_t)(next - line + 1) : strlen(line);
+		if (prefixMatch(prefix, line)) {
+			snprintf(out + strlen(out), size - strlen(out), "%s%s\n", prefix, label);
+			replaced = 1;
+		}
+		else strncat(out, line, len);
+		line += len;
+	}
+	if (!replaced) snprintf(out + strlen(out), size - strlen(out), "%s%s\n", prefix, label);
+	char dir[MAX_PATH];
+	snprintf(dir, sizeof(dir), "%s", cfg->game);
+	char* slash = strrchr(dir, '/');
+	if (slash) *slash = '\0';
+	mkdir(dir, 0755);
+	putFile(cfg->game, out);
+	sync();
+	free(out);
+	if (from) free(from);
+}
+
+// the game menu (MENU + Y): change its core or CPU speed, get its box art, rename or delete it
 static void gameMenu(SDL_Surface* screen) {
 	Entry* entry = top->entries->items[top->selected];
 	char rel_path[MAX_PATH];
@@ -4251,8 +4409,8 @@ static void gameMenu(SDL_Surface* screen) {
 	char system_tag[MAX_PATH];
 	getEmuName(sd_path, system_tag);
 
-	enum { ROW_CORE, ROW_ART, ROW_RENAME, ROW_DELETE };
-	int rows[4];
+	enum { ROW_CORE, ROW_CPU, ROW_RUMBLE, ROW_ART, ROW_RENAME, ROW_DELETE };
+	int rows[6];
 	int count = 0;
 	Core cores[CORE_MAX];
 	char core_name[64] = "";
@@ -4262,10 +4420,21 @@ static void gameMenu(SDL_Surface* screen) {
 		getCoreName(tag, core_name, &(const char*){NULL});
 		rows[count++] = ROW_CORE;
 	}
+	GameConfig cfg;
+	int speed_locked = 0;
+	int speed = 0;
+	int rumble = RUMBLE_DEFAULT;
+	if (getGameConfig(sd_path, &cfg)) {
+		speed = getGameOption(&cfg, GAME_SPEED_KEY, game_speed_labels, GAME_SPEED_COUNT, GAME_SPEED_AUTO, &speed_locked);
+		if (!speed_locked) rows[count++] = ROW_CPU;
+		int rumble_locked = 0;
+		rumble = getGameOption(&cfg, RUMBLE_KEY, rumble_labels, RUMBLE_COUNT, RUMBLE_DEFAULT, &rumble_locked);
+		if (!rumble_locked && VIB_coreHasRumble(cfg.exe)) rows[count++] = ROW_RUMBLE;
+	}
 	char art_path[MAX_PATH];
 	getResPath(entry, art_path);
 	int has_art = exists(art_path);
-	if (exists(BOX_ART_PAK)) rows[count++] = ROW_ART;
+	rows[count++] = ROW_ART;
 	if (isSortableFolder(top->path)) {
 		rows[count++] = ROW_RENAME;
 		rows[count++] = ROW_DELETE;
@@ -4282,6 +4451,20 @@ static void gameMenu(SDL_Surface* screen) {
 		GFX_startFrame();
 		PAD_poll();
 		if (PAD_justPressed(BTN_B)) result = 0; // (not a MENU tap: letting go of MENU from the combo would count)
+		else if (rows[selected]==ROW_CPU && (PAD_justRepeated(BTN_LEFT) || PAD_justRepeated(BTN_RIGHT) || PAD_justPressed(BTN_A))) {
+			// changed in place, and saved right away for this game (its in-game options show the same)
+			speed = (speed + (PAD_justRepeated(BTN_LEFT) ? GAME_SPEED_COUNT-1 : 1)) % GAME_SPEED_COUNT;
+			setGameOption(&cfg, GAME_SPEED_KEY, game_speed_labels[speed]);
+			SFX_play(SFX_TICK);
+			dirty = 1;
+		}
+		else if (rows[selected]==ROW_RUMBLE && (PAD_justRepeated(BTN_LEFT) || PAD_justRepeated(BTN_RIGHT) || PAD_justPressed(BTN_A))) {
+			rumble = (rumble + (PAD_justRepeated(BTN_LEFT) ? RUMBLE_COUNT-1 : 1)) % RUMBLE_COUNT;
+			setGameOption(&cfg, RUMBLE_KEY, rumble_labels[rumble]);
+			if (rumble) VIB_pulse(65535 * rumble / 10, 200); // feel the new strength
+			SFX_play(SFX_TICK);
+			dirty = 1;
+		}
 		else if (PAD_justPressed(BTN_A)) result = 1;
 		else if (PAD_justRepeated(BTN_UP)) { selected = (selected + count - 1) % count; SFX_play(SFX_TICK); dirty = 1; }
 		else if (PAD_justRepeated(BTN_DOWN)) { selected = (selected + 1) % count; SFX_play(SFX_TICK); dirty = 1; }
@@ -4289,21 +4472,28 @@ static void gameMenu(SDL_Surface* screen) {
 		if (dirty) {
 			GFX_clear(screen);
 			char shown[256];
-			GFX_truncateText(font.large, entry->name, shown, screen->w - SCALE1(PADDING*4), 0);
-			SDL_Surface* text = TTF_RenderUTF8_Blended(font.large, shown, COLOR_WHITE);
-			int block_h = text->h + SCALE1(PADDING) + SCALE1(PILL_SIZE) * count + SCALE1(PADDING + 16);
-			int y = (screen->h - SCALE1(PILL_SIZE+PADDING) - block_h) / 2;
+			GFX_truncateText(font.medium, entry->name, shown, screen->w - SCALE1(PADDING*4), 0);
+			SDL_Surface* text = TTF_RenderUTF8_Blended(font.medium, shown, COLOR_WHITE);
+			// the name, the rows and the hint, centered above the button bar: five rows only fit with small gaps, so the
+			// hint stays clear of the buttons, and a sixth scrolls
+			int bar_top = screen->h - SCALE1(PADDING + PILL_SIZE) - SCALE1(6); // (and a little room above it)
+			int shown_rows = MIN(count, 5);
+			int first_row = selected<shown_rows ? 0 : selected - shown_rows + 1;
+			int block_h = text->h + SCALE1(2) + SCALE1(PILL_SIZE) * shown_rows + SCALE1(2) + TTF_FontHeight(font.small);
+			int y = MAX(SCALE1(2), (bar_top - block_h) / 2);
 			SDL_BlitSurface(text, NULL, screen, &(SDL_Rect){ (screen->w - text->w) / 2, y });
-			y += text->h + SCALE1(PADDING);
+			y += text->h + SCALE1(2);
 			SDL_FreeSurface(text);
 			int rows_w = SCALE1(260);
 			int x = (screen->w - rows_w) / 2;
 			char* hint = "";
-			for (int i=0; i<count; i++) {
+			for (int i=first_row; i<first_row+shown_rows; i++) {
 				int is_selected = i==selected;
 				char* name = "";
 				char* value = "";
 				if (rows[i]==ROW_CORE) { name = "Change core"; value = core_name; if (is_selected) hint = "Pick which emulator runs this game"; }
+				else if (rows[i]==ROW_CPU) { name = "CPU speed"; value = game_speed_labels[speed]; if (is_selected) hint = speed==GAME_SPEED_PERFORMANCE ? "Faster, but can freeze some games" : "Saved for this game, as in its own options"; }
+				else if (rows[i]==ROW_RUMBLE) { name = "Rumble strength"; value = rumble_labels[rumble]; if (is_selected) hint = "Saved for this game; buzzes to show the strength"; }
 				else if (rows[i]==ROW_ART) { name = has_art ? "Replace box art" : "Get box art"; if (is_selected) hint = has_art ? "Compare the library's covers with yours, keep one" : "Downloads it from the libretro library (needs Wi-Fi)"; }
 				else if (rows[i]==ROW_RENAME) { name = "Rename"; if (is_selected) hint = "Its box art and saves keep up with the new name"; }
 				else if (rows[i]==ROW_DELETE) { name = "Delete game"; if (is_selected) hint = "Asks first, then about its saves and box art"; }
@@ -4318,12 +4508,13 @@ static void gameMenu(SDL_Surface* screen) {
 				}
 				y += SCALE1(PILL_SIZE);
 			}
+			if (first_row+shown_rows<count) SDL_FillRect(screen, &(SDL_Rect){ screen->w/2 - SCALE1(8), y - SCALE1(1), SCALE1(16), SCALE1(1) }, SDL_MapRGB(screen->format, 128,128,128)); // more below
 			SDL_Surface* hint_txt = TTF_RenderUTF8_Blended(font.small, hint, COLOR_LIGHT_TEXT);
 			if (hint_txt) {
-				SDL_BlitSurface(hint_txt, NULL, screen, &(SDL_Rect){ (screen->w - hint_txt->w) / 2, y + SCALE1(PADDING) });
+				SDL_BlitSurface(hint_txt, NULL, screen, &(SDL_Rect){ (screen->w - hint_txt->w) / 2, y + SCALE1(2) });
 				SDL_FreeSurface(hint_txt);
 			}
-			GFX_blitButtonGroup((char*[]){ "B","BACK", "A","SELECT", NULL }, 1, screen, 1);
+			GFX_blitButtonGroup((char*[]){ "B","BACK", "A",rows[selected]==ROW_CPU || rows[selected]==ROW_RUMBLE ? "CHANGE" : "SELECT", NULL }, 1, screen, 1);
 			GFX_flip(screen);
 			dirty = 0;
 		}
@@ -4338,20 +4529,7 @@ static void gameMenu(SDL_Surface* screen) {
 	if (row==ROW_CORE) pickCore(screen);
 	else if (row==ROW_RENAME) renameSelected(screen);
 	else if (row==ROW_DELETE) deleteSelected(screen);
-	else if (row==ROW_ART) {
-		// off to the Box Art tool for this one game, then back to this same spot in the list
-		char last[MAX_PATH];
-		if (exactMatch(FAUX_FAVORITES_PATH, top->path) || exactMatch(FAUX_RECENT_PATH, top->path) || exactMatch(FAUX_MOSTPLAYED_PATH, top->path) || prefixMatch(COLLECTIONS_PATH, top->path)) {
-			snprintf(last, sizeof(last), "%s/%s", top->path, strrchr(entry->path, '/')+1);
-		}
-		else snprintf(last, sizeof(last), "%s", entry->path);
-		saveLast(last);
-		char pak[MAX_PATH], game[MAX_PATH], cmd[MAX_PATH*4];
-		strcpy(pak, BOX_ART_PAK);
-		strcpy(game, entry->path);
-		snprintf(cmd, sizeof(cmd), "'%s' '%s'", escapeSingleQuotes(pak), escapeSingleQuotes(game));
-		queueNext(cmd);
-	}
+	else if (row==ROW_ART) openTool(screen, "Box Art.pak", entry->path); // this one game's, back on the same spot
 }
 
 // START in the system list: a random system that has games (another one than now, when there's a choice), opened on
@@ -4503,8 +4681,9 @@ int main (int argc, char *argv[]) {
 	#define INFO_ROW_MUSIC (4 + PWR_TIMER_COUNT)
 	#define INFO_ROW_CLOCK (5 + PWR_TIMER_COUNT)
 	#define INFO_ROW_TIME_ZONE (6 + PWR_TIMER_COUNT) // for syncing the clock over Wi-Fi
-	#define INFO_ROW_VERSION (7 + PWR_TIMER_COUNT) // deliberately last: subtle, but always findable
-	#define INFO_ROW_COUNT (8 + PWR_TIMER_COUNT)
+	#define INFO_ROW_SWAP_AX (7 + PWR_TIMER_COUNT)
+	#define INFO_ROW_VERSION (8 + PWR_TIMER_COUNT) // deliberately last: subtle, but always findable
+	#define INFO_ROW_COUNT (9 + PWR_TIMER_COUNT)
 	#define INFO_ROWS_SHOWN 5 // the rest scroll into view
 	int info_row = 0; // selected row on the version screen
 	int info_start = 0; // first row shown
@@ -4650,15 +4829,9 @@ int main (int argc, char *argv[]) {
 				dirty = 1;
 			}
 			else if (info_row==INFO_ROW_WIFI && PAD_justPressed(BTN_A)) { // the Wi-Fi tool, then back here
-				if (exists(WIFI_PAK)) {
-					SFX_play(SFX_CONFIRM);
-					if (top->entries->count>0) saveLast(((Entry*)top->entries->items[top->selected])->path);
-					char pak[MAX_PATH], cmd[MAX_PATH*2];
-					strcpy(pak, WIFI_PAK);
-					snprintf(cmd, sizeof(cmd), "'%s'", escapeSingleQuotes(pak));
-					queueNext(cmd);
-				}
-				else showFlash("The Wi-Fi tool isn't installed", 0);
+				SFX_play(SFX_CONFIRM);
+				openTool(screen, "Wi-Fi.pak", NULL);
+				getWifiStatus(wifi_status, sizeof(wifi_status)); // another network, or turned off, without going on or offline
 				dirty = 1;
 			}
 			else if (info_row==INFO_ROW_THEME && (PAD_justRepeated(BTN_LEFT) || PAD_justRepeated(BTN_RIGHT))) {
@@ -4673,6 +4846,12 @@ int main (int argc, char *argv[]) {
 			}
 			else if (info_row==INFO_ROW_SLEEP_LIGHT && (PAD_justPressed(BTN_A) || PAD_justPressed(BTN_LEFT) || PAD_justPressed(BTN_RIGHT))) {
 				PWR_setSleepLight(PWR_getSleepLight()==SLEEP_LIGHT_ON ? SLEEP_LIGHT_OFF : SLEEP_LIGHT_ON);
+				dirty = 1;
+				SFX_play(SFX_TICK);
+			}
+			else if (info_row==INFO_ROW_SWAP_AX && (PAD_justPressed(BTN_A) || PAD_justPressed(BTN_LEFT) || PAD_justPressed(BTN_RIGHT))) {
+				swap_ax = !swap_ax;
+				putInt(SWAP_AX_PATH, swap_ax);
 				dirty = 1;
 				SFX_play(SFX_TICK);
 			}
@@ -4881,6 +5060,17 @@ int main (int argc, char *argv[]) {
 				}
 			}
 
+			// X only counts if it was pressed here and not as part of a MENU combo, so opening a game never comes from
+			// the tail end of something else. A is the switcher's own, whichever way round they are.
+			static int x_pressed = 0;
+			if (PAD_justPressed(BTN_RESUME)) x_pressed = !PAD_isPressed(BTN_MENU);
+			int x_tapped = x_pressed && PAD_justReleased(BTN_RESUME) && total>0 && !inSwitcher();
+			if (PAD_justReleased(BTN_RESUME)) x_pressed = 0;
+			int a_pressed = total>0 && PAD_justPressed(BTN_A);
+			if (swap_ax && a_pressed && !inSwitcher()) readyResume(top->entries->items[top->selected]); // (it isn't looked up while scrolling)
+			int resume_game = swap_ax ? a_pressed && can_resume && !inSwitcher() : x_tapped && can_resume;
+			int open_game = swap_ax ? (a_pressed && !resume_game) || x_tapped : a_pressed;
+
 			if (total>0 && PAD_isPressed(BTN_MENU) && PAD_justPressed(BTN_Y)) {
 				gameMenu(screen);
 				total = top->entries->count;
@@ -4928,13 +5118,13 @@ int main (int argc, char *argv[]) {
 				if (total>0) readyResume(top->entries->items[top->selected]);
 				dirty = 1;
 			}
-			else if (total>0 && can_resume && PAD_justReleased(BTN_RESUME) && !inSwitcher()) {
+			else if (resume_game) {
 				SFX_play(SFX_CONFIRM);
 				should_resume = 1;
 				Entry_open(top->entries->items[top->selected], screen);
 				dirty = 1;
 			}
-			else if (total>0 && PAD_justPressed(BTN_A)) {
+			else if (open_game) {
 				SFX_play(SFX_CONFIRM);
 				random_everywhere = 0; // opened by hand
 				if (inSwitcher()) { // the switcher picks up from the newer of its quick save and the last manual save
@@ -5030,6 +5220,9 @@ int main (int argc, char *argv[]) {
 			
 			int ox;
 			int oy;
+			SDL_Surface* list_art = NULL;
+			int list_art_x = 0;
+			int list_art_y = 0;
 			
 			// simple thumbnail support a thumbnail for a file or folder named NAME.EXT needs a corresponding /.res/NAME.EXT.png
 			// that is no bigger than platform FIXED_HEIGHT x FIXED_HEIGHT
@@ -5046,6 +5239,9 @@ int main (int argc, char *argv[]) {
 					ox = MAX(FIXED_WIDTH - FIXED_HEIGHT, (FIXED_WIDTH - art->w));
 					oy = (FIXED_HEIGHT - art->h) / 2;
 					SDL_BlitSurface(art, NULL, screen, &(SDL_Rect){ox,oy});
+					list_art = art;
+					list_art_x = ox;
+					list_art_y = oy;
 					last_art_x = ox;
 				}
 				else if (!hasThumb(entry) && last_art_x) { // still decoding (not missing): no jump in the names
@@ -5114,6 +5310,10 @@ int main (int argc, char *argv[]) {
 						name = "Time zone";
 						strcpy(value, GFX_getTimeZoneName(GFX_getTimeZone()));
 					}
+					else if (i==INFO_ROW_SWAP_AX) {
+						name = "Swap A and X";
+						strcpy(value, swap_ax ? "On" : "Off");
+					}
 					else if (i==INFO_ROW_MUSIC) {
 						name = "Music";
 						if (BGM_isEnabled()) sprintf(value, "%i%%", BGM_getVolume() * 100 / BGM_VOLUME_MAX);
@@ -5121,7 +5321,7 @@ int main (int argc, char *argv[]) {
 					}
 					else if (i==INFO_ROW_VERSION) {
 						name = "MinUI+";
-						strcpy(value, "v1.05");
+						strcpy(value, "v1.07");
 					}
 					else {
 						char* timer_names[PWR_TIMER_COUNT] = { "Sleep after", "Power off after" };
@@ -5149,11 +5349,12 @@ int main (int argc, char *argv[]) {
 				else right_w = GFX_blitButtonGroup((char*[]){ "B","BACK",  NULL }, 0, screen, 1);
 
 				if (show_setting && !GetHDMI()) GFX_blitHardwareHints(screen, show_setting);
-				else if (info_row==INFO_ROW_MUSIC || info_row==INFO_ROW_TIME_ZONE || info_row==INFO_ROW_CLOCK || info_row==INFO_ROW_SLEEP_LIGHT) { // a line about the row, in place of the left hints
+				else if (info_row==INFO_ROW_MUSIC || info_row==INFO_ROW_TIME_ZONE || info_row==INFO_ROW_CLOCK || info_row==INFO_ROW_SLEEP_LIGHT || info_row==INFO_ROW_SWAP_AX) { // a line about the row, in place of the left hints
 					char hint[64], shown[64];
 					if (info_row==INFO_ROW_TIME_ZONE) strcpy(hint, "Automatic, or pick yours");
 					else if (info_row==INFO_ROW_CLOCK) strcpy(hint, "Automatic; needs Wi-Fi");
 					else if (info_row==INFO_ROW_SLEEP_LIGHT) strcpy(hint, "The light while asleep");
+					else if (info_row==INFO_ROW_SWAP_AX) strcpy(hint, swap_ax ? "A Resume, X Open (after save state)" : "A Open, X Resume (after save state)");
 					else {
 						int songs = BGM_countSongs();
 						if (songs) snprintf(hint, sizeof(hint), "%i song%s in /BGM", songs, songs==1 ? "" : "s");
@@ -5186,6 +5387,15 @@ int main (int argc, char *argv[]) {
 						char* entry_name = entry->name;
 						char* entry_unique = entry->unique;
 						int available_width = (had_thumb ? ox : screen->w) - SCALE1(PADDING * 2); // every row stays clear of the art
+						if (stack->count==1 && list_art) { // root system menu only; game box-art lists keep their exact old layout
+							int row_y = SCALE1(PADDING+(j*PILL_SIZE));
+							int first_art_x = firstVisibleArtX(list_art, row_y-list_art_y, SCALE1(PILL_SIZE));
+							if (first_art_x>0) {
+								int row_right = list_art_x + first_art_x - SCALE1(4); // a small gap before visible art
+								if (i==top->start) row_right = MIN(row_right, screen->w - ow - SCALE1(PADDING));
+								available_width = MAX(available_width, row_right - SCALE1(PADDING*2));
+							}
+						}
 						if (i==top->start && !had_thumb) available_width -= ow; // 
 					
 						SDL_Color text_color = COLOR_WHITE;
@@ -5289,7 +5499,7 @@ int main (int argc, char *argv[]) {
 					formatShortPlayTime(getAveragePlayTime(&entry->play), average_str);
 					GFX_blitButtonGroup((char*[]){ total_str,"ALL", average_str,"AVG", NULL }, 0, screen, 0);
 				}
-				else if (can_resume) GFX_blitButtonGroup((char*[]){ "X","RESUME", fav_button,"FAV", NULL }, 0, screen, 0);
+				else if (can_resume) GFX_blitButtonGroup((char*[]){ "X",swap_ax ? "OPEN" : "RESUME", fav_button,"FAV", NULL }, 0, screen, 0);
 				else GFX_blitButtonGroup((char*[]){
 					BTN_SLEEP==BTN_POWER?"POWER":"MENU",
 					BTN_SLEEP==BTN_POWER||simple_mode?"SLEEP":"INFO",
@@ -5305,11 +5515,11 @@ int main (int argc, char *argv[]) {
 					if (stack->count>1) {
 						char preview[256];
 						int slot;
-						int resumable = inSwitcher() && getSwitcherSave(top->entries->items[top->selected], preview, &slot);
+						int resumable = inSwitcher() ? getSwitcherSave(top->entries->items[top->selected], preview, &slot) : swap_ax && can_resume;
 						GFX_blitButtonGroup((char*[]){ "B","BACK", "A",resumable ? "RESUME" : "OPEN", NULL }, 1, screen, 1);
 					}
 					else {
-						GFX_blitButtonGroup((char*[]){ "A","OPEN", NULL }, 0, screen, 1);
+						GFX_blitButtonGroup((char*[]){ "A",swap_ax && can_resume ? "RESUME" : "OPEN", NULL }, 0, screen, 1);
 					}
 				}
 			}

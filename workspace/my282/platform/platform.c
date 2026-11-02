@@ -912,7 +912,10 @@ void PLAT_flip(SDL_Surface* IGNORED, int ignored) {
 
 	// border first so the game always draws over it
 	if (vid.border) {
-		fitBorder(vid.blit->aspect==0 ? dst_rect : NULL);
+		// a vertical game (taller than wide) is shown full height with the border's side panels moved in to meet it,
+		// whatever its exact shape: arcade borders leave a 3:4 window, and 7:9 or 2:3 games fill theirs too
+		int tall = dst_rect->h > dst_rect->w;
+		fitBorder(vid.blit->aspect==0 || tall ? dst_rect : NULL);
 		if (rotate) SDL_RenderCopyEx(vid.renderer,vid.border,NULL,&(SDL_Rect){ox,oy,device_width,device_height},rotate*90,NULL,SDL_FLIP_NONE);
 		else SDL_RenderCopy(vid.renderer, vid.border, NULL, NULL);
 	}
@@ -950,6 +953,38 @@ void PLAT_flip(SDL_Surface* IGNORED, int ignored) {
 	vid.blit = NULL;
 }
 
+// a GPU core draws straight into this one, so there's nothing to copy back or up. ABGR8888 is the format SDL's renderer
+// draws without swapping red and blue (it has no RGB565 of its own: asking for that gets a swapped one, and a blue game)
+SDL_Texture* PLAT_gpuTexture(int width, int height) {
+	SDL_Texture* texture = SDL_CreateTexture(vid.renderer, SDL_PIXELFORMAT_ABGR8888, SDL_TEXTUREACCESS_STATIC, width, height);
+	if (texture) SDL_SetTextureScaleMode(texture, SDL_ScaleModeNearest);
+	return texture;
+}
+// as PLAT_flip, for a whole 2x picture (where Crisp and Sharp look the same) with no border or notification over it.
+// Anything else goes the long way, through PLAT_flip.
+int PLAT_flipGpuFrame(SDL_Texture* texture, int width, int height, double aspect, int bottom_up) {
+	if (vid.border || vid.notification || vid.sharpness==SHARPNESS_SOFT || aspect<=0) return 0;
+	int w = (int)(device_height * aspect + 0.5);
+	if (w!=device_width || w!=width*2 || device_height!=height*2) return 0;
+	SDL_Rect src = {0,0,width,height};
+	SDL_Rect dst = {0,0,device_width,device_height};
+	int oy = (device_width-device_height)/2;
+	int ox = -oy;
+	if (rotate) {
+		dst.x = ox;
+		dst.y = oy;
+	}
+	SDL_RenderClear(vid.renderer);
+	SDL_RenderCopyEx(vid.renderer, texture, &src, &dst, rotate*90, NULL, bottom_up ? SDL_FLIP_VERTICAL : SDL_FLIP_NONE);
+	updateEffect();
+	if (effect.type!=EFFECT_NONE && vid.effect) {
+		SDL_Rect effect_src = {0,0,device_width,device_height};
+		SDL_RenderCopyEx(vid.renderer, vid.effect, &effect_src, &dst, rotate*90, NULL, SDL_FLIP_NONE);
+	}
+	SDL_RenderPresent(vid.renderer);
+	return 1;
+}
+
 ///////////////////////////////
 
 // TODO: 
@@ -985,13 +1020,8 @@ void PLAT_getBatteryStatus(int* is_charging, int* charge) {
 	*is_charging = getInt("/sys/class/power_supply/usb/online");
 
 	int i = getInt("/sys/class/power_supply/battery/capacity");
-	// worry less about battery and more about the game you're playing
-	     if (i>80) *charge = 100;
-	else if (i>60) *charge =  80;
-	else if (i>40) *charge =  60;
-	else if (i>20) *charge =  40;
-	else if (i>10) *charge =  20;
-	else           *charge =  10;
+	// Preserve the driver's percentage instead of rounding up in 20% steps.
+	*charge = i < 0 ? 0 : (i > 100 ? 100 : i);
 
 	// wifi status, just hooking into the regular PWR polling
 	char status[16];
@@ -1187,11 +1217,13 @@ static void* rumbleThread(void* arg) {
 			SDL_Delay(12);
 			continue;
 		}
-		// 4-9ms on in a 23ms cycle: about 15% stronger than the first reduced-rumble pass, while maximum rumble is
-		// still under 40% of the old continuous drive.
-		int on_ms = 4 + ((strength > 65535 ? 65535 : strength) * 5 / 65535);
+		// The driver only takes whole milliseconds, too coarse for ten steps on their own, so the cycle's length varies
+		// too: about 15% on at the weakest, and under 40% of the old continuous drive at the strongest.
+		if (strength > 65535) strength = 65535;
+		int on_ms = 4 + strength * 5 / 65535;
+		int duty = 130 + strength / 240; // per thousand: 130 to 403
 		putInt(RUMBLE_PATH, on_ms);
-		SDL_Delay(23);
+		SDL_Delay((on_ms * 1000 + duty / 2) / duty);
 	}
 	return NULL;
 }
@@ -1217,6 +1249,9 @@ char* PLAT_getModel(void) {
 	return "Miyoo A30";
 }
 
+SDL_Window* PLAT_getWindow(void) { // for minarch's GPU-drawn cores (hwrender.c), which draw on a context of their own here
+	return vid.window;
+}
 int PLAT_isOnline(void) {
 	return online;
 }

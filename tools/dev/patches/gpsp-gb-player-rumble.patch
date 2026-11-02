@@ -1,0 +1,169 @@
+diff --git a/gbp.c b/gbp.c
+index 315a7dc..db3c02f 100644
+--- a/gbp.c
++++ b/gbp.c
+@@ -38,13 +38,53 @@ static const u32 gbp_seq[16] = {
+   0x30000003, // Responds with rumble amount
+ };
+ 
++#define GBP_IDLE_FRAMES 15 // a quarter of a second
++
+ static u32 gbp_seq_n = 0;
+ static bool gbp_rumble = false;
++static bool gbp_allow_rumble = false;
++static u32 gbp_idle_frames = 0;
++
++// A loaded state has its own idea of the motor: it asks again on its next transfer, if it talks to a GB Player at all.
++void gbp_stop_rumble(void) {
++  write_rumble(gbp_rumble, false);
++  gbp_rumble = false;
++}
++
++void gbp_reset(void) {
++  gbp_stop_rumble();
++  gbp_seq_n = 0;
++  gbp_allow_rumble = false;
++}
++
++// Pokemon Pinball stops its transfers when you leave Options during the test buzz, and its last word was "on". A quiet
++// port means nobody is asking for rumble any more, and the next talker starts its sequence from the top.
++void gbp_frame(void) {
++  if (++gbp_idle_frames >= GBP_IDLE_FRAMES) {
++    gbp_stop_rumble();
++    gbp_seq_n = 0;
++  }
++}
+ 
+ // GB Player sequencing
+ u32 gbp_transfer(u32 value) {
+   u32 ret = gbp_seq[gbp_seq_n++];
++
++  gbp_idle_frames = 0;
++
++  // The BIOS probes the serial port at boot, and what it leaves behind would read as a request to rumble: only the
++  // game may turn the motor on, so wait until a transfer comes from cart code. (From upstream gpSP, 0d1191c.)
++  if (!gbp_allow_rumble &&
++      reg[REG_PC] >= 0x08000000 && reg[REG_PC] < 0x0E000000)
++    gbp_allow_rumble = true;
++
+   if (gbp_seq_n == 16) {
++    if (!gbp_allow_rumble) {
++      gbp_stop_rumble();
++      gbp_seq_n = 0;
++      return ret;
++    }
++
+     bool rumble_active = (value & 2);
+     write_rumble(gbp_rumble, rumble_active);
+     gbp_rumble = rumble_active;
+diff --git a/input.c b/input.c
+index 4ba4cd8..16fb152 100644
+--- a/input.c
++++ b/input.c
+@@ -30,6 +30,8 @@ unsigned turbo_a_counter   = 0;
+ unsigned turbo_b_counter   = 0;
+ 
+ static u32 old_key = 0;
++static u32 gbp_keypad_frames = 0;
++static bool gbp_keypad_sent = false;
+ static retro_input_state_t input_state_cb;
+ 
+ void retro_set_input_state(retro_input_state_t cb) { input_state_cb = cb; }
+@@ -123,13 +125,35 @@ u32 update_input(void)
+    else
+       turbo_b_counter = 0;
+ 
+-   // GBP keypad detection hack (only at game startup!)
+-   if (serial_mode == SERIAL_MODE_GBP) {
+-     // During the startup screen (aproximate)
+-     if (frame_counter > 20 && frame_counter < 100) {
+-       // Emulate 4 keypad buttons pressed (which is impossible).
+-       new_key = (frame_counter % 3) ? 0x3FF : 0x30F;
+-     }
++   // GBP keypad detection hack (only once, when the game ROM starts running: a BIOS boot has used up the first
++   // frames on the logo, and the game would never see it). (From upstream gpSP, 0d1191c.)
++   if (frame_counter == 0)
++   {
++      gbp_keypad_frames = 0;
++      gbp_keypad_sent = false;
++   }
++
++   if (serial_mode == SERIAL_MODE_GBP)
++   {
++      bool game_rom_running = reg[REG_PC] >= 0x08000000 && reg[REG_PC] < 0x0E000000;
++
++      if (!gbp_keypad_sent && game_rom_running)
++      {
++         gbp_keypad_frames = 96;
++         gbp_keypad_sent = true;
++      }
++
++      if (gbp_keypad_frames > 0)
++      {
++         // Emulate 4 keypad buttons pressed (which is impossible).
++         new_key = (gbp_keypad_frames & 1) ? 0x3FF : 0x30F;
++         gbp_keypad_frames--;
++      }
++   }
++   else
++   {
++      gbp_keypad_frames = 0;
++      gbp_keypad_sent = false;
+    }
+ 
+    if ((new_key | old_key) != old_key)
+@@ -157,6 +181,13 @@ bool input_check_savestate(const u8 *src)
+ bool input_read_savestate(const u8 *src)
+ {
+   const u8 *p = bson_find_key(src, "input");
++
++  // A state is past startup: sending the keypad signal again would take the buttons away for over a second. Nothing
++  // new goes in the state, so states stay compatible both ways.
++  gbp_keypad_frames = 0;
++  gbp_keypad_sent = true;
++  gbp_stop_rumble();
++
+   if (p)
+     return bson_read_int32(p, "prevkey", &old_key);
+   return false;
+diff --git a/libretro/libretro.c b/libretro/libretro.c
+index 6afa60d..e3a21a8 100644
+--- a/libretro/libretro.c
++++ b/libretro/libretro.c
+@@ -1265,9 +1265,12 @@ void retro_run(void)
+       execute_arm(execute_cycles);
+    }
+ 
++   gbp_frame();
++
+    if (rumble_cb) {
+      // TODO: Add some user-option to select a rumble policy
+-     u32 strength = 0xffff * rumble_active_pct();
++     // the option only stops cart rumble at load: this covers it right away, and the GB Player's too
++     u32 strength = rumble_mode == FEAT_DISABLE ? 0 : 0xffff * rumble_active_pct();
+      rumble_cb(0, RETRO_RUMBLE_WEAK,   MIN(strength, 0xffff));
+      rumble_cb(0, RETRO_RUMBLE_STRONG, MIN(strength, 0xffff) / 2);
+    }
+diff --git a/main.c b/main.c
+index 55401d7..c1d806f 100644
+--- a/main.c
++++ b/main.c
+@@ -305,6 +305,7 @@ void reset_gba(void)
+   init_main();
+   init_cpu();
+   reset_sound();
++  gbp_reset();
+ }
+ 
+ #ifdef TRACE_REGISTERS
+diff --git a/serial.h b/serial.h
+index f429da8..e02699a 100644
+--- a/serial.h
++++ b/serial.h
+@@ -41,3 +41,6 @@ void rfu_net_receive(const void* buf, size_t len, uint16_t client_id);
+ 
+ // GBP interface
+ u32 gbp_transfer(u32 value);
++void gbp_stop_rumble(void);
++void gbp_reset(void);
++void gbp_frame(void);

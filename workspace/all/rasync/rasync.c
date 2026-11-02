@@ -15,6 +15,7 @@
 
 #include "defines.h"
 #include "api.h"
+#include "tools.h"
 #include "bgm.h"
 #include "utils.h"
 #include "ra_cache.h"
@@ -510,17 +511,11 @@ static int countSynced(void) { // games with achievement data cached
 	return count;
 }
 
-int main(int argc , char* argv[]) {
-	PWR_setCPUSpeed(CPU_SPEED_MENU);
+void RetroAchievements_open(SDL_Surface* main_screen) {
+	screen = main_screen;
 	struct rc_hash_cdreader disc_reader; // so PlayStation .chd games can be identified too
 	RA_getDiscReader(&disc_reader);
 	rc_hash_init_custom_cdreader(&disc_reader);
-	screen = GFX_init(MODE_MAIN);
-	PAD_init();
-	PWR_init();
-	InitSettings();
-	SFX_forInput(1); // clicks for moving, choosing and going back
-	BGM_start(); // the menus' music, when it's on
 	
 	enum { ROW_ACCOUNT, ROW_SYNC, ROW_HARDCORE }; // (hardcore hidden while RA_HARDCORE_AVAILABLE is 0)
 	#define ROW_COUNT (RA_HARDCORE_AVAILABLE ? ROW_HARDCORE+1 : ROW_HARDCORE)
@@ -582,11 +577,8 @@ int main(int argc , char* argv[]) {
 		
 		if (dirty) {
 			GFX_clear(screen);
-			GFX_blitHardwareGroup(screen, show_setting);
-			// a title beside the time and battery, the rows below them at full width so a long name has room
-			SDL_Surface* title = TTF_RenderUTF8_Blended(font.large, "RetroAchievements", COLOR_WHITE);
-			SDL_BlitSurface(title, NULL, screen, &(SDL_Rect){ SCALE1(PADDING + BUTTON_PADDING), SCALE1(PADDING) + (SCALE1(PILL_SIZE) - title->h)/2 });
-			SDL_FreeSurface(title);
+			// the header beside the time and battery, the rows below them at full width so a long name has room
+			GFX_blitHeader(screen, "RetroAchievements", GFX_blitHardwareGroup(screen, show_setting));
 			#define ROWS_TOP (PADDING + PILL_SIZE + 6)
 			
 			for (int i=0; i<ROW_COUNT; i++) {
@@ -641,6 +633,18 @@ int main(int argc , char* argv[]) {
 		else GFX_sync();
 	}
 	
+}
+
+#ifndef MINUI_TOOLS
+int main(int argc , char* argv[]) {
+	PWR_setCPUSpeed(CPU_SPEED_MENU);
+	SDL_Surface* screen = GFX_init(MODE_MAIN);
+	PAD_init();
+	PWR_init();
+	InitSettings();
+	SFX_forInput(1); // clicks for moving, choosing and going back
+	BGM_start(); // the menus' music, when it's on
+	RetroAchievements_open(screen);
 	BGM_quit();
 	SFX_quit();
 	QuitSettings();
@@ -649,3 +653,4 @@ int main(int argc , char* argv[]) {
 	GFX_quit();
 	return EXIT_SUCCESS;
 }
+#endif

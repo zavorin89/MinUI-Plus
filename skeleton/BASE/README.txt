@@ -1,6 +1,7 @@
 MinUI+ is a fork of MinUI for the Miyoo A30 that brings together the best of MinUI, Onion and spruce: the same simple launcher and in-game menu, plus a box art carousel, RetroAchievements, play time tracking, menu music, borders and screen effects, Wi-Fi, a game switcher, per-game emulator cores, themes, and lots of work on speed and battery life. It comes set up to look its best from the first boot.
 
 MinUI+:
+https://codeberg.org/zavorin89/MinUI-Plus
 https://github.com/zavorin89/MinUI-Plus
 
 MinUI by Shaun Inman:
@@ -51,7 +52,7 @@ The clock is part of Wi-Fi: it shows beside Wi-Fi and the battery once Wi-Fi has
 ----------------------------------------
 Updates
 
-After Wi-Fi connects, MinUI+ quietly checks its latest GitHub release. When a newer version exists, "Update Available!" appears above the systems. Open it to read the patch notes and confirm the update. A progress bar follows the download and installation. When it is ready, choose Shut Down, then turn the A30 back on to finish, or choose Later to return to MinUI+ and shut down when convenient.
+After Wi-Fi connects, MinUI+ quietly checks its latest release on GitHub and Codeberg. When a newer version exists, "Update Available!" appears above the systems. Open it to read the patch notes and confirm the update. A progress bar follows the download and installation. When it is ready, choose Shut Down, then turn the A30 back on to finish, or choose Later to return to MinUI+ and shut down when convenient.
 
 The installed MinUI+ version appears as a subtle final row at the bottom of Settings.
 

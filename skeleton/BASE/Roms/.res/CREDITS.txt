@@ -9,6 +9,25 @@ Most are Nao-Black's own pictures, trimmed to the strip MinUI shows. The ones fo
 cover were made for MinUI+ to match its style: Virtual Boy (VB), Super Game Boy (SGB), Pokemon mini (PKM),
 Pico-8 (P8), and the Kiwi lime Game Boy Color (GBC).
 
+The arcade systems' pictures are laid out the same way:
+- Final Burn Neo (FBN) is Nao-Black's own Arcade picture.
+- Sega CD (SEGACD) and Sega 32X (THIRTYTWOX) use photos by Evan-Amos (Wikimedia Commons), public domain.
+- Neo Geo (NEOGEO) uses "Neo-Geo-AES-Console-Set" by Evan-Amos (Wikimedia Commons), CC BY-SA 3.0
+  (https://creativecommons.org/licenses/by-sa/3.0/), with the stick moved in front of the console; that picture is
+  shared under the same license.
+- CPS1 uses "Borne d'arcade" by Xeoteam2 (Wikimedia Commons), CC BY-SA 4.0
+  (https://creativecommons.org/licenses/by-sa/4.0/), cut out of its background; that picture is shared under the same
+  license.
+- CPS2 uses "Sega astro city candy cab" by The real dog god (Wikimedia Commons), public domain, cut out of its
+  background.
+- CPS3 uses "Sega New Astro City" by Andrew Eaton (Wikimedia Commons), CC BY-SA 2.0
+  (https://creativecommons.org/licenses/by-sa/2.0/), cut out of its background; that picture is shared under the same
+  license.
+- MAME 2003+ (MAME) uses "'Custom' multigame arcade cabinet" by Lukas Mathis (Wikimedia Commons), CC BY-SA 2.0
+  (https://creativecommons.org/licenses/by-sa/2.0/), cut out of its background; that picture is shared under the same
+  license.
+- Game names and logos on the cabinets belong to their owners.
+
 Nao-Black and the NextUI Themes collection are under the MIT license:
 
 MIT License

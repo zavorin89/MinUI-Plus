@@ -1,0 +1,96 @@
+# MinUI+ v1.07 — changes since launch
+
+For the Miyoo A30. This ZIP is a complete release, suitable for manual download from a mirror.
+
+Manual update: back up your card first. Extract the outer download ZIP and merge its contents into the SD card root,
+replacing bundled application/tool files when asked. Keep MinUI.zip zipped; the A30 installs it on the next power-on.
+Copy the included Tools and Emus folders too so their fixes are installed. Preserve any personally customized artwork
+or borders from your backup. The updater's Shut Down prompt requires you to turn the A30 back on manually.
+
+From v1.07 the built-in updater checks both GitHub and Codeberg. Devices on v1.06 or older only check GitHub, so they need this one manual install to start receiving updates from Codeberg.
+
+This is a consolidated comparison with v1.0.0, rather than a list of every intermediate hotfix. This v1.07 package includes all changes below. The newest changes come first, then v1.0.1–v1.0.5, then v1.06.
+
+## New in v1.07
+
+### New systems
+
+- Added Capcom Play System 1, 2 and 3, Final Burn Neo, MAME 2003+, Neo Geo, Sega CD and Sega 32X, each with its own system art. Arcade systems also get vertical-game borders where they apply. BIOS files are not included; add your own to the matching Bios folder.
+- Added Nintendo 64 as an **experimental** system. Expect graphics glitches and uneven speed: Banjo-Kazooie and Mario Tennis are known to show visual problems, and many games won't run at full speed.
+
+### Rumble
+
+- One **Rumble Strength** option (Off, 1–10) now covers Game Boy, Game Boy Color, Game Boy Advance on gpSP and mGBA, PlayStation and Pokémon mini, so a number feels the same everywhere. It can also be set per game from the game menu (MENU + Y). Values set in the old per-core options are not carried over.
+- Fixed Pokémon Pinball: Ruby & Sapphire on gpSP vibrating constantly from startup, having its Rumble option greyed out, and vibrating on after leaving Options during the test buzz.
+
+### Menus and controls
+
+- A new **Swap A and X** setting makes A resume and X open in game lists.
+- The game menu (MENU + Y) now has a CPU speed row and scrolls when it has more rows than fit.
+- Wi-Fi, Box Art, Controls and RetroAchievements open instantly, built into MinUI+ itself.
+- A lightning bolt now appears over the battery icon while a charger is connected, with the battery level still visible.
+- Tools you add to the Tools folder are no longer moved away at startup. If this removed one of yours, restore it from .minui/removed-official-tools.
+
+### Wi-Fi and updates
+
+- Several Wi-Fi networks can be saved, and MinUI+ joins whichever is in range.
+- A wrong password no longer looks like a successful connection, and clock sync no longer hangs when a time server doesn't answer.
+- Updates can now come from Codeberg as well as GitHub, whichever has the newer release.
+
+### Stability
+
+- AUTO CPU speed is capped at 1344 MHz on all cores.
+
+## Released since v1.0.0
+
+### Updates directly on the A30
+
+- MinUI+ quietly checks GitHub for updates after Wi-Fi connects. An **Update Available!** category, with matching system artwork, appears above the systems only when a newer build is available.
+- Read scrollable patch notes on the device before confirming a download.
+- Update checks handle saved networks, hotspots that appear after startup, and reconnections. Temporary connection failures are retried; successful checks are throttled to avoid unnecessary requests.
+- Downloads use verified HTTPS, SHA-256 checks and ZIP validation. The updater checks available card space and compares build dates and numbers to avoid offering older builds.
+- A progress bar covers download, verification and unpacking. The completion prompt no longer gets stuck behind the full progress bar.
+- When ready, choose **Shut Down**, then manually turn the A30 back on to finish installation. **Later** lets you return to MinUI+ and finish on a subsequent power-on.
+- Updates preserve games, saves, settings and existing custom system art, borders, music and BIOS files while updating the application and bundled tools.
+- A subtle **MinUI+ version** row is available at the bottom of Settings.
+
+### Automatic clock and connection settings
+
+- The manual clock has been replaced with automatic time synchronization over Wi-Fi, with 12-hour, 24-hour and Off options.
+- After a full power-off, the clock stays hidden until Wi-Fi synchronizes it during that boot. The A30 does not keep accurate time while powered off; it does continue keeping time during sleep. Once synchronized, the clock can remain visible after disconnecting Wi-Fi.
+- Added automatic time-zone lookup and manual time-zone selection, including daylight-saving rules where applicable. Fixed left/right navigation through the zone list.
+- Wi-Fi setup now lives in Settings, with connection status shown there, rather than appearing as a separate visible tool.
+
+### Gentler vibration and sleep controls
+
+- Reworked A30 rumble to provide gentler, variable-strength feedback instead of effectively continuous full-power vibration.
+- Corrected how strong and weak rumble channels are combined, particularly relevant to PlayStation games. Reduced the default rumble level for Game Boy/Game Boy Color and Pokémon Mini.
+- Holding MENU gives a short, gentle vibration when the game-switcher hold threshold is reached.
+- Added a **Sleep light** On/Off setting, with a preview while selecting it.
+
+### More consistent tools, sound and presentation
+
+- Moved the existing play-time ranking into **Tools → Play Time**, showing total play time when it opens. **MENU + X** clears tracked play time after confirmation; the old data is backed up.
+- Added consistent navigation sounds and background music across the tools, including Wi-Fi, Box Art, Controls and RetroAchievements.
+- Music resumes where it left off when moving between the launcher and tools, with a shorter fade when resuming.
+- Improved Controls page headings and shortcut explanations, and adjusted the RetroAchievements tool layout.
+- Lightened CRT scanlines so the picture is less dark.
+- Removed the unsupported RetroAchievements hardcore option and associated UI. Achievement unlocks use softcore; existing offline achievement support remains available.
+
+### Cleaner installation and folder layout
+
+- Fresh installs use one descriptive ROM folder per supported system, such as **Game Boy Advance (GBA)**.
+- Empty legacy aliases are cleaned up without removing folders containing games. Removed the duplicate Supafaust system folder and artwork; Supafaust remains an alternate Super Nintendo core.
+- Removed unwanted inherited tools: Bootlogo, manual Clock, Files, Input, Remove Loading and Reset Stick. Existing copies are moved into a hidden backup rather than permanently deleted. The visible Tools menu focuses on Play Time, RetroAchievements, Box Art and Controls.
+- Updated setup instructions and documentation to match the new clock, updater, folders and tool layout.
+
+## New in v1.06
+
+- Moved Box Art's menu options below the Wi-Fi/time/battery area and gave the first option the full available row width.
+- Battery indication uses the device's reported percentage rather than rounding upward in large 20% steps. This improves display granularity; it is not a new battery calibration.
+- Volume and brightness changes play the existing menu navigation click, respecting the menu-sound preference and mute.
+- Holding MENU alone no longer opens the brightness popup; press MENU with − or + to display and adjust brightness.
+- Added a bounded escape from a full audio buffer when the output stops draining, allowing control processing to resume instead of retrying indefinitely. Audio underruns now fill with silence instead of reversed leftover samples.
+- Corrected update-check throttling after a backward clock correction and made failed-unpacking messages acknowledge that some files may already have been copied.
+
+Features already present at launch—such as the box-art carousel, game switcher, per-game core selection, themes, automatic CPU speed, play-time tracking, borders and offline achievements—are deliberately not counted again as new additions.

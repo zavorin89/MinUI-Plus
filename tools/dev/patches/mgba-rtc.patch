@@ -1,0 +1,78 @@
+--- a/src/platform/libretro/libretro.c
++++ b/src/platform/libretro/libretro.c
+@@ -83,6 +83,20 @@
+ static int32_t _readGyroZ(struct mRotationSource* source);
+ 
+ static struct mCore* core;
++// MinUI+: allow ROM hacks with unrecognized headers to request cartridge RTC.
++// Auto preserves mGBA's detection; applying after state load prevents old states
++// from silently removing a newly enabled RTC. Never reset an existing RTC offset.
++static void _applyForcedRTC(void) {
++#ifdef M_CORE_GBA
++	struct retro_variable var = { "mgba_force_rtc", NULL };
++	if (core && core->platform(core) == mPLATFORM_GBA &&
++		environCallback(RETRO_ENVIRONMENT_GET_VARIABLE, &var) &&
++		var.value && !strcmp(var.value, "ON")) {
++		struct GBA* gba = core->board;
++		if (!(gba->memory.hw.devices & HW_RTC)) GBAHardwareInitRTC(&gba->memory.hw);
++	}
++#endif
++}
+ static color_t* outputBuffer = NULL;
+ static int16_t *audioSampleBuffer = NULL;
+ static size_t audioSampleBufferSize;
+@@ -1271,6 +1285,7 @@
+ 		save->close(save);
+ 	}
+ 	deferredSetup = false;
++	_applyForcedRTC();
+ }
+ 
+ unsigned retro_api_version(void) {
+@@ -1922,6 +1937,7 @@
+ 
+ void retro_reset(void) {
+ 	core->reset(core);
++	_applyForcedRTC();
+ 	_setupMaps(core);
+ 
+ 	rumbleUp = 0;
+@@ -2123,6 +2139,7 @@
+ 
+ 	core->reset(core);
+ 	_setupMaps(core);
++	_applyForcedRTC();
+ 
+ #if defined(COLOR_16_BIT) && defined(COLOR_5_6_5)
+ 	_loadPostProcessingSettings();
+@@ -2178,6 +2195,7 @@
+ 	}
+ 	struct VFile* vfm = VFileFromConstMemory(data, size);
+ 	bool success = mCoreLoadStateNamed(core, vfm, SAVESTATE_RTC);
++	if (success) _applyForcedRTC();
+ 	vfm->close(vfm);
+ 	return success;
+ }
+--- a/src/platform/libretro/libretro_core_options.h
++++ b/src/platform/libretro/libretro_core_options.h
+@@ -289,6 +289,20 @@
+          { NULL,     NULL },
+       },
+       "0"
++   },
++   {
++      "mgba_force_rtc",
++      "Real-Time Clock (Restart)",
++      NULL,
++      "Auto detects cartridge RTC support. Force On enables it for GBA ROM hacks with unrecognized headers. Uses the device clock; synchronize MinUI+ over Wi-Fi first. Restart the game after changing this option.",
++      NULL,
++      "system",
++      {
++         { "OFF", "Auto" },
++         { "ON", "Force On" },
++         { NULL, NULL },
++      },
++      "OFF"
+    },
+    {
+       "mgba_force_gbp",

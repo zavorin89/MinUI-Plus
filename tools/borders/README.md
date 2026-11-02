@@ -31,7 +31,13 @@ Then add the system's line below, and save the result as `generated/<TAG>.png`.
 | VB | Virtual Boy | 0, 53, 640 x 373 (bands top and bottom) |
 | GBA, MGBA | Game Boy Advance | 0, 26, 640 x 427 (bands top and bottom) |
 
+| CPS1, CPS2, CPS3, FBN, MAME | Arcade | 140, 0, 360 x 480 (a vertical game, bands left and right) |
+
 These are the game's size at each system's default scaling (Aspect, except Pokémon mini which is Native).
+
+The arcade ones aren't made with ChatGPT: `make-arcade-borders.py` draws them (run it with the system-art venv,
+which has Pillow). Horizontal arcade games fill the screen; a vertical one is shown full height, and minarch moves the
+bands in or out to meet it when it isn't exactly 3:4.
 
 ## Installing
 

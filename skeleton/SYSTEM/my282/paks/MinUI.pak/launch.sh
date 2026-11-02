@@ -66,7 +66,10 @@ rmdir "$SDCARD_PATH/Roms/Super Nintendo (SUPA)" 2>/dev/null || true
 
 # MinUI+ only exposes its own focused tools. Older packages also installed six stock Extras that were never part of
 # that set. Move them into hidden userdata instead of deleting them, so an existing user can recover one manually.
+# Only the once: a tool someone puts on the card afterwards is theirs to keep.
 REMOVED_TOOLS_PATH="$SHARED_USERDATA_PATH/.minui/removed-official-tools"
+REMOVED_TOOLS_DONE="$SHARED_USERDATA_PATH/.minui/removed-official-tools-done"
+if [ ! -f "$REMOVED_TOOLS_DONE" ]; then
 mkdir -p "$REMOVED_TOOLS_PATH"
 for OFFICIAL_TOOL in "Bootlogo.pak" "Bootlogo.pak.disabled" "Clock.pak" "Files.pak" "Input.pak" "Remove Loading.pak" "Reset Stick.pak"; do
 	SOURCE_TOOL="$SDCARD_PATH/Tools/$PLATFORM/$OFFICIAL_TOOL"
@@ -75,6 +78,8 @@ for OFFICIAL_TOOL in "Bootlogo.pak" "Bootlogo.pak.disabled" "Clock.pak" "Files.p
 	[ -e "$DEST_TOOL" ] && DEST_TOOL="$DEST_TOOL.$(date +%s)"
 	mv "$SOURCE_TOOL" "$DEST_TOOL"
 done
+touch "$REMOVED_TOOLS_DONE"
+fi
 
 killall -9 tee
 rm -f "$SDCARD_PATH/update.log"
@@ -83,18 +88,33 @@ WIFI_AUTOSTART_OFF="$SHARED_USERDATA_PATH/.minui/wifi-autostart-off" # "Connect 
 if [ -f "$WIFI_FLAG" ] && [ -f "$WIFI_AUTOSTART_OFF" ]; then
 	rm -f "$WIFI_FLAG" # start with wifi off, it's turned back on from the Wi-Fi tool
 fi
+WIFI_WAS_ON=1 # (so a first pass with wifi off takes it down)
 WIFI_WAS_ONLINE=0
+CLOCK_TRIES=0
+CLOCK_RETRY_AT=0
 while :; do
 	if [ ! -f "$WIFI_FLAG" ]; then
-		killall -9 wpa_supplicant
-		ifconfig wlan0 down
+		[ "$WIFI_WAS_ON" -eq 1 ] && wifi.sh down
+		killall -9 wpa_supplicant 2>/dev/null
+		WIFI_WAS_ON=0
 		WIFI_WAS_ONLINE=0
 	elif [ -n "$(wifi.sh status)" ]; then
+		# clock and updater on each new connection (including saved networks and hotspots that appear later), and
+		# again while the clock hasn't synced: every minute at first, then every 10
+		NOW=$(cut -d. -f1 /proc/uptime)
 		if [ "$WIFI_WAS_ONLINE" -eq 0 ]; then
-			wifi.sh online >/dev/null 2>&1 & # clock and updater, including saved networks/hotspots that appear later
+			CLOCK_TRIES=0
+			CLOCK_RETRY_AT=0
 		fi
+		if [ "$WIFI_WAS_ONLINE" -eq 0 ] || { [ ! -f /tmp/minui_clock_set ] && [ "$NOW" -ge "$CLOCK_RETRY_AT" ]; }; then
+			wifi.sh online >/dev/null 2>&1 &
+			CLOCK_TRIES=$((CLOCK_TRIES + 1))
+			if [ "$CLOCK_TRIES" -lt 5 ]; then CLOCK_RETRY_AT=$((NOW + 60)); else CLOCK_RETRY_AT=$((NOW + 600)); fi
+		fi
+		WIFI_WAS_ON=1
 		WIFI_WAS_ONLINE=1
 	else
+		WIFI_WAS_ON=1
 		WIFI_WAS_ONLINE=0
 	fi
 	killall -9 MtpDaemon

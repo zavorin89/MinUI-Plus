@@ -1,6 +1,6 @@
 #!/bin/sh
 # update.sh check|install
-# Quietly checks GitHub's latest stable release, or downloads, verifies and installs the update the launcher offered.
+# Quietly checks the latest stable release on GitHub and on Codeberg, or downloads, verifies and installs the update the launcher offered.
 
 SDCARD_PATH="${SDCARD_PATH:-/mnt/SDCARD}"
 SYSTEM_PATH="${SYSTEM_PATH:-$SDCARD_PATH/.system/my282}"
@@ -10,7 +10,10 @@ AVAILABLE="$STATE_DIR/update-available.txt"
 NOTES="$STATE_DIR/update-notes.txt"
 VERSION="$SDCARD_PATH/.system/version.txt"
 LOG="${LOGS_PATH:-$SDCARD_PATH/.userdata/my282/logs}/update.txt"
-API="https://api.github.com/repos/zavorin89/MinUI-Plus/releases/latest"
+GITHUB_API="https://api.github.com/repos/zavorin89/MinUI-Plus/releases/latest"
+GITHUB_DOWNLOADS="https://github.com/zavorin89/MinUI-Plus/releases/download/"
+CODEBERG_API="https://codeberg.org/api/v1/repos/zavorin89/MinUI-Plus/releases/latest"
+CODEBERG_DOWNLOADS="https://codeberg.org/zavorin89/MinUI-Plus/releases/download/"
 HTTPS="$SYSTEM_PATH/bin/https.elf"
 CA_CERT="$SDCARD_PATH/.system/res/cacert.pem"
 RUNTIME_PATH="${MINUI_RUNTIME_PATH:-/tmp}"
@@ -47,34 +50,27 @@ release_newer() {
 	[ "$1" -gt "$3" ] || { [ "$1" -eq "$3" ] && [ "$2" -gt "$4" ]; }
 }
 
-check() {
-	# Reconnecting after sleep should not spend GitHub's anonymous API allowance: check at most once an hour.
-	NOW=$(date +%s)
-	LAST=$(cat "$CHECKED" 2>/dev/null)
-	case "$LAST" in *[!0-9]*|'') LAST=0 ;; esac
-	[ $((NOW - LAST)) -ge 3600 ] || exit 0
-	mkdir "$CHECK_LOCK" 2>/dev/null || exit 0
-	trap 'rmdir "$CHECK_LOCK" 2>/dev/null' EXIT INT TERM
-	[ -x "$HTTPS" ] || { log "check failed: the HTTPS downloader is missing"; exit 1; }
-	[ -f "$CA_CERT" ] || { log "check failed: the CA bundle is missing"; exit 1; }
-
+# Fetches one source's latest release into TAG, ASSET, URL, DIGEST, SIZE and BODY: read_release NAME API DOWNLOADS
+read_release() {
 	# An address can exist a moment before DNS/internet access is ready, especially with phone hotspots. Retry like
-	# the clock sync does, and only start the one-hour quiet period after a successful GitHub response.
+	# the clock sync does, but a server that answered "no" (a 4xx, like a missing release) won't change its mind.
 	RELEASE=
 	n=0
 	while [ $n -lt 4 ]; do
-		RAW=$(CA_CERT_PATH="$CA_CERT" "$HTTPS" -release -t 25s "$API" 2>"$HTTPS_ERROR")
+		RAW=$(CA_CERT_PATH="$CA_CERT" "$HTTPS" -release -t 25s "$2" 2>"$HTTPS_ERROR")
 		if [ $? -eq 0 ] && [ -n "$RAW" ]; then
 			RELEASE="$RAW"
 			break
 		fi
+		grep -q 'server returned 4' "$HTTPS_ERROR" 2>/dev/null && break
 		n=$((n+1))
 		[ $n -lt 4 ] && sleep 3
 	done
 	if [ -z "$RELEASE" ]; then
 		DETAIL=$(tail -n 1 "$HTTPS_ERROR" 2>/dev/null | tr '\r\n' ' ')
-		log "check failed after 4 attempts: ${DETAIL:-unknown HTTPS error}"
-		exit 1
+		log "$1 check failed: ${DETAIL:-unknown HTTPS error}"
+		rm -f "$HTTPS_ERROR"
+		return 1
 	fi
 	rm -f "$HTTPS_ERROR"
 	# The HTTPS helper parses JSON itself; BusyBox only reads its five fixed lines followed by the release notes.
@@ -84,20 +80,54 @@ check() {
 	DIGEST=$(printf '%s\n' "$RELEASE" | sed -n '4p')
 	SIZE=$(printf '%s\n' "$RELEASE" | sed -n '5p')
 	BODY=$(printf '%s\n' "$RELEASE" | sed '1,5d')
+	# Codeberg doesn't report a checksum for release files, so its releases carry a "SHA-256: <hex>" line in their notes.
+	[ -n "$DIGEST" ] || DIGEST=$(printf '%s\n' "$BODY" | sed -n 's/^.*SHA-256:[^0-9a-fA-F]*\([0-9a-fA-F]\{64\}\).*$/\1/p' | sed -n '1p')
+	BODY=$(printf '%s\n' "$BODY" | sed '/SHA-256:/d')
 	URL_STATE=missing; [ -n "$URL" ] && URL_STATE=present
 	case "$TAG|$ASSET|$URL" in
-		v*'|MinUIPlus-'*'.zip|https://github.com/zavorin89/MinUI-Plus/releases/download/'*) ;;
-		*) log "check failed: release fields tag=${TAG:-missing}, asset=${ASSET:-missing}, url=$URL_STATE"; exit 1 ;;
+		v*'|MinUIPlus-'*".zip|$3"*) ;;
+		*) log "$1 check failed: release fields tag=${TAG:-missing}, asset=${ASSET:-missing}, url=$URL_STATE"; return 1 ;;
 	esac
-	case "$DIGEST" in *[!0-9a-fA-F]*|'') log "check failed: the release has no SHA-256"; exit 1 ;; esac
-	[ ${#DIGEST} -eq 64 ] || { log "check failed: the release SHA-256 is invalid"; exit 1; }
-	case "$SIZE" in *[!0-9]*|'') log "check failed: the release size is invalid"; exit 1 ;; esac
+	case "$DIGEST" in *[!0-9a-fA-F]*|'') log "$1 check failed: the release has no SHA-256"; return 1 ;; esac
+	[ ${#DIGEST} -eq 64 ] || { log "$1 check failed: the release SHA-256 is invalid"; return 1; }
+	case "$SIZE" in *[!0-9]*|'') log "$1 check failed: the release size is invalid"; return 1 ;; esac
+}
+
+check() {
+	# Reconnecting after sleep should not spend GitHub's anonymous API allowance: check at most once an hour.
+	NOW=$(date +%s)
+	LAST=$(cat "$CHECKED" 2>/dev/null)
+	case "$LAST" in *[!0-9]*|'') LAST=0 ;; esac
+	# A clock correction backwards must not suppress checks until the old time catches up.
+	if [ "$NOW" -ge "$LAST" ] && [ $((NOW - LAST)) -lt 3600 ]; then exit 0; fi
+	mkdir "$CHECK_LOCK" 2>/dev/null || exit 0
+	trap 'rmdir "$CHECK_LOCK" 2>/dev/null' EXIT INT TERM
+	[ -x "$HTTPS" ] || { log "check failed: the HTTPS downloader is missing"; exit 1; }
+	[ -f "$CA_CERT" ] || { log "check failed: the CA bundle is missing"; exit 1; }
+
+	# Both sources are asked, so one that's down or behind can't hide a release on the other. GitHub wins a tie. The
+	# one-hour quiet period only starts after one of them gave a usable answer.
+	if read_release GitHub "$GITHUB_API" "$GITHUB_DOWNLOADS"; then
+		SOURCE=GitHub
+		BEST="$TAG|$ASSET|$URL|$DIGEST|$SIZE"; BEST_ASSET="$ASSET"; BEST_BODY="$BODY"
+	fi
+	if read_release Codeberg "$CODEBERG_API" "$CODEBERG_DOWNLOADS"; then
+		if [ -z "$SOURCE" ] || release_newer "$ASSET" "$BEST_ASSET"; then
+			SOURCE=Codeberg
+			BEST="$TAG|$ASSET|$URL|$DIGEST|$SIZE"; BEST_ASSET="$ASSET"; BEST_BODY="$BODY"
+		fi
+	fi
+	[ -n "$SOURCE" ] || exit 1
+	IFS='|' read -r TAG ASSET URL DIGEST SIZE <<EOF_BEST
+$BEST
+EOF_BEST
+	BODY="$BEST_BODY"
 
 	CURRENT=$(sed -n '1p' "$VERSION" 2>/dev/null)
 	if ! release_newer "$ASSET" "$CURRENT"; then # the installed one, or older: nothing to offer
 		rm -f "$AVAILABLE" "$NOTES"
 		echo "$NOW" > "$CHECKED"
-		log "up to date: $TAG ($CURRENT)"
+		log "up to date: $TAG from $SOURCE ($CURRENT)"
 		exit 0
 	fi
 
@@ -114,7 +144,7 @@ check() {
 	mv "$NOTES.tmp" "$NOTES"
 	mv "$AVAILABLE.tmp" "$AVAILABLE" # last: the launcher never sees metadata without its notes
 	echo "$NOW" > "$CHECKED"
-	log "available: $TAG ($ASSET)"
+	log "available: $TAG ($ASSET) from $SOURCE"
 }
 
 fail() {
@@ -122,10 +152,16 @@ fail() {
 	rm -f "$PART" "$PROGRESS"
 	if [ -n "$DOWNLOAD_PID" ]; then kill "$DOWNLOAD_PID" 2>/dev/null; wait "$DOWNLOAD_PID" 2>/dev/null; fi
 	stop_show
+	if [ "$UNPACK_STARTED" = 1 ]; then
+		RECOVERY="Some update files may have been copied.
+Retry the update before shutting down."
+	else
+		RECOVERY="Nothing was installed."
+	fi
 	say.elf "Update failed
 $*
 
-Nothing was installed."
+$RECOVERY"
 	exit 1
 }
 
@@ -150,7 +186,7 @@ install_update() {
 	DIGEST=$(sed -n '4p' "$AVAILABLE")
 	SIZE=$(sed -n '5p' "$AVAILABLE")
 	case "$TAG|$ASSET|$URL" in
-		v*'|MinUIPlus-'*'.zip|https://github.com/zavorin89/MinUI-Plus/releases/download/'*) ;;
+		v*'|MinUIPlus-'*".zip|$GITHUB_DOWNLOADS"*|v*'|MinUIPlus-'*".zip|$CODEBERG_DOWNLOADS"*) ;;
 		*) fail "The update information is invalid" ;;
 	esac
 	case "$DIGEST" in *[!0-9a-fA-F]*|'') fail "The update has no SHA-256" ;; esac
@@ -196,7 +232,8 @@ install_update() {
 	# new, so a customized one is never overwritten. The first-install miyoo folder isn't needed on an installed card.
 	# (unzip exits 11 when a pattern matches nothing, 1 for warnings: neither is a failure)
 	echo 88 > "$PROGRESS"
-	"$UNZIP" -o "$DOWNLOAD" MinUI.zip README.txt 'Tools/*' 'Emus/*' '.res/*' -d "$SDCARD_PATH" >>"$LOG" 2>&1
+	UNPACK_STARTED=1
+	"$UNZIP" -o "$DOWNLOAD" MinUI.zip README.txt CHANGES.txt 'Tools/*' 'Emus/*' '.res/*' -d "$SDCARD_PATH" >>"$LOG" 2>&1
 	case $? in 0|1|11) ;; *) fail "The update could not be unpacked" ;; esac
 	echo 94 > "$PROGRESS"
 	"$UNZIP" -n "$DOWNLOAD" 'Roms/*' 'Borders/*' 'BGM/*' 'Bios/*' 'Saves/*' -d "$SDCARD_PATH" >>"$LOG" 2>&1

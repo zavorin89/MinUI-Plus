@@ -212,6 +212,7 @@ void GFX_blitButton(char* hint, char*button, SDL_Surface* dst, SDL_Rect* dst_rec
 void GFX_blitMessage(TTF_Font* font, char* msg, SDL_Surface* dst, SDL_Rect* dst_rect);
 
 int GFX_blitHardwareGroup(SDL_Surface* dst, int show_setting);
+void GFX_blitHeader(SDL_Surface* dst, char* title, int ow); // a screen's title, grey, on the top row beside the hardware group (ow: its width)
 int GFX_settingFading(void); // the volume/brightness bar is still fading out (GFX_blitHardwareGroup draws it)
 enum { CLOCK_OFF, CLOCK_12H, CLOCK_24H };
 enum { SLEEP_LIGHT_OFF, SLEEP_LIGHT_ON, SLEEP_LIGHT_COUNT }; // (the A30's LED is on or off: it doesn't dim)
@@ -242,6 +243,11 @@ typedef struct SND_Frame {
 void SND_init(double sample_rate, double frame_rate);
 size_t SND_batchSamples(const SND_Frame* frames, size_t frame_count);
 uint64_t SND_takeWaitUs(void); // microseconds SND_batchSamples spent waiting for room since the last call
+uint64_t SND_waitedUs(void); // microseconds SND_batchSamples has spent waiting for room in all
+void SND_setRate(double sample_rate); // the core's rate changed while it runs (an N64 game sets its own)
+void SND_setBufferFrames(int frames); // how many video frames of sound the ring holds
+int SND_queuedFrames(void); // video frames of sound waiting to play
+int SND_takeUnderruns(void); // times the ring ran dry since the last call
 void SND_quit(void);
 
 // short synthesized sounds, mixed into the game's audio when it's playing or on their own device otherwise
@@ -321,6 +327,7 @@ int PAD_tappedMenu(uint32_t now); // special case, returns 1 on release of BTN_M
 void VIB_init(void);
 void VIB_quit(void);
 void VIB_setStrength(int strength);
+int VIB_coreHasRumble(const char* core); // the cores with a Rumble Strength setting
 int VIB_getStrength(void);
 void VIB_pulse(int strength, int milliseconds); // asynchronous, for short UI feedback
 	

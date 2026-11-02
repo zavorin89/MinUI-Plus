@@ -6,6 +6,7 @@
 #include <msettings.h>
 #include "defines.h"
 #include "api.h"
+#include "tools.h"
 #include "bgm.h"
 #include "utils.h"
 
@@ -27,7 +28,7 @@ static Section sections[] = {
 		{ "SELECT",			"List or carousel view" },
 		{ "hold SELECT",	"Pin to the game switcher" },
 		{ "START",			"Random game, any system" },
-		{ "MENU + Y",		"Game menu: core, art, rename" },
+		{ "MENU + Y",		"Game menu: core, CPU, art, rename" },
 		{ "MENU + X",		"Delete game, or clear Play Time" },
 	}},
 	{ "Other", NULL, {
@@ -104,7 +105,7 @@ static void blitHeader(char* title, char* where, int show_setting) {
 	int ow = GFX_blitHardwareGroup(screen, show_setting);
 	int x = SCALE1(PADDING + BUTTON_PADDING);
 	int max_w = screen->w - x - ow - SCALE1(PADDING*2);
-	SDL_Surface* text = TTF_RenderUTF8_Blended(font.large, title, COLOR_WHITE);
+	SDL_Surface* text = TTF_RenderUTF8_Blended(font.large, title, COLOR_DARK_TEXT); // grey, as every header
 	int y = SCALE1(PADDING) + (SCALE1(PILL_SIZE) - text->h) / 2;
 	SDL_BlitSurface(text, NULL, screen, &(SDL_Rect){ x, y });
 	int title_w = text->w;
@@ -162,15 +163,8 @@ static void blitDots(int page) {
 	}
 }
 
-int main(int argc , char* argv[]) {
-	PWR_setCPUSpeed(CPU_SPEED_MENU);
-	screen = GFX_init(MODE_MAIN);
-	PAD_init();
-	PWR_init();
-	InitSettings();
-	SFX_forInput(1); // clicks for moving, choosing and going back
-	BGM_start(); // the menus' music, when it's on
-
+void Controls_open(SDL_Surface* main_screen) {
+	screen = main_screen;
 	int page = 0;
 	int dirty = 1;
 	int show_setting = 0;
@@ -202,6 +196,18 @@ int main(int argc , char* argv[]) {
 		else GFX_sync();
 	}
 
+}
+
+#ifndef MINUI_TOOLS
+int main(int argc , char* argv[]) {
+	PWR_setCPUSpeed(CPU_SPEED_MENU);
+	SDL_Surface* screen = GFX_init(MODE_MAIN);
+	PAD_init();
+	PWR_init();
+	InitSettings();
+	SFX_forInput(1); // clicks for moving, choosing and going back
+	BGM_start(); // the menus' music, when it's on
+	Controls_open(screen);
 	BGM_quit();
 	SFX_quit();
 	QuitSettings();
@@ -210,3 +216,4 @@ int main(int argc , char* argv[]) {
 	GFX_quit();
 	return EXIT_SUCCESS;
 }
+#endif

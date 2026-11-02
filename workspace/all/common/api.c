@@ -225,8 +225,10 @@ static struct PWR_Context {
 ///////////////////////////////
 
 static int _;
+static int refreshClock(void);
 
 SDL_Surface* GFX_init(int mode) {
+	refreshClock(); // initialize local time before an emulator loads RTC data
 	// TODO: this doesn't really belong here...
 	// tried adding to PWR_init() but that was no good (not sure why)
 	PLAT_initLid();
@@ -727,6 +729,37 @@ void GFX_blitRect(int asset, SDL_Surface* dst, SDL_Rect* dst_rect) {
 	SDL_FillRect(dst, &(SDL_Rect){x+r,y+h-r,w-d,r}, c);
 	GFX_blitAsset(asset, &(SDL_Rect){r,r,r,r}, dst, &(SDL_Rect){x+w-r,y+h-r});
 }
+// The sheet's ASSET_BATTERY_BOLT is a solid bar with a slit in it, which reads as a full battery. This one sits over the
+// battery and leaves the level showing. The outline keeps it clear of a full bar. Drawn for the destination's format
+// because the low battery overlay isn't always the screen's.
+static void blitChargingBolt(SDL_Surface* dst, int cx, int cy) {
+	static const uint8_t spans[][2] = { // x,w at 2x
+		{7,4},{6,5},{6,4},{5,5},{5,4},{4,5},{4,4},{3,5},{3,9},{2,10},
+		{2,9},{6,5},{6,4},{5,5},{5,4},{4,4},{4,3},{4,2},{3,2},{3,1},
+	};
+	#define BOLT_UNIT(n) ((n) * FIXED_SCALE / 2)
+	int count = sizeof(spans) / sizeof(spans[0]);
+	int ox = cx - BOLT_UNIT(7);
+	int oy = cy - BOLT_UNIT(count) / 2;
+	uint8_t r,g,b;
+	SDL_GetRGB(RGB_WHITE, gfx.screen->format, &r,&g,&b);
+	uint32_t white = SDL_MapRGB(dst->format, r,g,b);
+	SDL_GetRGB(RGB_BLACK, gfx.screen->format, &r,&g,&b);
+	uint32_t black = SDL_MapRGB(dst->format, r,g,b);
+	for (int i=0; i<count; i++) {
+		SDL_FillRect(dst, &(SDL_Rect){
+			ox + BOLT_UNIT(spans[i][0]) - BOLT_UNIT(1), oy + BOLT_UNIT(i) - BOLT_UNIT(1),
+			BOLT_UNIT(spans[i][1] + 2), BOLT_UNIT(3)
+		}, black);
+	}
+	for (int i=0; i<count; i++) {
+		SDL_FillRect(dst, &(SDL_Rect){
+			ox + BOLT_UNIT(spans[i][0]), oy + BOLT_UNIT(i),
+			BOLT_UNIT(spans[i][1]), BOLT_UNIT(1)
+		}, white);
+	}
+	#undef BOLT_UNIT
+}
 void GFX_blitBattery(SDL_Surface* dst, SDL_Rect* dst_rect) {
 	// LOG_info("dst: %p\n", dst);
 	int x = 0;
@@ -739,24 +772,20 @@ void GFX_blitBattery(SDL_Surface* dst, SDL_Rect* dst_rect) {
 	x += (SCALE1(PILL_SIZE) - (rect.w + FIXED_SCALE)) / 2;
 	y += (SCALE1(PILL_SIZE) - rect.h) / 2;
 	
-	if (pwr.is_charging) {
-		GFX_blitAsset(ASSET_BATTERY, NULL, dst, &(SDL_Rect){x,y});
-		GFX_blitAsset(ASSET_BATTERY_BOLT, NULL, dst, &(SDL_Rect){x+SCALE1(3),y+SCALE1(2)});
-	}
-	else {
-		int percent = pwr.charge;
-		GFX_blitAsset(percent<=10?ASSET_BATTERY_LOW:ASSET_BATTERY, NULL, dst, &(SDL_Rect){x,y});
-		
-		rect = asset_rects[ASSET_BATTERY_FILL];
-		SDL_Rect clip = rect;
-		clip.w *= percent;
-		clip.w /= 100;
-		if (clip.w<=0) return;
-		clip.x = rect.w - clip.w;
+	int percent = pwr.charge;
+	GFX_blitAsset(percent<=10?ASSET_BATTERY_LOW:ASSET_BATTERY, NULL, dst, &(SDL_Rect){x,y});
+	
+	SDL_Rect fill = asset_rects[ASSET_BATTERY_FILL];
+	SDL_Rect clip = fill;
+	clip.w *= percent;
+	clip.w /= 100;
+	if (clip.w>0) {
+		clip.x = fill.w - clip.w;
 		clip.y = 0;
-		
 		GFX_blitAsset(percent<=20?ASSET_BATTERY_FILL_LOW:ASSET_BATTERY_FILL, &clip, dst, &(SDL_Rect){x+SCALE1(3)+clip.x,y+SCALE1(2)});
 	}
+	
+	if (pwr.is_charging) blitChargingBolt(dst, x + SCALE1(2) + (rect.w - SCALE1(2)) / 2, y + rect.h / 2);
 }
 int GFX_getButtonWidth(char* hint, char* button) {
 	int button_width = 0;
@@ -987,6 +1016,17 @@ void GFX_setTimeZone(int zone) {
 	tzset();
 	clock_drawn_minute = 0; // redrawn in the new zone
 	if (PLAT_isOnline()) system("wifi.sh time >/dev/null 2>&1 &"); // synced in the new zone (automatic: looked up first)
+}
+// the settings and tools name each screen on the top row, left of the time and battery, in the grey of the settings'
+// names, so no row has to share that line
+void GFX_blitHeader(SDL_Surface* dst, char* title, int ow) {
+	if (!title || !title[0]) return;
+	char shown[256];
+	GFX_truncateText(font.large, title, shown, dst->w - SCALE1(PADDING*3 + BUTTON_PADDING) - ow, 0);
+	SDL_Surface* text = TTF_RenderUTF8_Blended(font.large, shown, COLOR_DARK_TEXT);
+	if (!text) return;
+	SDL_BlitSurface(text, NULL, dst, &(SDL_Rect){ SCALE1(PADDING + BUTTON_PADDING), SCALE1(PADDING) + (SCALE1(PILL_SIZE) - text->h) / 2 });
+	SDL_FreeSurface(text);
 }
 int GFX_blitHardwareGroup(SDL_Surface* dst, int show_setting) {
 	if (show_setting) setting_fade_until = 0;
@@ -1301,6 +1341,7 @@ static void SND_audioCallback(void* userdata, uint8_t* stream, int len) { // pla
 	if (sfx_music) sfx_music((int16_t*)stream, len / (sizeof(int16_t) * 2)); // the pause menu's music
 	SFX_mix((int16_t*)stream, len / (sizeof(int16_t) * 2)); // menu sounds and the achievement chime, over the game
 }
+static int snd_underruns = 0;
 static void SND_fillStream(uint8_t* stream, int len) {
 	
 	// return (void)memset(stream,0,len); // TODO: tmp, silent
@@ -1325,19 +1366,15 @@ static void SND_fillStream(uint8_t* stream, int len) {
 		if (snd.frame_out>=snd.frame_count) snd.frame_out = 0;
 	}
 	
-	int zero = len>0 && len==SAMPLES;
-	if (zero) return (void)memset(out,0,len*(sizeof(int16_t) * 2));
-	// else if (len>=5) LOG_info("%8i BUFFER UNDERRUN (%i/%i frames)\n", ms(), len,full_len);
-
-	int16_t *in = out-1;
-	while (len>0) {
-		*out++ = (void*)in>(void*)stream ? *--in : 0;
-		*out++ = (void*)in>(void*)stream ? *--in : 0;
-		len -= 1;
+	// Never replay old samples backwards (or form a pointer before an empty buffer).
+	if (len>0) {
+		memset(out, 0, len * sizeof(SND_Frame));
+		snd_underruns += 1;
 	}
 }
 static void SND_resizeBuffer(void) { // plat_sound_resize_buffer
-	snd.frame_count = snd.buffer_seconds * snd.sample_rate_in / snd.frame_rate;
+	// The ring holds resampled output, so its duration must use the device rate.
+	snd.frame_count = snd.buffer_seconds * snd.sample_rate_out / snd.frame_rate;
 	if (snd.frame_count==0) return;
 	
 	// LOG_info("frame_count: %i (%i * %i / %f)\n", snd.frame_count, snd.buffer_seconds, snd.sample_rate_in, snd.frame_rate);
@@ -1392,6 +1429,10 @@ static void SND_selectResampler(void) { // plat_sound_select_resampler
 	}
 }
 static uint64_t snd_wait_us = 0; // time spent waiting for room, for minarch's Auto CPU speed
+static uint64_t snd_waited_us = 0; // and in all
+uint64_t SND_waitedUs(void) {
+	return snd_waited_us;
+}
 uint64_t SND_takeWaitUs(void) {
 	uint64_t us = snd_wait_us;
 	snd_wait_us = 0;
@@ -1409,6 +1450,7 @@ size_t SND_batchSamples(const SND_Frame* frames, size_t frame_count) { // plat_s
 
 	int consumed = 0;
 	int consumed_frames = 0;
+	uint32_t stalled_at = SDL_GetTicks();
 	while (frame_count > 0) {
 		int tries = 0;
 		int amount = MIN(BATCH_SIZE, frame_count);
@@ -1420,7 +1462,18 @@ size_t SND_batchSamples(const SND_Frame* frames, size_t frame_count) { // plat_s
 			SDL_Delay(1);
 			SDL_LockAudio();
 		}
-		if (wait_from) snd_wait_us += getMicroseconds() - wait_from;
+		if (wait_from) {
+			uint64_t waited = getMicroseconds() - wait_from;
+			snd_wait_us += waited;
+			snd_waited_us += waited;
+		}
+		if (snd.frame_in==snd.frame_filled && SDL_GetTicks()-stalled_at>=250) {
+			// Return to input handling if the audio device stops draining. Drop this batch
+			// rather than trapping the emulator in retries forever.
+			SDL_UnlockAudio();
+			return consumed + frame_count;
+		}
+		if (snd.frame_in!=snd.frame_filled) stalled_at = SDL_GetTicks();
 		// if (tries) LOG_info("%8i waited %ims for buffer to get low...\n", ms(), tries);
 
 		while (amount && snd.frame_in != snd.frame_filled) {
@@ -1435,6 +1488,30 @@ size_t SND_batchSamples(const SND_Frame* frames, size_t frame_count) { // plat_s
 	SDL_UnlockAudio();
 	
 	return consumed;
+}
+
+void SND_setRate(double sample_rate) {
+	if (!snd.initialized || sample_rate<=0) return;
+	SDL_LockAudio();
+	snd.sample_rate_in = sample_rate;
+	SND_selectResampler();
+	SDL_UnlockAudio();
+	LOG_info("sample rate: %i (req) %i (rec)\n", snd.sample_rate_in, snd.sample_rate_out);
+}
+void SND_setBufferFrames(int frames) {
+	if (!snd.initialized) return;
+	snd.buffer_seconds = frames;
+	SND_resizeBuffer();
+}
+int SND_queuedFrames(void) {
+	if (!snd.initialized || snd.frame_count==0 || snd.frame_rate<=0) return 0;
+	int queued = (snd.frame_in - snd.frame_out + (int)snd.frame_count) % (int)snd.frame_count;
+	return queued * snd.frame_rate / snd.sample_rate_out;
+}
+int SND_takeUnderruns(void) {
+	int underruns = snd_underruns;
+	snd_underruns = 0;
+	return underruns;
 }
 
 void SND_init(double sample_rate, double frame_rate) { // plat_sound_init
@@ -2059,6 +2136,11 @@ void VIB_setStrength(int strength) {
 	if (vib.queued_strength==strength) return;
 	vib.queued_strength = strength;
 }
+int VIB_coreHasRumble(const char* core) {
+	char* cores[] = { "gambatte", "gpsp", "mgba", "pcsx_rearmed", "pokemini", NULL };
+	for (int i=0; cores[i]; i++) if (exactMatch((char*)core, cores[i])) return 1;
+	return 0;
+}
 int VIB_getStrength(void) {
 	return vib.strength;
 }
@@ -2311,6 +2393,7 @@ void PWR_update(int* _dirty, int* _show_setting, PWR_callback_t before_sleep, PW
 	if (
 		(
 			(PAD_isPressed(BTN_MOD_VOLUME) || PAD_isPressed(BTN_MOD_BRIGHTNESS)) && 
+			(PAD_justRepeated(BTN_MOD_PLUS) || PAD_justRepeated(BTN_MOD_MINUS)) &&
 			(!delay_settings || now-mod_unpressed_at>=MOD_DELAY)
 		) || 
 		((!BTN_MOD_VOLUME || !BTN_MOD_BRIGHTNESS) && (PAD_justRepeated(BTN_MOD_PLUS) || PAD_justRepeated(BTN_MOD_MINUS)))
@@ -2331,10 +2414,17 @@ void PWR_update(int* _dirty, int* _show_setting, PWR_callback_t before_sleep, PW
 		setting_shown_at = now;
 	}
 	
+	// keymon changes the shared settings asynchronously; click when a step actually lands.
+	static int last_volume = -1, last_brightness = -1;
+	int volume = GetVolume(), brightness = GetBrightness();
+	if (show_setting && last_volume>=0 && last_brightness>=0 &&
+		(volume!=last_volume || brightness!=last_brightness)) SFX_play(SFX_TICK);
+	last_volume = volume;
+	last_brightness = brightness;
 	if (show_setting) dirty = 1; // shm is slow or keymon is catching input on the next frame
 	if (clock_drawn_minute && GFX_getClockMode() && time(NULL) / 60 != clock_drawn_minute) dirty = 1; // the clock moved on
 	static uint32_t clock_checked = 0;
-	if (GFX_getClockMode() && now - clock_checked > 2000) { // wifi just synced it, or found the time zone
+	if (now - clock_checked > 2000) { // game RTC needs the time zone even with the clock hidden
 		clock_checked = now;
 		if (refreshClock()) dirty = 1;
 	}
@@ -2409,6 +2499,7 @@ static void PWR_enterSleep(void) {
 }
 static void PWR_exitSleep(void) {
 	PLAT_powerSave(POWER_AWAKE);
+	refreshClock();
 	if (audio_slept) { // the same as before sleep, so its rate etc. hold
 		SDL_AudioSpec have;
 		audio_slept = 0;

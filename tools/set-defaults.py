@@ -11,6 +11,10 @@ import sys
 LOOK = {"minarch_screen_scaling": "Aspect", "minarch_screen_sharpness": "Crisp", "minarch_cpu_speed": "Auto"}
 LCD = dict(LOOK, minarch_screen_effect="Grid", minarch_screen_border="On")
 TV = dict(LOOK, minarch_screen_effect="Line")
+ARCADE = dict(TV, minarch_screen_border="On")
+FBNEO = {"fbneo-vertical-mode": "disabled", "fbneo-hiscores": "enabled", "fbneo-allow-depth-32": "disabled",
+	"fbneo-cyclone": "enabled", "fbneo-samplerate": "44100", "fbneo-sample-interpolation": "disabled",
+	"fbneo-fm-interpolation": "disabled", "fbneo-frameskip-type": "disabled"}
 
 SYSTEMS = {
 	# handhelds: their LCD's grid, a border, and the LCD's slow response
@@ -32,6 +36,24 @@ SYSTEMS = {
 	"SGB": dict(TV, minarch_screen_border="On"),
 	"FC": dict(TV), "SFC": dict(TV), "SFC10": dict(TV), "SNESX": dict(TV), "SUPA": dict(TV),
 	"MD": dict(TV), "SMS": dict(TV), "PCE": dict(TV), "PS": dict(TV),
+	"SEGACD": dict(TV), "THIRTYTWOX": dict(TV),
+	# drawn by the GPU (MinArch's hwrender.c) at the A30's own 320x240, with the lightest plugin and the ARM dynarec;
+	# the A30 has no second stick, so the C buttons are the alternate map's (L1/R1, X/A), Z on L2 and R on R2
+	"N64": dict(TV, **{"parallel-n64-cpucore": "dynamic_recompiler",
+		"parallel-n64-gfxplugin": "rice", "parallel-n64-gfxplugin-accuracy": "low", "parallel-n64-screensize": "320x240",
+		"parallel-n64-rspplugin": "auto", "parallel-n64-alt-map": "enabled", "parallel-n64-pak1": "memory"}),
+	# arcade, on its CRT with a bezel. Rotation is left to MinArch (its Vertical Games option: upright or sideways),
+	# high scores are kept, and the sound is set for the A30's CPU (44.1 kHz, no interpolation)
+	"CPS1": dict(ARCADE, fba2012cps1_auto_rotate="enabled", fba2012cps1_hiscores="enabled",
+		fba2012cps1_lowpass_filter="disabled", fba2012cps1_frameskip="disabled"),
+	"CPS2": dict(ARCADE, fba2012cps2_auto_rotate="enabled", fba2012cps2_hiscores="enabled",
+		fba2012cps2_lowpass_filter="disabled", fba2012cps2_frameskip="disabled"),
+	"NEOGEO": dict(ARCADE),
+	# FBNeo: 16-bit colour (MinArch's), the fast ARM 68000 core, no frame skipping
+	"CPS3": dict(ARCADE, **FBNEO), "FBN": dict(ARCADE, **FBNEO),
+	"MAME": dict(ARCADE, **{"mame2003-plus_skip_disclaimer": "enabled", "mame2003-plus_skip_warnings": "enabled",
+		"mame2003-plus_tate_mode": "disabled", "mame2003-plus_frameskip": "0", "mame2003-plus_display_artwork": "disabled",
+		"mame2003-plus_sample_rate": "44100"}),
 }
 
 

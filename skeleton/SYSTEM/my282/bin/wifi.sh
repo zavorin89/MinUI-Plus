@@ -1,19 +1,93 @@
 #!/bin/sh
-# wifi.sh up|down|status|online|time
+# wifi.sh up [first]|down|status|ssid|online|time
 # online: runs the quiet tasks that need a newly working connection (clock sync and update check)
-# Connects wlan0 using the network in /mnt/SDCARD/.userdata/shared/wifi.txt:
-#   ssid=My Network
+# Connects wlan0 to whichever saved network in /mnt/SDCARD/.userdata/shared/wifi.txt is in range, and moves between
+# them by itself (the first listed, the latest joined, is preferred when several are):
+#   ssid=Home
 #   psk=my password        (leave out for open networks)
-# status prints the IPv4 address, or nothing when not connected.
+#   ssid=Phone
+#   psk=another password
+# up first: only succeeds once joined to the first one (the network just picked in the Wi-Fi tool).
+# status prints the IPv4 address, or nothing when not connected. ssid prints the joined network's name.
 
 CREDS=/mnt/SDCARD/.userdata/shared/wifi.txt
 CONF=/tmp/wpa_supplicant.conf
+SSIDS=/tmp/wifi_ssids # the saved names in the order wpa_supplicant numbers them, for ssid
+WPA_CLI="wpa_cli -p /var/run/wpa_supplicant -i wlan0"
 DHCP_SCRIPT=/tmp/udhcpc.sh
 RUNTIME_PATH="${MINUI_RUNTIME_PATH:-/tmp}"
 ONLINE_LOCK="$RUNTIME_PATH/minui_wifi_online.lock"
+TIME_LOCK="$RUNTIME_PATH/minui_wifi_time.lock"
+CLOCK_SET=/tmp/minui_clock_set
 
+# the address, only while joined to a network: an address stays on wlan0 after it drops (or is taken down), and that
+# must not count as connected (minui goes by the same operstate)
 ip_address() {
+	[ "$(cat /sys/class/net/wlan0/operstate 2>/dev/null)" = up ] || return
 	ip -4 addr show wlan0 2>/dev/null | sed -n 's/.*inet \([0-9.]*\).*/\1/p' | head -1
+}
+
+# wpa_supplicant's number for the network it's joined (its place in the conf, 0 for the first), empty when none
+network_id() {
+	$WPA_CLI status 2>/dev/null | sed -n 's/^id=//p' | head -1
+}
+
+# the conf: every saved network, each preferred over the ones after it (wpa_supplicant joins the highest priority in
+# range, and another when that one goes). Fails when none is saved
+write_conf() {
+	COUNT=$(grep -c '^ssid=.' "$CREDS" 2>/dev/null)
+	[ "${COUNT:-0}" -gt 0 ] || return 1
+	: > "$SSIDS"
+	{
+		echo "ctrl_interface=/var/run/wpa_supplicant"
+		echo "update_config=0"
+		tr -d '\r' < "$CREDS" | {
+			P=$COUNT
+			SSID=
+			PSK=
+			network() {
+				[ -n "$SSID" ] || return
+				echo "network={"
+				echo "	ssid=\"$SSID\""
+				if [ -n "$PSK" ]; then echo "	psk=\"$PSK\""; else echo "	key_mgmt=NONE"; fi
+				echo "	priority=$P"
+				echo "}"
+				echo "$SSID" >> "$SSIDS"
+				P=$((P-1))
+			}
+			while IFS= read -r LINE || [ -n "$LINE" ]; do
+				case "$LINE" in
+					ssid=*) network; SSID="${LINE#ssid=}"; PSK= ;;
+					psk=*) PSK="${LINE#psk=}" ;;
+				esac
+			done
+			network
+		}
+	} > "$CONF"
+	chmod 600 "$CONF"
+}
+
+# a lock (a folder holding its owner's pid): 0 when taken. One left by a run that was killed is taken over, so a
+# power cut or a hang never blocks every later run until a reboot
+take_lock() {
+	if mkdir "$1" 2>/dev/null; then echo $$ > "$1/pid"; return 0; fi
+	OWNER=$(cat "$1/pid" 2>/dev/null)
+	[ -z "$OWNER" ] && { sleep 1; OWNER=$(cat "$1/pid" 2>/dev/null); } # (just made, its pid on the way)
+	[ -n "$OWNER" ] && kill -0 "$OWNER" 2>/dev/null && return 1
+	rm -rf "$1"
+	mkdir "$1" 2>/dev/null && echo $$ > "$1/pid"
+}
+
+# one clock sync from one server, at most 10 seconds: busybox ntpd -q waits forever for one that doesn't answer
+ntp_once() {
+	ntpd -n -q -p "$1" >/dev/null 2>&1 &
+	PID=$!
+	t=0
+	while kill -0 $PID 2>/dev/null; do
+		[ $t -ge 10 ] && { kill $PID 2>/dev/null; wait $PID 2>/dev/null; return 1; }
+		sleep 1; t=$((t+1))
+	done
+	wait $PID
 }
 
 # a time zone name (eg. America/New_York) as a TZ rule, the same ones the settings list
@@ -44,20 +118,7 @@ zone_rule() {
 
 case "$1" in
 up)
-	[ -f "$CREDS" ] || exit 2
-	SSID=$(sed -n 's/^ssid=//p' "$CREDS" | head -1 | tr -d '\r')
-	PSK=$(sed -n 's/^psk=//p' "$CREDS" | head -1 | tr -d '\r')
-	[ -n "$SSID" ] || exit 2
-
-	{
-		echo "ctrl_interface=/var/run/wpa_supplicant"
-		echo "update_config=0"
-		echo "network={"
-		echo "	ssid=\"$SSID\""
-		if [ -n "$PSK" ]; then echo "	psk=\"$PSK\""; else echo "	key_mgmt=NONE"; fi
-		echo "}"
-	} > "$CONF"
-	chmod 600 "$CONF"
+	write_conf || exit 2
 
 	# our own lease script so we don't depend on the firmware's
 	cat > "$DHCP_SCRIPT" <<'SCRIPT'
@@ -79,14 +140,20 @@ SCRIPT
 	chmod +x "$DHCP_SCRIPT"
 
 	killall -9 wpa_supplicant udhcpc 2>/dev/null
+	ip addr flush dev wlan0 2>/dev/null # the last network's address isn't this one's
 	ifconfig wlan0 up
 	wpa_supplicant -B -i wlan0 -c "$CONF" >/dev/null 2>&1
 	udhcpc -i wlan0 -b -s "$DHCP_SCRIPT" >/dev/null 2>&1
 
-	# wait up to 20 seconds for an address
+	# wait up to 20 seconds for an address (with first, on the first network: a wrong password there can still join
+	# another saved one, which isn't what was asked for. Without wpa_cli to tell, any will do)
+	CHECK_FIRST=
+	[ "$2" = first ] && command -v wpa_cli >/dev/null 2>&1 && CHECK_FIRST=1
 	n=0
-	while [ $n -lt 20 ] && [ -z "$(ip_address)" ]; do sleep 1; n=$((n+1)); done
-	[ -n "$(ip_address)" ] || exit 1
+	until [ -n "$(ip_address)" ] && { [ -z "$CHECK_FIRST" ] || [ "$(network_id)" = 0 ]; }; do
+		n=$((n+1)); [ $n -ge 20 ] && exit 1
+		sleep 1
+	done
 
 	# The launcher also watches the real IP state, covering a saved network or phone hotspot that appears later.
 	(wifi.sh online >/dev/null 2>&1 &)
@@ -95,8 +162,8 @@ SCRIPT
 online)
 	# Run both connection jobs from the same actual-online event. The launcher's watcher may notice the address at
 	# the same moment as `up`; this lock turns those into one run.
-	mkdir "$ONLINE_LOCK" 2>/dev/null || exit 0
-	trap 'rmdir "$ONLINE_LOCK" 2>/dev/null' EXIT INT TERM
+	take_lock "$ONLINE_LOCK" || exit 0
+	trap 'rm -rf "$ONLINE_LOCK"' EXIT INT TERM
 	n=0
 	while [ $n -lt 30 ] && [ -z "$(ip_address)" ]; do sleep 1; n=$((n+1)); done
 	[ -n "$(ip_address)" ] || exit 1
@@ -106,11 +173,15 @@ online)
 	update.sh check >/dev/null 2>&1
 	;;
 time)
-	# the clock, from the internet, whenever wifi connects (unless the clock is turned off). The time zone is the one
+	# Sync game RTCs even when the displayed clock is off. The time zone is the one
 	# picked in the settings, or looked up from the connection the first time (then kept, and changeable there)
 	MINUI="${SHARED_USERDATA_PATH:-/mnt/SDCARD/.userdata/shared}/.minui"
 	LOG="${LOGS_PATH:-/mnt/SDCARD/.userdata/my282/logs}/clock.txt"
-	[ "$(cat "$MINUI/clock.txt" 2>/dev/null)" = "0" ] && exit 0
+	# one at a time (a reconnect and a new time zone can ask together): a second one waits its turn, since it may be
+	# for a zone the first didn't know about
+	n=0
+	until take_lock "$TIME_LOCK"; do n=$((n+1)); [ $n -ge 60 ] && exit 1; sleep 1; done
+	trap 'rm -rf "$TIME_LOCK"' EXIT INT TERM
 	if [ ! -f "$MINUI/time-zone.txt" ]; then
 		J=$(wget -q -T 6 -O - http://worldtimeapi.org/api/ip 2>/dev/null)
 		ZONE=$(echo "$J" | sed -n 's/.*"timezone":"\([^"]*\)".*/\1/p')
@@ -127,25 +198,39 @@ time)
 			RULE=$(printf '<UTC%s%02d%02d>%s%d' "$([ $OFFSET -ge 0 ] && echo + || echo -)" $(( ${OFFSET#-} / 3600 )) $(( ${OFFSET#-} % 3600 / 60 )) "$SIGN" $H)
 			[ $M -gt 0 ] && RULE="$RULE:$(printf '%02d' $M)"
 		fi
-		[ -n "$RULE" ] || { echo "time zone: couldn't tell ($ZONE)" >> "$LOG"; exit 1; }
-		echo "$RULE" > "$MINUI/time-zone.txt"
-		echo "time zone: $ZONE, $RULE" >> "$LOG"
+		# not known (both lookups down): the clock still syncs, for games' clocks, but stays hidden until a later
+		# try finds the zone (launch.sh tries again while it's hidden), or one is picked in the settings
+		if [ -n "$RULE" ]; then
+			echo "$RULE" > "$MINUI/time-zone.txt"
+			echo "time zone: $ZONE, $RULE" >> "$LOG"
+		else echo "time zone: couldn't tell ($ZONE)" >> "$LOG"
+		fi
 	fi
-	export TZ="$(cat "$MINUI/time-zone.txt")"
+	[ -f "$MINUI/time-zone.txt" ] && export TZ="$(cat "$MINUI/time-zone.txt")"
 	n=0
-	until ntpd -n -q -p pool.ntp.org >/dev/null 2>&1; do # (busybox ntpd sets the clock once and quits)
+	for SERVER in pool.ntp.org time.google.com time.cloudflare.com pool.ntp.org; do # (busybox ntpd sets it once and quits)
+		ntp_once "$SERVER" && break
 		n=$((n+1)); [ $n -ge 4 ] && { echo "sync failed" >> "$LOG"; exit 1; }
 		sleep 3 # eg. DNS not answering yet, right after connecting
 	done
 	hwclock --utc -w
-	touch /tmp/minui_clock_set # the clock shows from now until the A30 is off
+	date +'%F %T' > "${DATETIME_PATH:-/mnt/SDCARD/.userdata/shared/datetime.txt}" # the best guess after a power cut
+	sync
+	[ -f "$MINUI/time-zone.txt" ] && touch "$CLOCK_SET" # the clock shows from now until the A30 is off
 	echo "synced: $(date +'%F %T %Z')" >> "$LOG"
 	;;
 down)
 	killall -9 wpa_supplicant udhcpc ntpd 2>/dev/null
+	ip addr flush dev wlan0 2>/dev/null
 	ifconfig wlan0 down 2>/dev/null
 	;;
 status)
 	ip_address
+	;;
+ssid)
+	[ -n "$(ip_address)" ] || exit 0
+	ID=$(network_id)
+	case "$ID" in ''|*[!0-9]*) exit 0 ;; esac
+	sed -n "$((ID + 1))p" "$SSIDS" 2>/dev/null
 	;;
 esac

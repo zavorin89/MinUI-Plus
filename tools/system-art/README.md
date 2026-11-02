@@ -37,3 +37,12 @@ tools/system-art/install.sh
 
 It scales each image in `generated/` to 640x480, keeps the right-hand 271x480 strip (exactly how the existing
 art on the card was trimmed) and copies it to `Roms/.res/` on the card.
+
+## Compositing supplied cutouts
+
+`compose-system-art.py` makes both the editable 1024x768 source and the exact 271x480 A30 strip from a transparent
+hardware cutout. It uses the same crop as `install.sh`; specify maximum subject width and height to keep differently
+shaped consoles and cabinets at a consistent visual size.
+
+The CPS1, CPS2, CPS3, Final Burn Neo, MAME 2003+, Neo Geo, Sega CD and Sega 32X sources were composed with this
+tool. CPS1 and MAME first needed background extraction; the remaining supplied images already had transparency.

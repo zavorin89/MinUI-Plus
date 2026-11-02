@@ -1,0 +1,117 @@
+diff --git a/gles2rice/src/OGLGraphicsContext.cpp b/gles2rice/src/OGLGraphicsContext.cpp
+index 5ba9ba2..ade5fdc 100644
+--- a/gles2rice/src/OGLGraphicsContext.cpp
++++ b/gles2rice/src/OGLGraphicsContext.cpp
+@@ -182,6 +182,8 @@ void COGLGraphicsContext::Clear(ClearFlag dwFlags, uint32_t color, float depth)
+     glClear(flag);  //Clear color buffer and depth buffer
+ }
+ 
++extern "C" bool rice_frameFinished(void);
++
+ void COGLGraphicsContext::UpdateFrame(bool swapOnly)
+ {
+     status.gFrameCount++;
+@@ -193,7 +195,8 @@ void COGLGraphicsContext::UpdateFrame(bool swapOnly)
+     if (renderCallback)
+         (*renderCallback)(status.bScreenIsDrawn);
+ 
+-   retro_return(true);
++   if (rice_frameFinished()) /* (or it wasn't drawn: the last one stays up) */
++      retro_return(true);
+    
+     glDepthMask(GL_TRUE);
+     glClearDepth(1.0f);
+diff --git a/gles2rice/src/RSP_Parser.cpp b/gles2rice/src/RSP_Parser.cpp
+index b998864..f2e8ead 100644
+--- a/gles2rice/src/RSP_Parser.cpp
++++ b/gles2rice/src/RSP_Parser.cpp
+@@ -721,6 +721,17 @@ void DLParser_Process(OSTask * pTask)
+ 
+     status.bScreenIsDrawn = true;
+ 
++    extern bool rice_skipping;
++    extern bool rice_skip_passed;
++    if (rice_skipping)
++    {
++        rice_skip_passed = true;
++        status.gDlistCount++;
++        TriggerDPInterrupt();
++        TriggerSPInterrupt();
++        return;
++    }
++
+     if( currentRomOptions.N64RenderToTextureEmuType != TXT_BUF_NONE && defaultRomOptions.bSaveVRAM )
+         g_pFrameBufferManager->CheckRenderTextureCRCInRDRAM();
+ 
+diff --git a/gles2rice/src/Video.cpp b/gles2rice/src/Video.cpp
+index 43b6c75..1b7e9da 100644
+--- a/gles2rice/src/Video.cpp
++++ b/gles2rice/src/Video.cpp
+@@ -417,10 +417,39 @@ int riceRomOpen(void)
+     return 1;
+ }
+ 
++/* MinUI+: a frame the frontend's behind on isn't drawn at all, rather than drawn and
++ * hidden: once it asks (frame_hidden), the game's next frame is passed over, from its
++ * display lists to its swap, and the frame before it stays up. Never two in a row, and
++ * only while MINARCH_N64_SKIP_DRAWING is set. */
++extern "C" int frame_hidden;
++extern "C" int rice_skip_enabled;
++int rice_skip_enabled = 0;
++bool rice_skipping = false;
++bool rice_skip_passed = false; /* a display list was passed over */
++static bool rice_skip_asked = false;
++static int rice_skip_vis = 0;
++
++bool rice_frameFinished(void)
++{
++    if (rice_skipping && !rice_skip_passed)
++        return false; /* a swap with nothing behind it: the frame to pass over is still to come */
++    bool drawn = !rice_skipping;
++    rice_skipping = rice_skip_enabled && rice_skip_asked && drawn;
++    rice_skip_passed = false;
++    rice_skip_asked = false;
++    rice_skip_vis = 0;
++    return drawn;
++}
++
+ void riceUpdateScreen(void)
+ {
+     status.bVIOriginIsUpdated = false;
+ 
++    if (frame_hidden)
++        rice_skip_asked = true;
++    if (rice_skipping && ++rice_skip_vis > 4) /* (a swap that only comes from a display list) */
++        rice_skipping = false;
++
+     if (status.ToResize && status.gDlistCount > 0)
+     {
+        // Delete all OpenGL textures
+@@ -562,6 +591,13 @@ void riceProcessRDPList(void)
+ 
+ void riceProcessDList(void)
+ {
++    static bool rice_skip_checked = false;
++    if (!rice_skip_checked)
++    {
++        rice_skip_checked = true;
++        rice_skip_enabled = getenv("MINARCH_N64_SKIP_DRAWING") != NULL;
++    }
++
+     if( status.toShowCFB )
+     {
+         CRender::GetRender()->DrawFrameBuffer(true, 0, 0, 0, 0);
+diff --git a/libretro/libretro.c b/libretro/libretro.c
+index 3edef81..dbd6a84 100644
+--- a/libretro/libretro.c
++++ b/libretro/libretro.c
+@@ -1100,7 +1100,8 @@ void emu_step_render(void)
+     * while the frontend's video path is torn down for run-ahead is what
+     * crashed single-instance run-ahead.  Skipping the duplicate too keeps
+     * us from feeding the frontend a stale buffer on the hidden frame. */
+-   if (frame_hidden)
++   extern int rice_skip_enabled;
++   if (frame_hidden && !rice_skip_enabled) /* (or a drawn frame costs nothing more to show: Rice skips the next one's drawing) */
+    {
+       frame_latched = false;
+       return;

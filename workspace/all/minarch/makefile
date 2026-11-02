@@ -21,7 +21,7 @@ SDL?=SDL
 
 TARGET = minarch
 INCDIR = -I. -I./libretro-common/include/ -I../common/ -I../../$(PLATFORM)/platform/
-SOURCE = $(TARGET).c ra.c ra_http.c ra_cache.c ra_chd.c libchdr/unity.c ../common/bgm.c ../common/scaler.c ../common/utils.c ../common/api.c ../../$(PLATFORM)/platform/platform.c
+SOURCE = $(TARGET).c hwrender.c ra.c ra_http.c ra_cache.c ra_chd.c libchdr/unity.c ../common/bgm.c ../common/scaler.c ../common/utils.c ../common/api.c ../../$(PLATFORM)/platform/platform.c
 
 # RetroAchievements (rcheevos, vendored in rcheevos/), minus the Windows-only RAIntegration bridge
 RC = rcheevos/src

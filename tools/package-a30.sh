@@ -57,6 +57,8 @@ OUT=workspace/my282/cores/output
 mkdir -p $OUT
 cp "$STOCK"/.system/my282/cores/*.so $OUT/
 cp "$STOCK"/Emus/my282/*.pak/*.so $OUT/
+# gpSP is the stock revision with MinUI+'s GB Player rumble fix, from tools/dev/build-gpsp.sh
+cp "$REPO/tools/dev/out/gpsp/gpsp_libretro.so" $OUT/ || { echo "build gpSP first: tools/dev/build-gpsp.sh" >&2; exit 1; }
 if [ -n "$SNES_CORES" ]; then cp "$SNES_CORES"/snes9x2010_libretro.so "$SNES_CORES"/snes9x_libretro.so $OUT/; fi
 for core in fceumm gambatte gpsp picodrive snes9x2005_plus pcsx_rearmed fake08 mgba mednafen_pce_fast pokemini race \
 	mednafen_supafaust mednafen_vb snes9x2010 snes9x; do

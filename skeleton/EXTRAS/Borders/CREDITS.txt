@@ -10,6 +10,10 @@ Thank you, drkhrse!
 
 VB.png (Virtual Boy) was made for MinUI+ in the same style.
 
+The arcade borders (CPS1, CPS2, CPS3, FBN, MAME) were made for MinUI+ in the same style, in MinUI's font
+(tools/borders/make-arcade-borders.py). Arcade games fill the screen, so they only show beside vertical games
+played Upright: the bands move in to meet the game, whatever its shape.
+
 The <TAG>-native.png borders (GB, GBC, GBA, MGBA, GG, NGP, NGPC) are used at native scaling, where the game is
 smaller than the normal borders expect: each handheld's face in its shell color, made for MinUI+
 (tools/borders/make-native-borders.py) around drkhrse's logos and power lights. Any system can have one:

@@ -142,7 +142,7 @@ int KB_enterText(SDL_Surface* screen, const char* title, char* text, int max_len
 			// title and the typed text (shown, even passwords: it's your own handheld)
 			char shown[128];
 			GFX_truncateText(font.large, (char*)title, shown, screen->w - SCALE1(PADDING*2 + PILL_SIZE*3), 0);
-			blitText(screen, font.large, shown, COLOR_WHITE, SCALE1(PADDING), SCALE1(PADDING+4));
+			blitText(screen, font.large, shown, COLOR_DARK_TEXT, SCALE1(PADDING + BUTTON_PADDING), SCALE1(PADDING+4)); // grey, as every header
 
 			int field_y = SCALE1(PADDING + PILL_SIZE + 4);
 			GFX_blitPill(ASSET_DARK_GRAY_PILL, screen, &(SDL_Rect){ SCALE1(PADDING), field_y, screen->w - SCALE1(PADDING*2), SCALE1(PILL_SIZE) });

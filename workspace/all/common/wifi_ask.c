@@ -35,24 +35,28 @@ static int ask(SDL_Surface* screen, char* message, char** pairs) {
 	}
 }
 
-static void savedNetwork(char* ssid, int size) {
+// the saved networks' name (any in range is joined), or "a saved network" when there are several; 0 when none
+static int savedNetwork(char* ssid, int size) {
 	ssid[0] = '\0';
+	int count = 0;
 	FILE* file = fopen(WIFI_CREDS_PATH, "r");
-	if (!file) return;
+	if (!file) return 0;
 	char line[256];
 	while (fgets(line, sizeof(line), file)) {
 		normalizeNewline(line);
 		trimTrailingNewlines(line);
-		if (prefixMatch("ssid=", line)) snprintf(ssid, size, "%s", line+5);
+		if (!prefixMatch("ssid=", line) || !line[5]) continue;
+		if (++count==1) snprintf(ssid, size, "%s", line+5);
 	}
 	fclose(file);
+	if (count>1) snprintf(ssid, size, "a saved network");
+	return count;
 }
 
 int WIFI_offer(SDL_Surface* screen, char* why) {
 	char ssid[128];
-	savedNetwork(ssid, sizeof(ssid));
 	char message[512];
-	if (!ssid[0]) {
+	if (!savedNetwork(ssid, sizeof(ssid))) {
 		snprintf(message, sizeof(message), "%s\nNo Wi-Fi network is saved yet:\njoin one in Settings > Wi-Fi first", why);
 		ask(screen, message, (char*[]){ "A","OKAY", NULL });
 		return 0;

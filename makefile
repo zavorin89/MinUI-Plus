@@ -79,6 +79,13 @@ ifeq ($(PLATFORM),my282)
 	# MinUI+'s other SNES cores, picked a game at a time (built in workspace/my282/cores)
 	cp ./workspace/$(PLATFORM)/cores/output/snes9x2010_libretro.so ./build/SYSTEM/$(PLATFORM)/paks/Emus/SFC10.pak/
 	cp ./workspace/$(PLATFORM)/cores/output/snes9x_libretro.so ./build/SYSTEM/$(PLATFORM)/paks/Emus/SNESX.pak/
+	# the arcade systems' (CPS3 runs FBN.pak's FBNeo rather than a second 59MB copy)
+	cp ./workspace/$(PLATFORM)/cores/output/fbalpha2012_cps1_libretro.so ./build/EXTRAS/Emus/$(PLATFORM)/CPS1.pak/
+	cp ./workspace/$(PLATFORM)/cores/output/fbalpha2012_cps2_libretro.so ./build/EXTRAS/Emus/$(PLATFORM)/CPS2.pak/
+	cp ./workspace/$(PLATFORM)/cores/output/fbalpha2012_neogeo_libretro.so ./build/EXTRAS/Emus/$(PLATFORM)/NEOGEO.pak/
+	cp ./workspace/$(PLATFORM)/cores/output/fbneo_libretro.so ./build/EXTRAS/Emus/$(PLATFORM)/FBN.pak/
+	cp ./workspace/$(PLATFORM)/cores/output/mame2003_plus_libretro.so ./build/EXTRAS/Emus/$(PLATFORM)/MAME.pak/
+	cp ./workspace/$(PLATFORM)/cores/output/parallel_n64_libretro.so ./build/EXTRAS/Emus/$(PLATFORM)/N64.pak/
 endif
 	
 	# extras
@@ -186,7 +193,7 @@ package: tidy
 	# MinUI+ is one package for the A30: the extras (more systems, the tools, the borders) go in with the base, and only
 	# the A30's boot folder (miyoo) of the ones for MinUI's other devices
 	cd ./build/EXTRAS && cp -R Bios Emus Roms Saves Tools Borders ../BASE/
-	cd ./build/BASE && zip -r ../../releases/$(RELEASE_NAME).zip .res Bios Roms Saves BGM Emus Tools Borders miyoo MinUI.zip README.txt
+	cd ./build/BASE && zip -r ../../releases/$(RELEASE_NAME).zip .res Bios Roms Saves BGM Emus Tools Borders miyoo MinUI.zip README.txt CHANGES.txt
 	echo "$(RELEASE_NAME)" > ./build/latest.txt
 	
 ###########################################################

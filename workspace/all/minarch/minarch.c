@@ -14,6 +14,7 @@
 #include <pthread.h>
 
 #include "libretro.h"
+#include "hwrender.h"
 #include "defines.h"
 #include "api.h"
 #include "utils.h"
@@ -50,6 +51,17 @@ enum {
 static int screen_scaling = SCALE_ASPECT;
 static int screen_sharpness = SHARPNESS_SOFT;
 static int screen_effect = EFFECT_NONE;
+// vertical (arcade) games: the core asks for its picture to be turned (RETRO_ENVIRONMENT_SET_ROTATION, quarter turns
+// counter-clockwise). Upright turns it here, a tall picture in the middle; Sideways leaves it filling the screen, for
+// holding the A30 on its side, with the d-pad turned to match
+static int core_rotation = 0;
+enum { VERTICAL_UPRIGHT, VERTICAL_SIDEWAYS };
+static int vertical_games = VERTICAL_UPRIGHT;
+static char* vertical_labels[] = { "Upright", "Sideways", NULL };
+// One rumble strength for every core that can rumble, scaled here so a number means the same on every system. Gambatte
+// and PokeMini's own strength options are held at full (and hidden) so they don't scale it twice.
+static int rumble_level = 7; // of 10
+static char* rumble_level_labels[] = { "Off", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", NULL };
 static int screen_border = 0;
 static int prevent_tearing = 1; // lenient
 static int show_debug = 0;
@@ -714,6 +726,8 @@ enum {
 	FE_OPT_THREAD,
 	FE_OPT_DEBUG,
 	FE_OPT_MAXFF,
+	FE_OPT_RUMBLE, // listed only for the cores that can rumble
+	FE_OPT_VERTICAL, // listed only for a game whose core asks for rotation
 	FE_OPT_COUNT,
 };
 
@@ -947,7 +961,7 @@ static struct Config {
 			[FE_OPT_OVERCLOCK] = {
 				.key	= "minarch_cpu_speed",
 				.name	= "CPU Speed",
-				.desc	= "Auto uses the lowest speed that keeps the game\nat full speed, which saves battery.\nOr pick one: Powersave, Normal or Performance.",
+				.desc	= "Auto uses the lowest speed that keeps the game\nat full speed (up to Normal), which saves battery.\nPerformance is faster, but can freeze some games.",
 				.default_value = OVERCLOCK_AUTO,
 				.value = OVERCLOCK_AUTO,
 				.count = 4,
@@ -983,6 +997,26 @@ static struct Config {
 				.count = 8,
 				.values = max_ff_labels,
 				.labels = max_ff_labels,
+			},
+			[FE_OPT_RUMBLE] = {
+				.key	= "minarch_rumble_strength",
+				.name	= "Rumble Strength",
+				.desc	= "How strongly games that\nsupport rumble vibrate.",
+				.default_value = 7,
+				.value = 7,
+				.count = 11,
+				.values = rumble_level_labels,
+				.labels = rumble_level_labels,
+			},
+			[FE_OPT_VERTICAL] = {
+				.key	= "minarch_vertical_games",
+				.name	= "Vertical Games",
+				.desc	= "Upright shows a vertical game the right\nway up, in the middle of the screen.\nSideways fills the screen: turn the A30.",
+				.default_value = VERTICAL_UPRIGHT,
+				.value = VERTICAL_UPRIGHT,
+				.count = 2,
+				.values = vertical_labels,
+				.labels = vertical_labels,
 			},
 			[FE_OPT_COUNT] = {NULL}
 		}
@@ -1038,6 +1072,40 @@ static const int auto_mhz[] = { 480, 648, 816, 1008, 1200, 1344, 1512 };
 #define AUTO_CALM_MAX 40 // (when lower notches keep failing: about 40 seconds between tries)
 #define AUTO_HOLD_WINDOWS 30 // a notch that's held this long (about 30 seconds) is settled
 static int auto_level = AUTO_START;
+// a GPU core (N64): when the sound's running low, the next frame isn't drawn, which lets the machine catch up. A frame
+// missed is much less noticeable than the sound breaking up
+#define HW_SOUND_FRAMES 8 // the ring: it has to ride out slow frames, at 133ms of latency when it's full
+#define HW_SOUND_LOW 5 // below this many frames of sound, it skips
+#define HW_SKIP_MOST 2 // in a row
+static int hw_skip = 0;
+static int hw_skip_row = 0;
+static int hw_skipped = 0;
+static int hw_frames = 0;
+static uint64_t hw_run_us = 0;
+static uint64_t hw_flip_us = 0;
+static uint64_t hw_waited = 0;
+static int hw_direct = 0; // frames that went straight to the screen
+static int hw_need_pixels = 0;
+static unsigned hw_frame_w = 0;
+static unsigned hw_frame_h = 0;
+static void HW_beforeFrame(void) {
+	if (!HW_active()) return;
+	hw_skip = !fast_forward && hw_skip_row<HW_SKIP_MOST && SND_queuedFrames()<HW_SOUND_LOW;
+	hw_skip_row = hw_skip ? hw_skip_row + 1 : 0;
+	hw_skipped += hw_skip;
+}
+static void HW_afterFrame(uint64_t frame_us) {
+	if (!HW_active()) return;
+	hw_run_us += frame_us;
+	if (++hw_frames<600) return; // every 10 seconds or so, how it's going
+	uint64_t waited = SND_waitedUs();
+	LOG_info("hw: %i frames, each %ius: idle %ius, read back %ius, on screen %ius; %i drawn straight, %i skipped, sound ran dry %i times, %i frames of it queued\n", hw_frames, (int)(hw_run_us/hw_frames), (int)((waited-hw_waited)/hw_frames), (int)(HW_takeReadUs()/hw_frames), (int)(hw_flip_us/hw_frames), hw_direct, hw_skipped, SND_takeUnderruns(), SND_queuedFrames());
+	hw_waited = waited;
+	hw_direct = 0;
+	hw_frames = hw_skipped = 0;
+	hw_run_us = hw_flip_us = 0;
+}
+
 static int auto_settle = 120; // the first two seconds of a game (loading, achievements signing in) say nothing
 static int auto_frames = 0;
 static int auto_calm = 0;
@@ -1048,7 +1116,14 @@ static int auto_floor = 0; // a notch where a frame ran late isn't gone back to 
 static uint64_t auto_sum = 0;
 static uint64_t auto_peak = 0;
 static uint64_t auto_flip_us = 0; // in GFX_flip this frame (mostly waiting for the screen)
+// the A30 changes speed by writing the CPU clock straight to the PLL, at the voltage it booted with: 1512MHz is past
+// what that holds for long, and freezes games (seen in mGBA and Snes9x). Auto stops at Normal's 1344 there, and only
+// picking Performance goes higher
+static int Auto_maxLevel(void) {
+	return !strcmp(PLATFORM, "my282") ? AUTO_START : AUTO_LEVELS-1;
+}
 static void Auto_set(int level, char* why) {
+	level = MIN(level, Auto_maxLevel());
 	if (level>auto_level && auto_stable<AUTO_HOLD_WINDOWS && strcmp(why, "fast forward")) auto_calm_needed = MIN(auto_calm_needed * 2, AUTO_CALM_MAX); // that notch didn't hold
 	auto_stable = 0;
 	auto_close = 0;
@@ -1069,8 +1144,10 @@ static void Auto_load(void) {
 	if (!exists(path)) return;
 	int mhz = getInt(path);
 	for (int i=0; i<AUTO_LEVELS; i++) if (auto_mhz[i]==mhz) auto_floor = i;
+	auto_floor = MIN(auto_floor, Auto_maxLevel());
 	if (auto_floor>auto_level) auto_level = auto_floor;
-	LOG_info("cpu: this game needed %iMHz before, starting at %iMHz\n", mhz, auto_mhz[auto_level]);
+	auto_level = MIN(auto_level, Auto_maxLevel());
+	LOG_info("cpu: saved AUTO history %iMHz, limited AUTO start %iMHz (mode %i)\n", mhz, auto_mhz[auto_level], overclock);
 }
 static void Auto_remember(void) {
 	char path[MAX_PATH];
@@ -1089,7 +1166,7 @@ static void Auto_frame(uint64_t frame_us) {
 	auto_flip_us = 0;
 	if (overclock!=OVERCLOCK_AUTO) return;
 	if (fast_forward) { // as fast as it goes, back down after
-		if (auto_level!=AUTO_LEVELS-1) Auto_set(AUTO_LEVELS-1, "fast forward");
+		if (auto_level!=Auto_maxLevel()) Auto_set(Auto_maxLevel(), "fast forward");
 		auto_settle = AUTO_SETTLE;
 		return;
 	}
@@ -1105,7 +1182,7 @@ static void Auto_frame(uint64_t frame_us) {
 	uint64_t work = frame_us>waited ? frame_us - waited : 0;
 	// up now when a frame ran late, or two in a row came close (one alone is often a load or a blip)
 	auto_close = work>budget*85/100 ? auto_close + 1 : 0;
-	if ((work>budget || auto_close>=2) && auto_level<AUTO_LEVELS-1) {
+	if ((work>budget || auto_close>=2) && auto_level<Auto_maxLevel()) {
 		if (work>budget && auto_floor<auto_level+1) { // it stuttered there: not again, this time or next
 			auto_floor = auto_level + 1;
 			Auto_remember();
@@ -1122,7 +1199,7 @@ static void Auto_frame(uint64_t frame_us) {
 	uint64_t scale = auto_level>0 ? 100 * auto_mhz[auto_level] / auto_mhz[auto_level-1] : 100;
 	uint64_t lower_average = average * scale / 100;
 	uint64_t lower_peak = auto_peak * scale / 100;
-	if (average>budget*60/100 && auto_level<AUTO_LEVELS-1) Auto_set(auto_level+1, "busy");
+	if (average>budget*60/100 && auto_level<Auto_maxLevel()) Auto_set(auto_level+1, "busy");
 	else if (auto_level>auto_floor && lower_average<budget*50/100 && lower_peak<budget*70/100) { // still comfortably under the step up
 		if (++auto_calm>=auto_calm_needed) Auto_set(auto_level-1, "room to spare");
 		else auto_frames = 0, auto_sum = auto_peak = 0;
@@ -1141,6 +1218,7 @@ static void setOverclock(int i) {
 		case 1: PWR_setCPUSpeed(CPU_SPEED_NORMAL); break;
 		case 2: PWR_setCPUSpeed(CPU_SPEED_PERFORMANCE); break;
 		case OVERCLOCK_AUTO:
+			auto_level = MIN(auto_level, Auto_maxLevel());
 			PWR_setCPUFreq(auto_mhz[auto_level]); // where it had got to (Normal's at first)
 			Auto_reset();
 			break;
@@ -1193,6 +1271,7 @@ static void Config_syncFrontend(char* key, int value) {
 		i = FE_OPT_TEARING;
 	}
 	else if (exactMatch(key,config.frontend.options[FE_OPT_THREAD].key)) {
+		if (HW_active()) value = 0; // a GPU core draws on its own thread's context: never threaded
 		int old_value = thread_video || was_threaded;
 		toggle_thread = old_value!=value;
 		i = FE_OPT_THREAD;
@@ -1208,6 +1287,15 @@ static void Config_syncFrontend(char* key, int value) {
 	else if (exactMatch(key,config.frontend.options[FE_OPT_MAXFF].key)) {
 		max_ff_speed = value;
 		i = FE_OPT_MAXFF;
+	}
+	else if (exactMatch(key,config.frontend.options[FE_OPT_RUMBLE].key)) {
+		rumble_level = value;
+		i = FE_OPT_RUMBLE;
+	}
+	else if (exactMatch(key,config.frontend.options[FE_OPT_VERTICAL].key)) {
+		vertical_games = value;
+		renderer.dst_p = 0; // laid out again for the new shape
+		i = FE_OPT_VERTICAL;
 	}
 	if (i==-1) return;
 	Option* option = &config.frontend.options[i];
@@ -1399,6 +1487,8 @@ static void Config_load(void) {
 	if (!GFX_supportsBorder()) {
 		config.frontend.options[FE_OPT_BORDER].lock = 1; // hidden
 	}
+	if (!core_rotation) config.frontend.options[FE_OPT_VERTICAL].lock = 1; // hidden: only vertical games have it
+	if (!VIB_coreHasRumble((char*)core.name)) config.frontend.options[FE_OPT_RUMBLE].lock = 1; // hidden
 	
 	char* system_path = SYSTEM_PATH "/system.cfg";
 	
@@ -1783,6 +1873,9 @@ static Option* OptionList_getOption(OptionList* list, const char* key) {
 	}
 	return NULL;
 }
+static int isCoreRumbleLevel(const char* key) {
+	return exactMatch((char*)key, "gambatte_rumble_level") || exactMatch((char*)key, "pokemini_rumble_lv");
+}
 static char* OptionList_getOptionValue(OptionList* list, const char* key) {
 	Option* item = OptionList_getOption(list, key);
 	// if (item) LOG_info("\tGET %s (%s) = %s (%s)\n", item->name, item->key, item->labels[item->value], item->values[item->value]);
@@ -1849,6 +1942,7 @@ static uint32_t buttons = 0; // RETRO_DEVICE_ID_JOYPAD_* buttons
 static int ignore_menu = 0;
 static void Switcher_saveAndQuit(void);
 static void input_poll_callback(void) {
+	if (quit) return; // (a core may run a little more as it's unloaded, with the settings and sound already gone)
 	PAD_poll();
 
 	int show_setting = 0;
@@ -1988,6 +2082,18 @@ static void input_poll_callback(void) {
 		//  && !PWR_ignoreSettingInput(btn, show_setting)
 	}
 	
+	// held on its side for a vertical game: up on the screen is another way on the d-pad (for core_rotation 1 the
+	// screen's right edge is up, so the d-pad's right is up; 3 is the other way round)
+	if (vertical_games==VERTICAL_SIDEWAYS && (core_rotation & 1)) {
+		#define DPAD(id) ((buttons >> RETRO_DEVICE_ID_JOYPAD_##id) & 1)
+		int up = DPAD(UP), down = DPAD(DOWN), left = DPAD(LEFT), right = DPAD(RIGHT);
+		buttons &= ~((1 << RETRO_DEVICE_ID_JOYPAD_UP) | (1 << RETRO_DEVICE_ID_JOYPAD_DOWN) | (1 << RETRO_DEVICE_ID_JOYPAD_LEFT) | (1 << RETRO_DEVICE_ID_JOYPAD_RIGHT));
+		int n_up, n_right, n_down, n_left;
+		if (core_rotation==1) { n_up = right; n_right = down; n_down = left; n_left = up; }
+		else { n_up = left; n_right = up; n_down = right; n_left = down; }
+		buttons |= (n_up << RETRO_DEVICE_ID_JOYPAD_UP) | (n_down << RETRO_DEVICE_ID_JOYPAD_DOWN) | (n_left << RETRO_DEVICE_ID_JOYPAD_LEFT) | (n_right << RETRO_DEVICE_ID_JOYPAD_RIGHT);
+		#undef DPAD
+	}
 	// if (buttons) LOG_info("buttons: %i\n", buttons);
 }
 static int16_t input_state_callback(unsigned port, unsigned device, unsigned index, unsigned id) {
@@ -2083,6 +2189,9 @@ static bool set_rumble_state(unsigned port, enum retro_rumble_effect effect, uin
 		unsigned level = MAX(strong, weak);
 		if (level>mixed) mixed = level;
 	}
+	// gpSP sends strong at half of weak, so what comes out above is half of what it asked for
+	if (exactMatch((char*)core.name, "gpsp")) mixed = MIN(mixed * 2, 65535);
+	mixed = mixed * rumble_level / 10;
 	VIB_setStrength(mixed);
 	return true;
 }
@@ -2104,10 +2213,13 @@ static bool environment_callback(unsigned cmd, void *data) { // copied from pico
 	// LOG_info("environment_callback: %i\n", cmd);
 	
 	switch(cmd) {
-	// case RETRO_ENVIRONMENT_SET_ROTATION: { /* 1 */
-	// 	LOG_info("RETRO_ENVIRONMENT_SET_ROTATION %i\n", *(int *)data); // core requests frontend to handle rotation
-	// 	break;
-	// }
+	case RETRO_ENVIRONMENT_SET_ROTATION: { /* 1 */
+		core_rotation = data ? (*(const unsigned *)data & 3) : 0;
+		LOG_info("RETRO_ENVIRONMENT_SET_ROTATION %i\n", core_rotation); // turned here (see rotateFrame)
+		config.frontend.options[FE_OPT_VERTICAL].lock = !(core_rotation & 1);
+		renderer.dst_p = 0;
+		break;
+	}
 	case RETRO_ENVIRONMENT_GET_OVERSCAN: { /* 2 */
 		bool *out = (bool *)data;
 		if (out)
@@ -2136,10 +2248,19 @@ static bool environment_callback(unsigned cmd, void *data) { // copied from pico
 		}
 		break;
 	}
+	case RETRO_ENVIRONMENT_SET_HW_RENDER: { /* 14 */
+		return getenv("MINARCH_GLES") && data && HW_set((struct retro_hw_render_callback*)data);
+	}
+	case RETRO_ENVIRONMENT_GET_PREFERRED_HW_RENDER: { /* 56 */
+		if (!getenv("MINARCH_GLES") || !data) return false;
+		*(unsigned*)data = RETRO_HW_CONTEXT_OPENGLES2;
+		return true;
+	}
 	case RETRO_ENVIRONMENT_SET_PIXEL_FORMAT: { /* 10 */
 		const enum retro_pixel_format *format = (enum retro_pixel_format *)data;
 
-		if (*format != RETRO_PIXEL_FORMAT_RGB565) { // TODO: pull from platform.h?
+		// (a GPU core's frames come back as RGB565 whatever it draws in, see hwrender.c)
+		if (*format != RETRO_PIXEL_FORMAT_RGB565 && !(*format==RETRO_PIXEL_FORMAT_XRGB8888 && getenv("MINARCH_GLES"))) { // TODO: pull from platform.h?
 			/* 565 is only supported format */
 			return false;
 			// downsample = 1; // TODO: not ready for primetime yet
@@ -2168,6 +2289,7 @@ static bool environment_callback(unsigned cmd, void *data) { // copied from pico
 		struct retro_variable *var = (struct retro_variable *)data;
 		if (var && var->key) {
 			var->value = OptionList_getOptionValue(&config.core, var->key);
+			if (isCoreRumbleLevel(var->key)) var->value = "10";
 			// printf("\t%s = %s\n", var->key, var->value);
 		}
 		// fflush(stdout);
@@ -2257,13 +2379,21 @@ static bool environment_callback(unsigned cmd, void *data) { // copied from pico
 		break;
 	}
 	
+	case RETRO_ENVIRONMENT_SET_SYSTEM_AV_INFO: { /* 32 */
+		// an N64 game sets its own sample rate, once it's running: heard at the wrong one the sound runs fast and dry
+		if (!HW_active() || !data) return false;
+		const struct retro_system_av_info* info = (const struct retro_system_av_info*)data;
+		core.sample_rate = info->timing.sample_rate;
+		SND_setRate(core.sample_rate);
+		return true;
+	}
 	case RETRO_ENVIRONMENT_GET_AUDIO_VIDEO_ENABLE: {
 		// fixes fbneo save state graphics corruption
 		// puts("RETRO_ENVIRONMENT_GET_AUDIO_VIDEO_ENABLE");
 		int *out_p = (int *)data;
 		if (out_p) {
 			int out = 0;
-			out |= RETRO_AV_ENABLE_VIDEO;
+			if (!hw_skip) out |= RETRO_AV_ENABLE_VIDEO;
 			out |= RETRO_AV_ENABLE_AUDIO;
 			*out_p = out;
 		}
@@ -3093,13 +3223,80 @@ static void video_refresh_callback_main(const void *data, unsigned width, unsign
 	if (!thread_video) {
 		uint64_t flip_from = getMicroseconds();
 		GFX_flip(screen);
-		auto_flip_us += getMicroseconds() - flip_from;
+		uint64_t flip_us = getMicroseconds() - flip_from;
+		auto_flip_us += flip_us;
+		hw_flip_us += flip_us;
 	}
 	last_flip_time = SDL_GetTicks();
 }
+// the frame turned core_rotation quarter turns counter-clockwise (RGB565), so a vertical game stands upright
+static const void* rotateFrame(const void* data, unsigned* width, unsigned* height, size_t* pitch) {
+	static uint16_t* turned = NULL;
+	static size_t turned_size = 0;
+	unsigned w = *width, h = *height;
+	size_t size = (size_t)w * h * sizeof(uint16_t);
+	if (size>turned_size) {
+		free(turned);
+		turned = malloc(size);
+		turned_size = turned ? size : 0;
+		if (!turned) return data;
+	}
+	const uint8_t* src = data;
+	int odd = core_rotation & 1;
+	unsigned tw = odd ? h : w; // the turned frame's width
+	// one loop per turn, so nothing but the copy runs per pixel (every frame of a vertical game comes through here)
+	for (unsigned y=0; y<h; y++) {
+		const uint16_t* row = (const uint16_t*)(src + y * *pitch);
+		if (core_rotation==1) { // 90 counter-clockwise: column y, from the bottom up
+			uint16_t* out = turned + (w - 1) * tw + y;
+			for (unsigned x=0; x<w; x++, out -= tw) *out = row[x];
+		}
+		else if (core_rotation==2) { // 180: row h-1-y, backwards
+			uint16_t* out = turned + (h - 1 - y) * tw + (w - 1);
+			for (unsigned x=0; x<w; x++) *out-- = row[x];
+		}
+		else { // 270 counter-clockwise (90 clockwise): column h-1-y, from the top down
+			uint16_t* out = turned + (h - 1 - y);
+			for (unsigned x=0; x<w; x++, out += tw) *out = row[x];
+		}
+	}
+	if (odd) { *width = h; *height = w; }
+	*pitch = tw * sizeof(uint16_t);
+	return turned;
+}
 static void video_refresh_callback(const void *data, unsigned width, unsigned height, size_t pitch) {
-	if (!data) return;
+	if (!data || quit) return;
+	if (data==RETRO_HW_FRAME_BUFFER_VALID) { // drawn on the GPU
+		hw_frame_w = width;
+		hw_frame_h = height;
+		// straight to the screen when nothing else needs it: the CPU goes on with the next frame as the GPU finishes this one
+		if (!hw_need_pixels && !fast_forward && !show_debug && !core_rotation && renderer.dst_p && width==renderer.true_w && height==renderer.true_h) {
+			uint64_t present_from = getMicroseconds();
+			if (HW_present(width, height, renderer.aspect)) {
+				uint64_t present_us = getMicroseconds() - present_from;
+				auto_flip_us += present_us;
+				hw_flip_us += present_us;
+				hw_direct += 1;
+				fps_ticks += 1;
+				return;
+			}
+		}
+		// or read back, then on like any frame
+		data = HW_readFrame(width, height, &pitch);
+		if (!data) return;
+	}
 	
+	if (core_rotation && !(vertical_games==VERTICAL_SIDEWAYS && (core_rotation & 1))) data = rotateFrame(data, &width, &height, &pitch);
+	// the cores give the shape it should end up (eg. 3:4 for a vertical game): when the frame shown disagrees (a
+	// sideways one fills the screen wide), the aspect ratio turns with it
+	if (core_rotation & 1) {
+		int tall = height > width * 21 / 20;
+		if ((tall && core.aspect_ratio>1) || (!tall && width > height * 21 / 20 && core.aspect_ratio<1)) {
+			core.aspect_ratio = 1 / core.aspect_ratio;
+			renderer.dst_p = 0;
+		}
+	}
+
 	if (thread_video) {
 		pthread_mutex_lock(&core_mx);
 		
@@ -3120,15 +3317,24 @@ static void video_refresh_callback(const void *data, unsigned width, unsigned he
 		pthread_mutex_unlock(&core_mx);
 	}
 	else video_refresh_callback_main(data,width,height,pitch);
+	HW_makeCurrent(); // the core's context back (drawing the frame made SDL's renderer's current)
+}
+// frames going straight to the screen leave nothing in memory: the menu, a save's picture, a held screen want the last one
+static void HW_syncFrame(void) {
+	if (!HW_active() || !hw_frame_w) return;
+	HW_makeCurrent();
+	hw_need_pixels = 1;
+	video_refresh_callback(RETRO_HW_FRAME_BUFFER_VALID, hw_frame_w, hw_frame_h, 0);
+	hw_need_pixels = 0;
 }
 ///////////////////////////////
 
 // NOTE: sound must be disabled for fast forward to work...
 static void audio_sample_callback(int16_t left, int16_t right) {
-	if (!fast_forward) SND_batchSamples(&(const SND_Frame){left,right}, 1);
+	if (!fast_forward && !quit) SND_batchSamples(&(const SND_Frame){left,right}, 1);
 }
 static size_t audio_sample_batch_callback(const int16_t *data, size_t frames) { 
-	if (!fast_forward) return SND_batchSamples((const SND_Frame*)data, frames);
+	if (!fast_forward && !quit) return SND_batchSamples((const SND_Frame*)data, frames);
 	else return frames;
 	// return frames;
 };
@@ -3235,6 +3441,13 @@ void Core_load(void) {
 	core.aspect_ratio = a;
 	
 	LOG_info("aspect_ratio: %f (%ix%i) fps: %f\n", a, av_info.geometry.base_width,av_info.geometry.base_height, core.fps);
+
+	if (HW_active()) { // a GPU core: its context and framebuffer, now the game's loaded (as libretro has it)
+		if (HW_init(av_info.geometry.max_width, av_info.geometry.max_height)) {
+			thread_video = 0;
+			config.frontend.options[FE_OPT_THREAD].lock = 1; // hidden
+		}
+	}
 }
 void Core_reset(void) {
 	core.reset();
@@ -3248,6 +3461,7 @@ void Core_quit(void) {
 		SRAM_write();
 		RTC_write();
 		core.unload_game();
+		HW_quit(); // a GPU core's context goes after its game (its context_destroy) and before the core
 		core.deinit();
 		core.initialized = 0;
 	}
@@ -3442,6 +3656,8 @@ static void Menu_waitForSaves(void) {
 	menu_saves_running = 0;
 }
 void Menu_beforeSleep(void) {
+	LOG_info("RTC sleep: epoch=%lld TZ=%s synced=%i\n", (long long)time(NULL),
+		getenv("TZ") ? getenv("TZ") : "(system)", exists(CLOCK_SET_PATH));
 	Menu_waitForSaves();
 	// LOG_info("beforeSleep\n");
 	Play_save();
@@ -3452,6 +3668,8 @@ void Menu_beforeSleep(void) {
 	PWR_setCPUSpeed(CPU_SPEED_MENU);
 }
 void Menu_afterSleep(void) {
+	LOG_info("RTC wake: epoch=%lld TZ=%s synced=%i\n", (long long)time(NULL),
+		getenv("TZ") ? getenv("TZ") : "(system)", exists(CLOCK_SET_PATH));
 	// LOG_info("beforeSleep\n");
 	unlink(AUTO_RESUME_PATH);
 	setOverclock(overclock);
@@ -3486,6 +3704,7 @@ enum {
 typedef struct MenuList {
 	int type;
 	int max_width; // cached on first draw
+	char* title; // its header, beside the battery (a submenu without one takes the name it was opened from)
 	char* desc;
 	MenuItem* items;
 	MenuList_callback_t on_confirm;
@@ -3572,6 +3791,7 @@ static int OptionFrontend_optionChanged(MenuList* list, int i) {
 }
 static MenuList OptionFrontend_menu = {
 	.type = MENU_VAR,
+	.title = "Frontend Options",
 	.on_change = OptionFrontend_optionChanged,
 	.items = NULL,
 };
@@ -3636,6 +3856,7 @@ static int OptionEmulator_optionDetail(MenuList* list, int i) {
 }
 static MenuList OptionEmulator_menu = {
 	.type = MENU_FIXED,
+	.title = "Emulator Options",
 	.on_confirm = OptionEmulator_optionDetail, // TODO: this needs pagination to be truly useful
 	.on_change = OptionEmulator_optionChanged,
 	.items = NULL,
@@ -3646,14 +3867,14 @@ static int OptionEmulator_openMenu(MenuList* list, int i) {
 		if (!config.core.enabled_count) {
 			int enabled_count = 0;
 			for (int i=0; i<config.core.count; i++) {
-				if (!config.core.options[i].lock) enabled_count += 1;
+				if (!config.core.options[i].lock && !isCoreRumbleLevel(config.core.options[i].key)) enabled_count += 1;
 			}
 			config.core.enabled_count = enabled_count;
 			config.core.enabled_options = calloc(enabled_count+1, sizeof(Option*));
 			int j = 0;
 			for (int i=0; i<config.core.count; i++) {
 				Option* item = &config.core.options[i];
-				if (item->lock) continue;
+				if (item->lock || isCoreRumbleLevel(item->key)) continue;
 				config.core.enabled_options[j] = item;
 				j += 1;
 			}
@@ -3746,6 +3967,7 @@ static int OptionControls_optionChanged(MenuList* list, int i) {
 }
 static MenuList OptionControls_menu = {
 	.type = MENU_INPUT,
+	.title = "Controls",
 	.desc = "Press A to set and X to clear."
 		"\nSupports single button and MENU+button." // TODO: not supported on nano because POWER doubles as MENU
 	,
@@ -3846,6 +4068,7 @@ static int OptionShortcuts_unbind(MenuList* list, int i) {
 }
 static MenuList OptionShortcuts_menu = {
 	.type = MENU_INPUT,
+	.title = "Shortcuts",
 	.desc = "Press A to set and X to clear." 
 		"\nSupports single button and MENU+button." // TODO: not supported on nano because POWER doubles as MENU
 	,
@@ -3916,6 +4139,7 @@ static int OptionSaveChanges_onConfirm(MenuList* list, int i) {
 }
 static MenuList OptionSaveChanges_menu = {
 	.type = MENU_LIST,
+	.title = "Save Changes",
 	.on_confirm = OptionSaveChanges_onConfirm,
 	.items = (MenuItem[]){
 		{"Save for console"},
@@ -3938,6 +4162,7 @@ static int OptionQuicksave_onConfirm(MenuList* list, int i) {
 
 static MenuList options_menu = {
 	.type = MENU_LIST,
+	.title = "Options",
 	.items = (MenuItem[]) {
 		{"Frontend", "MinUI (" BUILD_DATE " " BUILD_HASH ")",.on_confirm=OptionFrontend_openMenu},
 		{"Emulator",.on_confirm=OptionEmulator_openMenu},
@@ -4068,7 +4293,10 @@ static int Menu_options(MenuList* list) {
 			SFX_play(SFX_CONFIRM);
 			int result = MENU_CALLBACK_NOP;
 			if (item->on_confirm) result = item->on_confirm(list, selected); // item-specific action, eg. Save for all games
-			else if (item->submenu) result = Menu_options(item->submenu); // drill down, eg. main options menu
+			else if (item->submenu) { // drill down, eg. main options menu
+				if (!item->submenu->title) item->submenu->title = item->name;
+				result = Menu_options(item->submenu);
+			}
 			// TODO: is there a way to defer on_confirm for MENU_INPUT so we can clear the currently set value to indicate it is awaiting input? 
 			// eg. set a flag to call on_confirm at the beginning of the next frame?
 			else if (list->on_confirm) {
@@ -4123,7 +4351,7 @@ static int Menu_options(MenuList* list) {
 		
 		if (dirty) {
 			GFX_clear(screen);
-			GFX_blitHardwareGroup(screen, show_settings);
+			GFX_blitHeader(screen, list->title, GFX_blitHardwareGroup(screen, show_settings));
 			
 			char* desc = NULL;
 			SDL_Surface* text;
@@ -4605,6 +4833,7 @@ static void Switcher_save(void) {
 }
 static void Busy_run(void (*work)(void), int in_game);
 static void Switcher_saveAndQuit(void) {
+	HW_syncFrame();
 	pending_shot = GFX_captureScreen();
 	Busy_run(Switcher_save, 1);
 
@@ -4730,6 +4959,7 @@ static void Busy_run(void (*work)(void), int in_game) {
 }
 // saving from a shortcut mid-game: the picture is taken here, the rest is done while the spinner shows
 static void Menu_saveStateNow(void) {
+	HW_syncFrame();
 	if (!menu.bitmap) pending_shot = GFX_captureScreen();
 	Busy_run(Menu_saveState, !menu.bitmap);
 }
@@ -4833,6 +5063,7 @@ static void Menu_blitPill(uint32_t color, SDL_Surface* dst, SDL_Rect* rect) {
 
 #define MENU_MESSAGE_FADE_MS 150
 static void Menu_loop(void) {
+	HW_syncFrame(); // (it opens on the game's picture)
 	char* menu_message = NULL; // a short confirmation over the menu, eg. after pinning to the game switcher
 	uint32_t menu_message_until = 0;
 	int in_switcher = -1; // looked up when first drawn
@@ -5445,6 +5676,7 @@ int main(int argc , char* argv[]) {
 	
 	// Overrides_init();
 	
+	HW_preload(); // a GPU core's GL library, for it to find (MINARCH_GLES=1 only)
 	Core_open(core_path, tag_name);
 	Game_open(rom_path); // nes tries to load gamegenie setting before this returns ffs
 	if (!game.is_open) goto finish;
@@ -5478,6 +5710,8 @@ int main(int argc , char* argv[]) {
 	SND_init(core.sample_rate, core.fps);
 	InitSettings(); // after we initialize audio
 	Menu_init();
+	if (HW_active()) SND_setBufferFrames(HW_SOUND_FRAMES);
+	HW_start(); // before a state's loaded: parallel-n64 only has a machine to load it into after this
 	State_resume();
 	Menu_initState(); // make ready for state shortcuts
 	
@@ -5503,8 +5737,12 @@ int main(int argc , char* argv[]) {
 		
 		if (!thread_video) {
 			uint64_t frame_from = getMicroseconds();
+			HW_makeCurrent(); // (the menu or a message may have drawn since)
+			HW_beforeFrame();
 			core.run();
-			Auto_frame(getMicroseconds() - frame_from);
+			uint64_t frame_us = getMicroseconds() - frame_from;
+			HW_afterFrame(frame_us);
+			Auto_frame(frame_us);
 			limitFF();
 			trackFPS();
 		}
@@ -5527,6 +5765,7 @@ int main(int argc , char* argv[]) {
 		State_updateDeferredResume();
 		if (show_menu) Menu_loop();
 		
+		if (toggle_thread && HW_active()) toggle_thread = 0; // a GPU core stays on this thread
 		if (toggle_thread) {
 			toggle_thread = 0;
 			if (was_threaded && !thread_video) {
