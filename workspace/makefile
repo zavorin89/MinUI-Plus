@@ -16,7 +16,7 @@ endif
 
 # MinUI+ tools, A30 only for now (Wi-Fi and the device's OpenSSL)
 ifeq ($(PLATFORM),my282)
-EXTRA_TOOLS = rasync wifi boxart controls
+EXTRA_TOOLS = rasync wifi boxart controls ndslayer
 endif
 
 all:

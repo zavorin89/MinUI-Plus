@@ -207,6 +207,8 @@ time)
 		fi
 	fi
 	[ -f "$MINUI/time-zone.txt" ] && export TZ="$(cat "$MINUI/time-zone.txt")"
+	BEFORE=$(date +%s)
+	UP_BEFORE=$(cut -d. -f1 /proc/uptime)
 	n=0
 	for SERVER in pool.ntp.org time.google.com time.cloudflare.com pool.ntp.org; do # (busybox ntpd sets it once and quits)
 		ntp_once "$SERVER" && break
@@ -214,10 +216,12 @@ time)
 		sleep 3 # eg. DNS not answering yet, right after connecting
 	done
 	hwclock --utc -w
-	date +'%F %T' > "${DATETIME_PATH:-/mnt/SDCARD/.userdata/shared/datetime.txt}" # the best guess after a power cut
+	TZ=UTC0 date +'%F %T' > "${DATETIME_PATH:-/mnt/SDCARD/.userdata/shared/datetime-utc.txt}" # the best guess after a power cut
+	touch "$MINUI/clock-synced" # it's the real time, from here it's trusted across power offs (launch.sh)
+	rm -f "$MINUI/clock-manual" # (and it's in UTC now, not as it was typed)
 	sync
 	[ -f "$MINUI/time-zone.txt" ] && touch "$CLOCK_SET" # the clock shows from now until the A30 is off
-	echo "synced: $(date +'%F %T %Z')" >> "$LOG"
+	echo "synced: $(date +'%F %T %Z'), it was off by $(( $(date +%s) - BEFORE - ( $(cut -d. -f1 /proc/uptime) - UP_BEFORE ) )) s" >> "$LOG"
 	;;
 down)
 	killall -9 wpa_supplicant udhcpc ntpd 2>/dev/null

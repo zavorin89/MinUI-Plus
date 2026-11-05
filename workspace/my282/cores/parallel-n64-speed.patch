@@ -1,0 +1,1943 @@
+diff --git a/gles2rice/src/Combiner.h b/gles2rice/src/Combiner.h
+index 4327e89..f3d6e66 100644
+--- a/gles2rice/src/Combiner.h
++++ b/gles2rice/src/Combiner.h
+@@ -56,6 +56,7 @@ protected:
+     {
+     }
+ 
++    virtual void InitCombinerSpriteOver(const float *tint) {}
+     virtual void InitCombinerCycleCopy(void)=0;
+     virtual void InitCombinerCycleFill(void)=0;
+     virtual void InitCombinerCycle12(void)=0;
+diff --git a/gles2rice/src/DecodedMux.cpp b/gles2rice/src/DecodedMux.cpp
+index 85c97ae..393ecaf 100644
+--- a/gles2rice/src/DecodedMux.cpp
++++ b/gles2rice/src/DecodedMux.cpp
+@@ -456,17 +456,13 @@ void DecodedMux::Reformat(bool do_complement)
+             m.a = m.b;
+             m.b = m.d = 0;
+             //Hack for Mario Tennis
+-            if( options.enableHackForGames == HACK_FOR_MARIO_TENNIS && m.c == MUX_TEXEL1 )
++            if( options.enableHackForGames == HACK_FOR_MARIO_TENNIS && (m.c == MUX_TEXEL1 || m.c == MUX_TEXEL0) )
+             {
+-                if( do_complement )
+-                    m.c = MUX_TEXEL0|MUX_COMPLEMENT;
+-                else
+-                {
+-                    m.a = m.c;
+-                    m.c = m.b;
+-                    m.b = m.a;
+-                    m.a = MUX_1;
+-                }
++                // (1 - texel) * x: the shaders ignore MUX_COMPLEMENT
++                uint8_t x = m.a;
++                m.a = MUX_1;
++                m.b = m.c;
++                m.c = x;
+             }
+             //m.c ^= MUX_COMPLEMENT;
+         }
+diff --git a/gles2rice/src/FrameBuffer.cpp b/gles2rice/src/FrameBuffer.cpp
+index 25efec2..a6fe0fb 100644
+--- a/gles2rice/src/FrameBuffer.cpp
++++ b/gles2rice/src/FrameBuffer.cpp
+@@ -1,3 +1,5 @@
++#include <stdio.h>
++#include <stdlib.h>
+ /*
+ Copyright (C) 2005 Rice1964
+ 
+@@ -28,6 +30,9 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
+ #include "FrameBuffer.h"
+ #include "UcodeDefs.h"
+ #include "RSP_Parser.h"
++
++extern void rice_clearRenderTarget(uint32_t color); /* (see RenderTexture.cpp) */
++extern bool rice_renderAlphaFromColor; /* (see OGLCombiner.cpp) */
+ #include "Render.h"
+ 
+ #include "../../Graphics/RSP/RSP_state.h"
+@@ -69,7 +74,8 @@ bool LastCIIsNewCI=false;
+ FrameBufferManager::FrameBufferManager() :
+     m_isRenderingToTexture(false),
+     m_curRenderTextureIndex(-1),
+-        m_lastTextureBufferIndex(-1)
++        m_lastTextureBufferIndex(-1),
++    m_backBufferReadAt(0)
+ {
+ }
+ 
+@@ -426,8 +432,11 @@ int FrameBufferManager::CheckAddrInBackBuffers(uint32_t addr, uint32_t memsize,
+             return -1;
+     }
+ 
++    if (r >= 0)
++        m_backBufferReadAt = status.gDlistCount;
++
+     if (r >= 0 && status.gDlistCount - g_uRecentCIInfoPtrs[r]->lastUsedFrame <= 3  && g_uRecentCIInfoPtrs[r]->bCopied == false)
+-        SaveBackBuffer(r, NULL, true);
++        SaveBackBuffer(r, NULL, frameBufferOptions.bWriteBackBufToRDRAM);
+ 
+     return r;
+ }
+@@ -1104,6 +1113,9 @@ int FrameBufferManager::FindASlot(void)
+         uint32_t oldestIdx = 0;
+         for (int i=0; i<numOfTxtBufInfos; i++)
+         {
++            // a frame's worth of small targets mustn't push out a picture of the screen in use
++            if (gRenderTextureInfos[i].N64Width >= 320 && status.gDlistCount - gRenderTextureInfos[i].copyUsedAtFrame <= 10)
++                continue;
+             if (gRenderTextureInfos[i].updateAtUcodeCount < oldestCount)
+             {
+                 oldestCount = gRenderTextureInfos[i].updateAtUcodeCount;
+@@ -1130,6 +1142,7 @@ void FrameBufferManager::SetRenderTexture(void)
+     newRenderTextureInfo.knownHeight = ComputeCImgHeight(g_CI, newRenderTextureInfo.N64Height);
+ 
+     status.bHandleN64RenderTexture = true;
++    newRenderTextureInfo.flipV = false;
+     newRenderTextureInfo.maxUsedHeight = 0;
+ 
+     if (defaultRomOptions.bInN64Resolution)
+@@ -1156,6 +1169,7 @@ void FrameBufferManager::SetRenderTexture(void)
+ 
+     newRenderTextureInfo.updateAtFrame = status.gDlistCount;
+     newRenderTextureInfo.updateAtUcodeCount = status.gUcodeCount;
++    newRenderTextureInfo.copyUsedAtFrame = status.gDlistCount;
+ 
+     // Delay activation of the render_texture until the 1st rendering
+ }
+@@ -1177,10 +1191,12 @@ int FrameBufferManager::SetBackBufferAsRenderTexture(SetImgInfo &CIinfo, int ciI
+     tempRenderTextureInfo.N64Width = g_uRecentCIInfoPtrs[ciInfoIdx]->dwLastWidth;
+     tempRenderTextureInfo.N64Height = g_uRecentCIInfoPtrs[ciInfoIdx]->dwLastHeight;
+     tempRenderTextureInfo.knownHeight = true;
++    tempRenderTextureInfo.flipV = true;
++    tempRenderTextureInfo.copyUsedAtFrame = status.gDlistCount;
+     tempRenderTextureInfo.maxUsedHeight = 0;
+ 
+-    tempRenderTextureInfo.bufferWidth = windowSetting.uDisplayWidth;
+-    tempRenderTextureInfo.bufferHeight = windowSetting.uDisplayHeight;
++    extern void rice_screenSize(uint32_t *width, uint32_t *height);
++    rice_screenSize(&tempRenderTextureInfo.bufferWidth, &tempRenderTextureInfo.bufferHeight);
+ 
+     tempRenderTextureInfo.scaleX = tempRenderTextureInfo.bufferWidth / float(tempRenderTextureInfo.N64Width);
+     tempRenderTextureInfo.scaleY = tempRenderTextureInfo.bufferHeight / float(tempRenderTextureInfo.N64Height);
+@@ -1213,6 +1229,57 @@ int FrameBufferManager::SetBackBufferAsRenderTexture(SetImgInfo &CIinfo, int ciI
+     return idxToUse;
+ }
+ 
++/* Mario Tennis copies the screen to memory with the CPU for its replay wipes and
++ * "change court" panels. Rice never puts the picture in RDRAM, so that copy would be
++ * black: take it from the GPU once, when the game first draws it. */
++int FrameBufferManager::CopyScreenForAddress(uint32_t addr)
++{
++    SetImgInfo info;
++    memcpy(&info, &g_CI, sizeof(SetImgInfo));
++    info.dwAddr = addr;
++    info.dwFormat = g_uRecentCIInfoPtrs[0]->dwFormat;
++    info.dwSize = g_uRecentCIInfoPtrs[0]->dwSize;
++    info.dwWidth = g_uRecentCIInfoPtrs[0]->dwWidth;
++
++    int idx = SetBackBufferAsRenderTexture(info, 0);
++    gRenderTextureInfos[idx].copyUsedAtFrame = status.gDlistCount;
++    ((COGLRenderTexture*)gRenderTextureInfos[idx].pRenderTexture)->CopyScreen(gRenderTextureInfos[idx].bufferWidth, gRenderTextureInfos[idx].bufferHeight);
++    return idx;
++}
++
++/* A game that reads a framebuffer it isn't drawing wants that frame as it was finished,
++ * and Rice has just the one screen, which by then holds the next frame's clear (Mario
++ * Tennis: the replay snapshot it spins away). So while screen copies are being read,
++ * keep one of each frame as it ends. */
++void FrameBufferManager::CopyFinishedScreen(void)
++{
++    if (!g_uRecentCIInfoPtrs[0]->dwAddr)
++        return;
++
++    uint32_t addr = g_uRecentCIInfoPtrs[0]->dwAddr;
++    int mine = -1;
++    bool reading = false;
++    for (int i=0; i<numOfTxtBufInfos; i++)
++    {
++        if (!gRenderTextureInfos[i].isUsed || !gRenderTextureInfos[i].flipV)
++            continue;
++        if (status.gDlistCount - gRenderTextureInfos[i].copyUsedAtFrame <= 2)
++            reading = true;
++        if (gRenderTextureInfos[i].CI_Info.dwAddr == addr)
++            mine = i;
++    }
++    if (!reading)
++        return;
++
++    if (mine < 0)
++    {
++        mine = CopyScreenForAddress(addr);
++        gRenderTextureInfos[mine].copyUsedAtFrame = status.gDlistCount - 3;
++        return;
++    }
++    ((COGLRenderTexture*)gRenderTextureInfos[mine].pRenderTexture)->CopyScreen(gRenderTextureInfos[mine].bufferWidth, gRenderTextureInfos[mine].bufferHeight);
++}
++
+ void FrameBufferManager::CloseRenderTexture(bool toSave)
+ {
+     if (m_curRenderTextureIndex < 0)
+@@ -1367,12 +1434,26 @@ int FrameBufferManager::CheckAddrInRenderTextures(uint32_t addr, bool checkcrc)
+         if (gRenderTextureInfos[i].pRenderTexture->IsBeingRendered())
+             continue;
+ 
++        if (gRenderTextureInfos[i].flipV && status.gDlistCount - gRenderTextureInfos[i].copyUsedAtFrame > 10)
++        {
++            gRenderTextureInfos[i].isUsed = false;
++            continue;
++        }
++
+         uint32_t bufHeight = gRenderTextureInfos[i].knownHeight ? gRenderTextureInfos[i].N64Height : gRenderTextureInfos[i].maxUsedHeight;
+         uint32_t bufMemSize = gRenderTextureInfos[i].CI_Info.dwSize*gRenderTextureInfos[i].N64Width*bufHeight;
+         if (addr >=gRenderTextureInfos[i].CI_Info.dwAddr && addr < gRenderTextureInfos[i].CI_Info.dwAddr+bufMemSize)
+         {
+-            if (checkcrc)
++            if (gRenderTextureInfos[i].flipV)
++            {
++                // a screen copy never had its pixels in RDRAM; keep it while it is in use
++                // (and CopyFinishedScreen keeps it up to date)
++                gRenderTextureInfos[i].copyUsedAtFrame = status.gDlistCount;
++                gRenderTextureInfos[i].updateAtUcodeCount = status.gUcodeCount;
++            }
++            else if (checkcrc)
+             {
++                gRenderTextureInfos[i].copyUsedAtFrame = status.gDlistCount;
+                 // Check the CRC in RDRAM
+                 if( gRenderTextureInfos[i].crcCheckedAtFrame < status.gDlistCount )
+                 {
+@@ -1421,6 +1502,7 @@ void FrameBufferManager::LoadTextureFromRenderTexture(TxtrCacheEntry* pEntry, in
+ 
+ void FrameBufferManager::RestoreNormalBackBuffer()
+ {
++    rice_renderAlphaFromColor = false;
+     if (m_curRenderTextureIndex >= 0 && m_curRenderTextureIndex < numOfTxtBufInfos)
+     {
+         if( gRenderTextureInfos[m_curRenderTextureIndex].pRenderTexture )
+@@ -1512,19 +1594,8 @@ void FrameBufferManager::ActiveTextureBuffer(void)
+         {
+             m_isRenderingToTexture = true;
+ 
+-            //Clear(CLEAR_COLOR_AND_DEPTH_BUFFER, 0x80808080, 1.0f);
+-            if (frameBufferOptions.bFillRectNextTextureBuffer)
+-            {
+-                CGraphicsContext::g_pGraphicsContext->Clear(CLEAR_COLOR_BUFFER, gRDP.fillColor, 1.0f);
+-            }
+-            else if( options.enableHackForGames == HACK_FOR_MARIO_TENNIS && g_pRenderTextureInfo->N64Width > 64 && g_pRenderTextureInfo->N64Width < 300 )
+-            {
+-                CGraphicsContext::g_pGraphicsContext->Clear(CLEAR_COLOR_BUFFER, 0, 1.0f);
+-            }
+-            else if( options.enableHackForGames == HACK_FOR_MARIO_TENNIS && g_pRenderTextureInfo->N64Width < 64 && g_pRenderTextureInfo->N64Width > 32 )
+-            {
+-                CGraphicsContext::g_pGraphicsContext->Clear(CLEAR_COLOR_BUFFER, 0, 1.0f);
+-            }
++            rice_clearRenderTarget(frameBufferOptions.bFillRectNextTextureBuffer ? gRDP.fillColor : 0);
++            rice_renderAlphaFromColor = g_CI.dwSize == G_IM_SIZ_8b;
+ 
+             m_curRenderTextureIndex = idxToUse;
+ 
+@@ -1566,7 +1637,7 @@ void FrameBufferManager::Set_CI_addr(SetImgInfo &newCI)
+     status.bN64IsDrawingTextureBuffer = ( newCI.dwSize != G_IM_SIZ_16b || newCI.dwFormat != G_IM_FMT_RGBA || newCI.dwWidth < 200 || ( newCI.dwAddr != g_ZI.dwAddr && newCI.dwWidth != 512 && !g_pFrameBufferManager->HasAddrBeenDisplayed(newCI.dwAddr, newCI.dwWidth)) );
+     status.bN64FrameBufferIsUsed = status.bN64IsDrawingTextureBuffer;
+ 
+-    if (!wasDrawingTextureBuffer && g_CI.dwAddr == g_ZI.dwAddr && status.bCIBufferIsRendered)
++    if (frameBufferOptions.bCheckBackBufs && status.gDlistCount - m_backBufferReadAt < 120 && !wasDrawingTextureBuffer && g_CI.dwAddr == g_ZI.dwAddr && status.bCIBufferIsRendered)
+     {
+         TXTRBUF_DUMP(TRACE0("ZI is rendered"));
+ 
+@@ -1885,13 +1956,13 @@ void FrameBufferManager::SaveBackBuffer(int ciInfoIdx, M64P_RECT* pSrcRect, bool
+ {
+     RecentCIInfo &ciInfo = *g_uRecentCIInfoPtrs[ciInfoIdx];
+ 
+-    if (ciInfoIdx == 1)    // to save the current front buffer
+-    {
+-        CGraphicsContext::g_pGraphicsContext->UpdateFrame(true);
+-    }
+-
+     if (frameBufferOptions.bWriteBackBufToRDRAM || forceToSaveToRDRAM)
+     {
++        if (ciInfoIdx == 1)    // to save the current front buffer
++        {
++            CGraphicsContext::g_pGraphicsContext->UpdateFrame(true);
++        }
++
+         uint32_t width = ciInfo.dwWidth;
+         uint32_t height = ciInfo.dwHeight;
+ 
+@@ -1921,7 +1992,8 @@ void FrameBufferManager::SaveBackBuffer(int ciInfoIdx, M64P_RECT* pSrcRect, bool
+ 
+     int idx = SetBackBufferAsRenderTexture(tempinfo, ciInfoIdx);
+ 
+-    CopyBackBufferToRenderTexture(idx, ciInfo, pSrcRect);
++    if (gRenderTextureInfos[idx].pRenderTexture)
++        ((COGLRenderTexture*)gRenderTextureInfos[idx].pRenderTexture)->CopyScreen(gRenderTextureInfos[idx].bufferWidth, gRenderTextureInfos[idx].bufferHeight);
+ 
+     gRenderTextureInfos[idx].crcCheckedAtFrame = status.gDlistCount;
+     gRenderTextureInfos[idx].crcInRDRAM = ComputeRenderTextureCRCInRDRAM(idx);
+diff --git a/gles2rice/src/FrameBuffer.h b/gles2rice/src/FrameBuffer.h
+index 8f7def5..7c94365 100644
+--- a/gles2rice/src/FrameBuffer.h
++++ b/gles2rice/src/FrameBuffer.h
+@@ -62,6 +62,9 @@ public:
+ 
+     int IsAddrInRecentFrameBuffers(uint32_t addr);
+     int CheckAddrInBackBuffers(uint32_t addr, uint32_t memsize, bool copyToRDRAM);
++    void CopyFinishedScreen(void);
++    int CopyScreenForAddress(uint32_t addr);
++    uint32_t m_backBufferReadAt; // MinUI+: the frame a game last used the screen as a texture
+ 
+     uint8_t CIFindIndex(uint16_t val);
+     uint32_t ComputeCImgHeight(SetImgInfo &info, uint32_t &height);
+diff --git a/gles2rice/src/GraphicsContext.cpp b/gles2rice/src/GraphicsContext.cpp
+index 8f8faae..a0fb816 100644
+--- a/gles2rice/src/GraphicsContext.cpp
++++ b/gles2rice/src/GraphicsContext.cpp
+@@ -39,6 +39,8 @@ CGraphicsContext::CGraphicsContext()
+ }
+ CGraphicsContext::~CGraphicsContext()
+ {
++    extern bool rice_renderTargetsClosing;
++    rice_renderTargetsClosing = true;
+     g_pFrameBufferManager->CloseUp();
+ }
+ 
+diff --git a/gles2rice/src/OGLCombiner.cpp b/gles2rice/src/OGLCombiner.cpp
+index 026a44e..0aa8419 100644
+--- a/gles2rice/src/OGLCombiner.cpp
++++ b/gles2rice/src/OGLCombiner.cpp
+@@ -148,9 +148,17 @@ void COGLBlender::DisableAlphaBlender(void)
+ }
+ 
+ 
++/* MinUI+: an 8-bit render target gets read back as intensity, where alpha is the
++ * same value. What games draw into one is dark marks on a light clear (Mario Tennis'
++ * shadows), so what's drawn writes alpha 0, without a shader change for every game. */
++bool rice_renderAlphaFromColor = false;
++
+ void COGLBlender::BlendFunc(uint32_t srcFunc, uint32_t desFunc)
+ {
+-    glBlendFunc(DirectX_OGL_BlendFuncMaps[srcFunc], DirectX_OGL_BlendFuncMaps[desFunc]);
++    if (rice_renderAlphaFromColor)
++        glBlendFuncSeparate(DirectX_OGL_BlendFuncMaps[srcFunc], DirectX_OGL_BlendFuncMaps[desFunc], GL_ZERO, GL_ZERO);
++    else
++        glBlendFunc(DirectX_OGL_BlendFuncMaps[srcFunc], DirectX_OGL_BlendFuncMaps[desFunc]);
+ }
+ 
+ void COGLBlender::Enable()
+@@ -160,7 +168,13 @@ void COGLBlender::Enable()
+ 
+ void COGLBlender::Disable()
+ {
+-    glDisable(GL_BLEND);
++    if (rice_renderAlphaFromColor)
++    {
++        glEnable(GL_BLEND);
++        glBlendFuncSeparate(GL_ONE, GL_ZERO, GL_ZERO, GL_ZERO);
++    }
++    else
++        glDisable(GL_BLEND);
+ }
+ 
+ void COGLColorCombiner::InitCombinerBlenderForSimpleTextureDraw(uint32_t tile)
+diff --git a/gles2rice/src/OGLES2FragmentShaders.cpp b/gles2rice/src/OGLES2FragmentShaders.cpp
+index bc442d8..266263b 100644
+--- a/gles2rice/src/OGLES2FragmentShaders.cpp
++++ b/gles2rice/src/OGLES2FragmentShaders.cpp
+@@ -17,12 +17,19 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
+ */
+ 
+ #include <stdlib.h>
++#include <string.h>
+ #include "OGLES2FragmentShaders.h"
+ #include "OGLRender.h"
+ #include "OGLTexture.h"
+ 
+ #define ALPHA_TEST "    if(gl_FragColor.a < AlphaRef) discard;                        \n"
+ 
++#define RICE_FLIP_PROGRAMS 4096
++bool rice_renderFlip = false;
++static bool rice_flipUsed = false;
++static GLint rice_flipLocation[RICE_FLIP_PROGRAMS]; /* location + 2; 0 is not looked up yet */
++static bool rice_flipSent[RICE_FLIP_PROGRAMS];
++
+ GLuint vertexProgram = 9999;
+ const char *vertexShader =
+ "#version " GLSL_VERSION "\n"
+@@ -32,22 +39,24 @@ const char *vertexShader =
+ #endif
+ "attribute mediump vec4 aPosition;                          \n"\
+ "attribute lowp vec4    aColor;                             \n"\
+-"attribute lowp vec2    aTexCoord0;                         \n"\
+-"attribute lowp vec2    aTexCoord1;                         \n"\
++"attribute mediump vec2 aTexCoord0;                         \n"\
++"attribute mediump vec2 aTexCoord1;                         \n"\
+ "attribute lowp vec2    aAtlasTransform;                    \n"\
+ "attribute mediump float aFogCoord;                         \n"\
+ "                                                           \n"\
+ "uniform vec2 FogMinMax;                                    \n"\
++"uniform mediump float uFlipY;                              \n"\
+ "                                                           \n"\
+ "varying lowp float vFactor;                                \n"\
+ "varying lowp vec4  vShadeColor;                            \n"\
+ "varying mediump vec2 vTexCoord0;                           \n"\
+-"varying lowp vec2    vTexCoord1;                           \n"\
++"varying mediump vec2 vTexCoord1;                           \n"\
+ "varying lowp float   vFog;                                 \n"\
+ "                                                           \n"\
+ "void main()                                                \n"\
+ "{                                                          \n"\
+ "    gl_Position = aPosition;                               \n"\
++"    gl_Position.y *= 1.0 - 2.0 * uFlipY;                   \n"\
+ "    vShadeColor = aColor;                                  \n"\
+ "    vTexCoord0 = aTexCoord0;                               \n"\
+ "    vTexCoord1 = aTexCoord1;                               \n"\
+@@ -81,7 +90,7 @@ const char *fragmentHeader =
+ "                                                           \n"\
+ "varying lowp vec4  vShadeColor;                            \n"\
+ "varying mediump vec2  vTexCoord0;                          \n"\
+-"varying lowp vec2  vTexCoord1;                             \n"\
++"varying mediump vec2  vTexCoord1;                             \n"\
+ "varying lowp float vFog;                                   \n"\
+ "                                                           \n"\
+ "void main()                                                \n"\
+@@ -90,6 +99,9 @@ const char *fragmentHeader =
+ "                                                           \n"\
+ "#ifdef NEED_TEX0                                           \n"\
+ "    vec4 t0 = texture2D(uTex0,vTexCoord0);                 \n"\
++"#ifdef T0_IS_TARGET                                        \n"\
++"    t0 = t0.bgra;                                          \n"\
++"#endif                                                     \n"\
+ "#endif                                                     \n"\
+ "                                                           \n"\
+ "#ifdef NEED_TEX1                                           \n"\
+@@ -104,6 +116,9 @@ const char *fragmentFooter =
+ "#else                                                                      \n"\
+ "   gl_FragColor = comb;                                                    \n"\
+ "#endif                                                                     \n"\
++"#ifdef T0_SCREEN_BLEND                                                     \n"\
++"   gl_FragColor = vec4(t0.rgb * PrimColor.a, 1.0);                         \n"\
++"#endif                                                                     \n"\
+ "                                                                           \n"\
+ "#ifdef ALPHA_TEST                                                          \n"\
+    ALPHA_TEST                                                                  
+@@ -121,14 +136,50 @@ const char *fragmentCopy =
+ #endif
+ "uniform sampler2D uTex0;                                   \n"\
+ "uniform float AlphaRef;                                    \n"\
+-"varying lowp vec2 vTexCoord0;                              \n"\
++"varying mediump vec2 vTexCoord0;                              \n"\
+ "void main()                                                \n"\
+ "{                                                          \n"\
+ "   gl_FragColor = texture2D(uTex0,vTexCoord0).bgra;        \n" \
+ ALPHA_TEST
+ "}";
+ 
++//The same for a copy of what was drawn: in the framebuffer's channel order, with no alpha to test
++const char *fragmentCopyTarget =
++"#version " GLSL_VERSION "\n"
++#if !defined(HAVE_OPENGLES)
++"#define lowp                                               \n"
++"#define mediump                                            \n"
++#else
++"precision lowp float;                                      \n"
++#endif
++"uniform sampler2D uTex0;                                   \n"\
++"varying mediump vec2 vTexCoord0;                              \n"\
++"void main()                                                \n"\
++"{                                                          \n"\
++"   gl_FragColor = vec4(texture2D(uTex0,vTexCoord0).rgb, 1.0); \n" \
++"}";
++
+ GLuint copyProgram,copyAlphaLocation;
++GLuint copyTargetProgram;
++
++//Fragment shader for InitCombinerSpriteOver
++const char *fragmentSpriteOver =
++"#version " GLSL_VERSION "\n"
++#if !defined(HAVE_OPENGLES)
++"#define lowp                                               \n"
++"#define mediump                                            \n"
++#else
++"precision lowp float;                                      \n"
++#endif
++"uniform sampler2D uTex0;                                   \n"\
++"uniform vec3 Tint;                                         \n"\
++"varying mediump vec2 vTexCoord0;                              \n"\
++"void main()                                                \n"\
++"{                                                          \n"\
++"   gl_FragColor = vec4(texture2D(uTex0,vTexCoord0).bgr * Tint, 1.0); \n" \
++"}";
++
++GLuint spriteOverProgram,spriteOverTintLocation;
+ 
+ //Fragment shader for InitCycleFill
+ const char *fragmentFill =
+@@ -209,6 +260,9 @@ COGL_FragmentProgramCombiner::COGL_FragmentProgramCombiner(CRender *pRender)
+     bFogState = false;
+     bFogPreviousState = false;
+ 
++    memset(rice_flipLocation, 0, sizeof(rice_flipLocation));
++    memset(rice_flipSent, 0, sizeof(rice_flipSent));
++
+     //Create shaders for fill and copy
+     GLint success;
+     GLuint vs,fs;
+@@ -255,6 +309,31 @@ COGL_FragmentProgramCombiner::COGL_FragmentProgramCombiner(CRender *pRender)
+ 
+     glDeleteShader(fs);
+ 
++    //Copy of a target shader
++    fs = glCreateShader(GL_FRAGMENT_SHADER);
++    glShaderSource(fs,1,&fragmentCopyTarget,NULL);
++    glCompileShader(fs);
++    copyTargetProgram = glCreateProgram();
++    glAttachShader(copyTargetProgram,vs);
++    glAttachShader(copyTargetProgram,fs);
++    glBindAttribLocation(copyTargetProgram,VS_TEXCOORD0,"aTexCoord0");
++    glBindAttribLocation(copyTargetProgram,VS_POSITION,"aPosition");
++    glLinkProgram(copyTargetProgram);
++    glDeleteShader(fs);
++
++    //Sprite over shader
++    fs = glCreateShader(GL_FRAGMENT_SHADER);
++    glShaderSource(fs,1,&fragmentSpriteOver,NULL);
++    glCompileShader(fs);
++    spriteOverProgram = glCreateProgram();
++    glAttachShader(spriteOverProgram,vs);
++    glAttachShader(spriteOverProgram,fs);
++    glBindAttribLocation(spriteOverProgram,VS_TEXCOORD0,"aTexCoord0");
++    glBindAttribLocation(spriteOverProgram,VS_POSITION,"aPosition");
++    glLinkProgram(spriteOverProgram);
++    spriteOverTintLocation = glGetUniformLocation(spriteOverProgram,"Tint");
++    glDeleteShader(fs);
++
+     //Fill shader
+     fs = glCreateShader(GL_FRAGMENT_SHADER);
+     glShaderSource(fs,1,&fragmentFill,NULL);
+@@ -303,12 +382,35 @@ bool COGL_FragmentProgramCombiner::Initialize(void)
+     return true;
+ }
+ 
++/* MinUI+: drawing to a render target flips Y (see RenderTexture.cpp). Uniforms
++ * start at 0, so a game that never draws to one never sends this one at all. */
++
++void rice_setRenderFlip(bool flip)
++{
++    rice_renderFlip = flip;
++    rice_flipUsed = true;
++    glFrontFace(flip ? GL_CW : GL_CCW);
++}
++
++static void rice_sendFlip(GLuint program)
++{
++    if (program >= RICE_FLIP_PROGRAMS || rice_flipSent[program] == rice_renderFlip)
++        return;
++    if (!rice_flipLocation[program])
++        rice_flipLocation[program] = glGetUniformLocation(program, "uFlipY") + 2;
++    if (rice_flipLocation[program] > 1)
++        glUniform1f(rice_flipLocation[program] - 2, rice_renderFlip ? 1.0f : 0.0f);
++    rice_flipSent[program] = rice_renderFlip;
++}
++
+ void COGL_FragmentProgramCombiner::UseProgram(GLuint program)
+ {
+     if (program != currentProgram) {
+         glUseProgram(program);
+         currentProgram = program;
+     }
++    if (rice_flipUsed)
++        rice_sendFlip(program);
+ }
+ 
+ 
+@@ -320,8 +422,16 @@ void COGL_FragmentProgramCombiner::InitCombinerCycleCopy(void)
+ {
+     m_pOGLRender->DisableMultiTexture();
+     m_pOGLRender->EnableTexUnit(0, true);
+-    UseProgram(copyProgram);
+-    glUniform1f(copyAlphaLocation,m_AlphaRef);
++    TxtrCacheEntry *t0Entry = g_textures[gRSP.curTile].pTextureEntry;
++    if (t0Entry && t0Entry->txtrBufIdx > 0)
++    {
++        UseProgram(copyTargetProgram);
++    }
++    else
++    {
++        UseProgram(copyProgram);
++        glUniform1f(copyAlphaLocation,m_AlphaRef);
++    }
+     glEnableVertexAttribArray(VS_POSITION);
+     glEnableVertexAttribArray(VS_TEXCOORD0);
+     glDisableVertexAttribArray(VS_COLOR);
+@@ -335,6 +445,15 @@ void COGL_FragmentProgramCombiner::InitCombinerCycleCopy(void)
+     }
+ }
+ 
++void COGL_FragmentProgramCombiner::InitCombinerSpriteOver(const float *tint)
++{
++    m_pOGLRender->DisableMultiTexture();
++    m_pOGLRender->EnableTexUnit(0, true);
++    UseProgram(spriteOverProgram);
++    glUniform3fv(spriteOverTintLocation,1,tint);
++    m_dwLastMux0 = m_dwLastMux1 = 0;
++}
++
+ void COGL_FragmentProgramCombiner::InitCombinerCycleFill(void)
+ {
+     UseProgram(fillProgram);
+@@ -495,6 +614,8 @@ void COGL_FragmentProgramCombiner::GenerateProgramStr()
+ 
+ }
+ 
++static int rice_t0IsTarget = 0; /* 1 a render target, 2 one to screen-blend over what's drawn */
++
+ int COGL_FragmentProgramCombiner::ParseDecodedMux()
+ {
+     OGLShaderCombinerSaveType res;
+@@ -524,14 +645,21 @@ int COGL_FragmentProgramCombiner::ParseDecodedMux()
+           char* tmpShader = (char*)malloc(sizeof(char) * 4096);
+           strcpy(tmpShader,"#version " GLSL_VERSION "\n");
+ 
+-          if(alphaTest == 1)
++          if(alphaTest == 1 && rice_t0IsTarget != 2)
+              strcat(tmpShader,"#define ALPHA_TEST\n");
+ 
+           if(fog == 1)
+              strcat(tmpShader,"#define FOG\n");
+ 
++          /* textures are stored BGR, what the GPU drew is not */
++          if(rice_t0IsTarget)
++             strcat(tmpShader,"#define T0_IS_TARGET\n");
++          if(rice_t0IsTarget == 2)
++             strcat(tmpShader,"#define T0_SCREEN_BLEND\n");
++
+           res.fogIsUsed = fog == 1;
+           res.alphaTest = alphaTest == 1;
++          res.t0IsTarget = rice_t0IsTarget;
+           strcat(tmpShader,oglNewFP);
+ 
+           glShaderSource(res.fragmentShaderID, 1,(const char**) &tmpShader,NULL);
+@@ -714,7 +842,8 @@ int COGL_FragmentProgramCombiner::FindCompiledMux()
+         if( m_vCompiledShaders[i].dwMux0 == m_pDecodedMux->m_dwMux0 
+             && m_vCompiledShaders[i].dwMux1 == m_pDecodedMux->m_dwMux1 
+             && m_vCompiledShaders[i].fogIsUsed == bFogState
+-            && m_vCompiledShaders[i].alphaTest == bAlphaTestState)
++            && m_vCompiledShaders[i].alphaTest == bAlphaTestState
++            && m_vCompiledShaders[i].t0IsTarget == rice_t0IsTarget)
+         {
+             return (int)i;
+         }
+@@ -739,11 +868,22 @@ void COGL_FragmentProgramCombiner::InitCombinerCycle12(void)
+     m_pOGLRender->EnableMultiTexture();
+ 
+     bool combinerIsChanged = false;
+-
+-    if( m_pDecodedMux->m_dwMux0 != m_dwLastMux0 || m_pDecodedMux->m_dwMux1 != m_dwLastMux1
++    TxtrCacheEntry *t0Entry = g_textures[gRSP.curTile].pTextureEntry;
++    int t0IsTarget = t0Entry && t0Entry->txtrBufIdx > 0;
++    /* Mario Tennis' fire, sparks and dust: drawn as sprite + picture * (1 - sprite), with
++     * tile+1 holding that piece of the screen read back from memory. Rice takes it for
++     * the sprite twice over and a solid box comes out. The GPU's blending does the same
++     * from what's already on screen, with nothing read back. */
++    if( t0IsTarget && options.enableHackForGames == HACK_FOR_MARIO_TENNIS
++          && m_pDecodedMux->m_dwMux0 == 0x00157ec0 && m_pDecodedMux->m_dwMux1 == 0xf1fff278 )
++        t0IsTarget = 2;
++
++    if( t0IsTarget != rice_t0IsTarget
++          || m_pDecodedMux->m_dwMux0 != m_dwLastMux0 || m_pDecodedMux->m_dwMux1 != m_dwLastMux1
+           ||  bAlphaTestState != bAlphaTestPreviousState || bFogState != bFogPreviousState || m_lastIndex < 0 )
+     {
+         combinerIsChanged = true;
++        rice_t0IsTarget = t0IsTarget;
+         m_lastIndex = FindCompiledMux();
+         if( m_lastIndex < 0 )       // Can not found
+         {
+@@ -780,6 +920,11 @@ void COGL_FragmentProgramCombiner::InitCombinerCycle12(void)
+     {
+         m_pOGLRender->SetAllTexelRepeatFlag();
+     }
++    if( rice_t0IsTarget == 2 )
++    {
++        glEnable(GL_BLEND);
++        glBlendFunc(GL_ONE_MINUS_DST_COLOR, GL_ONE);
++    }
+ }
+ 
+ #ifdef DEBUGGER
+diff --git a/gles2rice/src/OGLES2FragmentShaders.h b/gles2rice/src/OGLES2FragmentShaders.h
+index 36e7934..be3d1a6 100644
+--- a/gles2rice/src/OGLES2FragmentShaders.h
++++ b/gles2rice/src/OGLES2FragmentShaders.h
+@@ -33,6 +33,7 @@ typedef struct
+ 
+     bool    fogIsUsed;
+     bool    alphaTest;
++    int     t0IsTarget;
+     GLuint  fragmentShaderID;
+     GLuint  vertexShaderID;
+     GLuint  programID;
+@@ -98,6 +99,7 @@ private:
+     bool bFogPreviousState;
+ 
+     void UseProgram(GLuint program);
++    void InitCombinerSpriteOver(const float *tint);
+     GLuint currentProgram;
+ 
+ #ifdef DEBUGGER
+diff --git a/gles2rice/src/OGLExtRender.cpp b/gles2rice/src/OGLExtRender.cpp
+index f353d1a..b3b16f6 100644
+--- a/gles2rice/src/OGLExtRender.cpp
++++ b/gles2rice/src/OGLExtRender.cpp
+@@ -1,3 +1,4 @@
++#include <string.h>
+ /*
+ Copyright (C) 2003 Rice1964
+ 
+@@ -35,17 +36,21 @@ void COGLExtRender::Initialize(void)
+ }
+ 
+ 
++extern uint32_t rice_textureEpoch;
++
+ void COGLExtRender::BindTexture(GLuint texture, int unitno)
+ {
+     if( m_bEnableMultiTexture )
+     {
+         if( unitno < m_maxTexUnits )
+         {
+-            if( m_curBoundTex[unitno] != texture )
++            static uint32_t epoch[32];
++            if( m_curBoundTex[unitno] != texture || epoch[unitno] != rice_textureEpoch )
+             {
+                 glActiveTexture(GL_TEXTURE0 + unitno);
+                 glBindTexture(GL_TEXTURE_2D,texture);
+                 m_curBoundTex[unitno] = texture;
++                epoch[unitno] = rice_textureEpoch;
+             }
+         }
+     }
+@@ -79,6 +84,12 @@ void COGLExtRender::SetTexWrapS(int unitno,GLuint flag)
+ {
+     static GLuint mflag[8];
+     static GLuint mtex[8];
++    static uint32_t epoch;
++    if( epoch != rice_textureEpoch )
++    {
++        epoch = rice_textureEpoch;
++        memset(mtex, 0, sizeof(mtex));
++    }
+     if( m_curBoundTex[unitno] != mtex[unitno] || mflag[unitno] != flag )
+     {
+         glActiveTexture(GL_TEXTURE0+unitno);
+@@ -91,6 +102,12 @@ void COGLExtRender::SetTexWrapT(int unitno,GLuint flag)
+ {
+     static GLuint mflag[8];
+     static GLuint mtex[8];
++    static uint32_t epoch;
++    if( epoch != rice_textureEpoch )
++    {
++        epoch = rice_textureEpoch;
++        memset(mtex, 0, sizeof(mtex));
++    }
+     if( m_curBoundTex[unitno] != mtex[unitno] || mflag[unitno] != flag )
+     {
+         mtex[unitno] = m_curBoundTex[0];
+@@ -196,6 +213,13 @@ void COGLExtRender::ApplyTextureFilter()
+ {
+     static uint32_t minflag[32], magflag[32];
+     static uint32_t mtex[32];
++    static uint32_t epoch;
++
++    if( epoch != rice_textureEpoch )
++    {
++        epoch = rice_textureEpoch;
++        memset(mtex, 0, sizeof(mtex));
++    }
+ 
+     int iMinFilter, iMagFilter;
+ 
+diff --git a/gles2rice/src/OGLGraphicsContext.cpp b/gles2rice/src/OGLGraphicsContext.cpp
+index ade5fdc..4d496cf 100644
+--- a/gles2rice/src/OGLGraphicsContext.cpp
++++ b/gles2rice/src/OGLGraphicsContext.cpp
+@@ -183,6 +183,64 @@ void COGLGraphicsContext::Clear(ClearFlag dwFlags, uint32_t color, float depth)
+ }
+ 
+ extern "C" bool rice_frameFinished(void);
++extern void rice_statFrame(bool fresh);
++#include "FrameBuffer.h"
++#include "RSP_Parser.h"
++
++extern bool rice_screenInRDRAM;
++extern int numOfRecentCIInfos;
++
++/* MinUI+: Banjo-Kazooie's jigsaw transition copies the screen out of N64 memory with the CPU, into
++ * the pieces, but Rice's picture is only on the GPU. The dynarec's reads of memory aren't hooked,
++ * so the copy can't be seen coming: memory is kept about a second behind the screen instead. */
++static void rice_storeScreen(void)
++{
++    static int frames;
++    static unsigned char *pixels;
++    if (++frames < 30)
++        return;
++    frames = 0;
++
++    int w = windowSetting.uDisplayWidth;
++    int h = windowSetting.uDisplayHeight;
++    static int pixels_size;
++    if (w*h*4 > pixels_size)
++    {
++        free(pixels);
++        pixels_size = w*h*4;
++        pixels = (unsigned char*)malloc(pixels_size);
++    }
++    if (!pixels)
++    {
++        pixels_size = 0;
++        return;
++    }
++    glReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
++
++    uint16_t *rdram = (uint16_t*)gfx_info.RDRAM;
++    for (int i = 0; i < numOfRecentCIInfos; i++)
++    {
++        RecentCIInfo &ci = *g_uRecentCIInfoPtrs[i];
++        /* only screens still in use: an old address may be something else by now */
++        if (!ci.dwAddr || ci.dwAddr == g_ZI.dwAddr || ci.dwFormat != G_IM_FMT_RGBA || ci.dwSize != G_IM_SIZ_16b
++            || ci.dwWidth < 200 || !ci.dwHeight || status.gDlistCount - ci.lastUsedFrame > 3
++            || ci.dwAddr + ci.dwWidth*ci.dwHeight*2 > g_dwRamSize)
++            continue;
++        uint32_t step = ((uint32_t)w << 16) / ci.dwWidth;
++        uint32_t first = ci.dwAddr >> 1;
++        for (uint32_t y = 0; y < ci.dwHeight; y++, first += ci.dwWidth)
++        {
++            const unsigned char *row = pixels + (h - 1 - y*h/ci.dwHeight)*w*4;
++            uint32_t sx = 0;
++            for (uint32_t x = 0; x < ci.dwWidth; x++, sx += step)
++            {
++                const unsigned char *c = row + (sx >> 16)*4;
++                rdram[(first + x)^1] = ((c[0] & 0xf8) << 8) | ((c[1] & 0xf8) << 3) | ((c[2] & 0xf8) >> 2) | 1;
++            }
++        }
++    }
++}
++
+ 
+ void COGLGraphicsContext::UpdateFrame(bool swapOnly)
+ {
+@@ -195,15 +253,28 @@ void COGLGraphicsContext::UpdateFrame(bool swapOnly)
+     if (renderCallback)
+         (*renderCallback)(status.bScreenIsDrawn);
+ 
+-   if (rice_frameFinished()) /* (or it wasn't drawn: the last one stays up) */
++    /* MinUI+: a swap with nothing new drawn since the last (a 20fps game whose VI changes every
++     * field) is the frame already showing: not shown again, and its depth is still clear */
++    bool fresh = status.bScreenIsDrawn || status.gDlistCount == 0 || status.toShowCFB;
++    rice_statFrame(fresh);
++
++    if (fresh && status.bScreenIsDrawn)
++        g_pFrameBufferManager->CopyFinishedScreen();
++
++    if (rice_screenInRDRAM && fresh && status.bScreenIsDrawn && !status.bN64IsDrawingTextureBuffer)
++        rice_storeScreen();
++   if (rice_frameFinished() && fresh) /* (or it wasn't drawn: the last one stays up) */
+       retro_return(true);
+    
+-    glDepthMask(GL_TRUE);
+-    glClearDepth(1.0f);
+-    if (!g_curRomInfo.bForceScreenClear)
+-        glClear(GL_DEPTH_BUFFER_BIT);
+-    else
+-        needCleanScene = true;
++    if (fresh)
++    {
++        glDepthMask(GL_TRUE);
++        glClearDepth(1.0f);
++        if (!g_curRomInfo.bForceScreenClear)
++            glClear(GL_DEPTH_BUFFER_BIT);
++        else
++            needCleanScene = true;
++    }
+ 
+     status.bScreenIsDrawn = false;
+ }
+diff --git a/gles2rice/src/OGLRender.cpp b/gles2rice/src/OGLRender.cpp
+index 2d2ad36..d4b1dfb 100644
+--- a/gles2rice/src/OGLRender.cpp
++++ b/gles2rice/src/OGLRender.cpp
+@@ -24,10 +24,14 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
+ #include "OGLTexture.h"
+ #include "TextureManager.h"
+ 
++extern bool rice_renderFlip; /* (see OGLES2FragmentShaders.cpp) */
++
+ // FIXME: Use OGL internal L/T and matrix stack
+ // FIXME: Use OGL lookupAt function
+ // FIXME: Use OGL DisplayList
+ 
++extern uint32_t rice_textureEpoch;
++
+ UVFlagMap OGLXUVFlagMaps[] =
+ {
+     {TEXTURE_UV_FLAG_WRAP, GL_REPEAT},
+@@ -90,10 +94,54 @@ TextureFilterMap OglTexFilterMap[2]=
+     {FILTER_LINEAR, GL_LINEAR},
+ };
+ 
++/* MinUI+: with MINARCH_PROFILE set, what drawing costs on the device, logged about every 10 seconds:
++ * draws and vertices each drawn frame, the time in the driver's draw calls (every 8th timed) and in texture uploads */
++#include <time.h>
++#include <stdio.h>
++#include <stdlib.h>
++int rice_stats = -1;
++static unsigned stat_swaps, stat_fresh, stat_draws, stat_verts, stat_uploads, stat_upload_kb;
++static uint64_t stat_draw_us, stat_upload_us;
++uint64_t rice_statNow(void)
++{
++    struct timespec t;
++    clock_gettime(CLOCK_MONOTONIC, &t);
++    return (uint64_t)t.tv_sec * 1000000 + t.tv_nsec / 1000;
++}
++void rice_statUpload(uint64_t us, unsigned width, unsigned height)
++{
++    stat_uploads++;
++    stat_upload_kb += width * height * 4 / 1024;
++    stat_upload_us += us;
++}
++void rice_statFrame(bool fresh)
++{
++    if (rice_stats < 0)
++        rice_stats = getenv("MINARCH_PROFILE") != NULL;
++    if (!rice_stats)
++        return;
++    stat_fresh += fresh;
++    if (++stat_swaps < 600)
++        return;
++    unsigned frames = stat_fresh ? stat_fresh : 1;
++    fprintf(stderr, "rice: %u swaps, %u new; each new: %u draws, %u vertices, %uus drawing, %u uploads, %uKB, %uus uploading\n",
++        stat_swaps, stat_fresh, stat_draws / frames, stat_verts / frames, (unsigned)(stat_draw_us * 8 / frames),
++        stat_uploads / frames, stat_upload_kb / frames, (unsigned)(stat_upload_us / frames));
++    fflush(stderr);
++    stat_swaps = stat_fresh = stat_draws = stat_verts = stat_uploads = stat_upload_kb = 0;
++    stat_draw_us = stat_upload_us = 0;
++}
++
+ void OGLRender::ApplyTextureFilter()
+ {
+     static uint32_t minflag=0xFFFF, magflag=0xFFFF;
+-    static uint32_t mtex;
++    static uint32_t mtex, epoch;
++
++    if( epoch != rice_textureEpoch )
++    {
++        epoch = rice_textureEpoch;
++        mtex = 0;
++    }
+ 
+     if( m_texUnitEnabled[0] )
+     {
+@@ -326,6 +374,12 @@ void OGLRender::SetTexWrapS(int unitno,GLuint flag)
+ {
+     static GLuint mflag;
+     static GLuint mtex;
++    static uint32_t epoch;
++    if( epoch != rice_textureEpoch )
++    {
++        epoch = rice_textureEpoch;
++        mtex = 0;
++    }
+ #ifdef DEBUGGER
+     if( unitno != 0 )
+     {
+@@ -343,6 +397,12 @@ void OGLRender::SetTexWrapT(int unitno,GLuint flag)
+ {
+     static GLuint mflag;
+     static GLuint mtex;
++    static uint32_t epoch;
++    if( epoch != rice_textureEpoch )
++    {
++        epoch = rice_textureEpoch;
++        mtex = 0;
++    }
+     if( m_curBoundTex[0] != mtex || mflag != flag )
+     {
+         mtex = m_curBoundTex[0];
+@@ -526,7 +586,13 @@ bool OGLRender::RenderFlushTris()
+ 
+     //if options.bOGLVertexClipper == false )
+     {
++        bool timed = rice_stats > 0 && !(stat_draws & 7);
++        uint64_t from = timed ? rice_statNow() : 0;
+         glDrawElements( GL_TRIANGLES, gRSP.numVertices, GL_UNSIGNED_SHORT, g_vtxIndex );
++        if (timed)
++            stat_draw_us += rice_statNow() - from;
++        stat_draws++;
++        stat_verts += gRSP.numVertices;
+     }
+ 
+     /* Fog is only used by this geometry draw. Disable it here so it is not left
+@@ -722,6 +788,21 @@ void OGLRender::SetAlphaTestEnable(bool bAlphaTestEnable)
+ #endif
+ }
+ 
++uint32_t OGLRender::TileTextureName(uint32_t dwTile)
++{
++    COGLTexture* pTexture = g_textures[dwTile].m_pCOGLTexture;
++    return pTexture ? pTexture->m_dwTextureName : 0;
++}
++
++void OGLRender::BindTennisSprite(uint32_t texture, TextureUVFlag flagU, TextureUVFlag flagV)
++{
++    BindTexture(texture, 0);
++    SetTexWrapS(0, OGLXUVFlagMaps[flagU].realFlag);
++    SetTexWrapT(0, OGLXUVFlagMaps[flagV].realFlag);
++    glEnable(GL_BLEND);
++    glBlendFunc(GL_ONE_MINUS_DST_COLOR, GL_ONE);
++}
++
+ void OGLRender::BindTexture(GLuint texture, int unitno)
+ {
+ #ifdef DEBUGGER
+@@ -730,10 +811,12 @@ void OGLRender::BindTexture(GLuint texture, int unitno)
+         DebuggerAppendMsg("Check me, base ogl bind texture, unit no != 0");
+     }
+ #endif
+-    if( m_curBoundTex[0] != texture )
++    static uint32_t epoch;
++    if( m_curBoundTex[0] != texture || epoch != rice_textureEpoch )
+     {
+         glBindTexture(GL_TEXTURE_2D,texture);
+         m_curBoundTex[0] = texture;
++        epoch = rice_textureEpoch;
+     }
+ }
+ 
+@@ -796,7 +879,7 @@ void OGLRender::ApplyRDPScissor(bool force)
+     }
+     else
+     {
+-        glScissor(int(gRDP.scissor.left*windowSetting.fMultX), int((windowSetting.uViHeight-gRDP.scissor.bottom)*windowSetting.fMultY),
++        glScissor(int(gRDP.scissor.left*windowSetting.fMultX), int((rice_renderFlip ? gRDP.scissor.top : windowSetting.uViHeight-gRDP.scissor.bottom)*windowSetting.fMultY),
+             int((gRDP.scissor.right-gRDP.scissor.left)*windowSetting.fMultX), int((gRDP.scissor.bottom-gRDP.scissor.top)*windowSetting.fMultY ));
+     }
+ 
+@@ -809,7 +892,7 @@ void OGLRender::ApplyScissorWithClipRatio(bool force)
+         return;
+ 
+     glEnable(GL_SCISSOR_TEST);
+-    glScissor(windowSetting.clipping.left, int((windowSetting.uViHeight-gRSP.real_clip_scissor_bottom)*windowSetting.fMultY),
++    glScissor(windowSetting.clipping.left, int((rice_renderFlip ? gRSP.real_clip_scissor_top : windowSetting.uViHeight-gRSP.real_clip_scissor_bottom)*windowSetting.fMultY),
+         windowSetting.clipping.width, windowSetting.clipping.height);
+ 
+     status.curScissor = RSP_SCISSOR;
+diff --git a/gles2rice/src/OGLRender.h b/gles2rice/src/OGLRender.h
+index d2a3b10..62be1a4 100644
+--- a/gles2rice/src/OGLRender.h
++++ b/gles2rice/src/OGLRender.h
+@@ -66,6 +66,8 @@ public:
+     void SetTextureUFlag(TextureUVFlag dwFlag, uint32_t tile);
+     void SetTextureVFlag(TextureUVFlag dwFlag, uint32_t tile);
+     virtual void BindTexture(GLuint texture, int unitno);
++    uint32_t TileTextureName(uint32_t dwTile);
++    void BindTennisSprite(uint32_t texture, TextureUVFlag flagU, TextureUVFlag flagV);
+     virtual void DisBindTexture(GLuint texture, int unitno);
+     virtual void TexCoord2f(float u, float v);
+     virtual void TexCoord(TLITVERTEX &vtxInfo);
+diff --git a/gles2rice/src/OGLTexture.cpp b/gles2rice/src/OGLTexture.cpp
+index c088bbe..9cca075 100644
+--- a/gles2rice/src/OGLTexture.cpp
++++ b/gles2rice/src/OGLTexture.cpp
+@@ -24,6 +24,15 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
+ #include "OGLTexture.h"
+ #include "TextureManager.h"
+ 
++extern int rice_stats; /* (see OGLRender.cpp) */
++extern uint64_t rice_statNow(void);
++extern void rice_statUpload(uint64_t us, unsigned width, unsigned height);
++
++/* Texture names come back after a delete, and what Rice remembers of a name (bound, its
++ * filter, its wrap) doesn't apply to the new texture. It starts with a mipmap filter, which
++ * samples as black without mipmaps. Goes up with every texture made or deleted. */
++uint32_t rice_textureEpoch = 0;
++
+ COGLTexture::COGLTexture(uint32_t dwWidth, uint32_t dwHeight, TextureUsage usage) :
+     CTexture(dwWidth,dwHeight,usage),
+     m_glFmt(GL_RGBA)
+@@ -64,11 +73,21 @@ COGLTexture::COGLTexture(uint32_t dwWidth, uint32_t dwHeight, TextureUsage usage
+ 
+    glBindTexture(GL_TEXTURE_2D, m_dwTextureName);
+    /* storage only: the pixels come with the first update */
++   uint64_t stat_from = rice_stats > 0 ? rice_statNow() : 0;
+    glTexImage2D(GL_TEXTURE_2D, 0, m_glFmt, m_dwCreatedTextureWidth, m_dwCreatedTextureHeight, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
++   if (rice_stats > 0) rice_statUpload(rice_statNow() - stat_from, m_dwCreatedTextureWidth, m_dwCreatedTextureHeight);
++   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
++   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
++   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
++   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
++   rice_textureEpoch++;
++
+ }
+ 
+ COGLTexture::~COGLTexture()
+ {
++    rice_textureEpoch++;
++
+     // FIXME: If usage is AS_RENDER_TARGET, we need to destroy the pbuffer
+ 
+     glDeleteTextures(1, &m_dwTextureName );
+@@ -104,6 +123,7 @@ void COGLTexture::EndUpdate(DrawInfo *di)
+     COGLGraphicsContext *pcontext = (COGLGraphicsContext *)(CGraphicsContext::g_pGraphicsContext); // we need this to check if the GL extension is available
+ 
+     glBindTexture(GL_TEXTURE_2D, m_dwTextureName);
++    rice_textureEpoch++; /* bound behind BindTexture */
+ 
+     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+ 
+@@ -120,7 +140,9 @@ void COGLTexture::EndUpdate(DrawInfo *di)
+ 
+     // Copy the image data from main memory to video card texture memory
+     //GL_BGRA_IMG works on Adreno but not inside profiler.
++    uint64_t stat_from = rice_stats > 0 ? rice_statNow() : 0;
+     glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, m_dwCreatedTextureWidth, m_dwCreatedTextureHeight, GL_RGBA, GL_UNSIGNED_BYTE, m_pTexture);
++    if (rice_stats > 0) rice_statUpload(rice_statNow() - stat_from, m_dwCreatedTextureWidth, m_dwCreatedTextureHeight);
+ }
+ 
+ 
+diff --git a/gles2rice/src/RDP_Texture.h b/gles2rice/src/RDP_Texture.h
+index 1b31224..7c75a26 100644
+--- a/gles2rice/src/RDP_Texture.h
++++ b/gles2rice/src/RDP_Texture.h
+@@ -926,7 +926,7 @@ void DLParser_TexRect(Gfx *gfx)
+ {
+    uint8_t *rdram_u8 = (uint8_t*)gfx_info.RDRAM;
+ 
+-   if( !status.bCIBufferIsRendered )
++   if( !status.bCIBufferIsRendered && !CRender::g_pRender->TennisSpriteStart() )
+       g_pFrameBufferManager->ActiveTextureBuffer();
+ 
+    status.primitiveType = PRIM_TEXTRECT;
+diff --git a/gles2rice/src/RSP_GBI0.h b/gles2rice/src/RSP_GBI0.h
+index e5ff547..4ff5dbe 100644
+--- a/gles2rice/src/RSP_GBI0.h
++++ b/gles2rice/src/RSP_GBI0.h
+@@ -543,8 +543,7 @@ void RSP_GBI1_Tri1(Gfx *gfx)
+ 
+     __RSP.PC[__RSP.PCi] = dwPC-8;
+ 
+-    if (bTrisAdded) 
+-        CRender::g_pRender->DrawTriangles();
++    rice_endTris(gfx);
+ }
+ 
+ 
+diff --git a/gles2rice/src/RSP_GBI1.h b/gles2rice/src/RSP_GBI1.h
+index 78961f5..81e1e3e 100644
+--- a/gles2rice/src/RSP_GBI1.h
++++ b/gles2rice/src/RSP_GBI1.h
+@@ -141,8 +141,7 @@ void RSP_GBI1_Tri2(Gfx *gfx)
+     __RSP.PC[__RSP.PCi] = dwPC-8;
+ 
+ 
+-    if (bTrisAdded) 
+-        CRender::g_pRender->DrawTriangles();
++    rice_endTris(gfx);
+ }
+ 
+ extern XVECTOR4 g_vtxNonTransformed[MAX_VERTS];
+diff --git a/gles2rice/src/RSP_GBI2.h b/gles2rice/src/RSP_GBI2.h
+index d399974..e74c616 100644
+--- a/gles2rice/src/RSP_GBI2.h
++++ b/gles2rice/src/RSP_GBI2.h
+@@ -234,8 +234,7 @@ void RSP_GBI2_Tri1(Gfx *gfx)
+ 
+         __RSP.PC[__RSP.PCi] = dwPC-8;
+ 
+-        if (bTrisAdded) 
+-            CRender::g_pRender->DrawTriangles();
++        rice_endTris(gfx);
+     }
+ }
+ 
+@@ -311,8 +310,7 @@ void RSP_GBI2_Tri2(Gfx *gfx)
+ 
+         __RSP.PC[__RSP.PCi] = dwPC-8;
+ 
+-        if (bTrisAdded) 
+-            CRender::g_pRender->DrawTriangles();
++        rice_endTris(gfx);
+     }
+ }
+ 
+diff --git a/gles2rice/src/RSP_Parser.cpp b/gles2rice/src/RSP_Parser.cpp
+index f2e8ead..8305b30 100644
+--- a/gles2rice/src/RSP_Parser.cpp
++++ b/gles2rice/src/RSP_Parser.cpp
+@@ -267,6 +267,45 @@ uint16_t  g_wRDPTlut[0x200];
+ uint32_t  g_dwRDPPalCrc[16];
+ 
+ #include "FrameBuffer.h"
++/* MinUI+: triangles usually come in short runs with only a vertex load, a matrix or a sync between them, which change
++ * nothing the GPU cares about (each triangle's vertices are copied out as it's added). Drawing each run on its own
++ * was most of the driver's work, so a run isn't drawn while the next thing to come is more triangles. */
++void DLParser_RDPPipeSync(Gfx *gfx);
++void RSP_GBI0_Mtx(Gfx *gfx);
++void RSP_GBI2_Mtx(Gfx *gfx);
++void RSP_GBI0_Vtx(Gfx *gfx);
++void RSP_GBI1_Vtx(Gfx *gfx);
++void RSP_GBI2_Vtx(Gfx *gfx);
++void RSP_GBI1_Tri1(Gfx *gfx);
++void RSP_GBI1_Tri2(Gfx *gfx);
++void RSP_GBI2_Tri1(Gfx *gfx);
++void RSP_GBI2_Tri2(Gfx *gfx);
++enum { RICE_BATCH_MOST = 480, RICE_BATCH_LOOK = 8 }; /* (vertices, of the buffers' 1000; commands ahead) */
++static void rice_endTris(Gfx *gfx)
++{
++    if (gRSP.numVertices == 0)
++        return;
++    if (gRSP.numVertices < RICE_BATCH_MOST)
++    {
++        for (int i = 0; i < RICE_BATCH_LOOK; i++, gfx++)
++        {
++            RDPInstruction next = currentUcodeMap[gfx->words.cmd];
++            /* (those two words are sprites in Tri's clothing: see RSP_GBI2_Tri1, RSP_GBI2_Tri2) */
++            if (next == RSP_GBI2_Tri1 || next == RSP_GBI2_Tri2)
++            {
++                if ((gfx->words.w0 == 0x05000017 || gfx->words.w0 == 0x0600002f))
++                    break;
++                return;
++            }
++            if (next == RSP_GBI1_Tri1 || next == RSP_GBI1_Tri2)
++                return;
++            if (next != RSP_GBI0_Mtx && next != RSP_GBI2_Mtx && next != RSP_GBI0_Vtx && next != RSP_GBI1_Vtx && next != RSP_GBI2_Vtx && next != DLParser_RDPPipeSync)
++                break;
++        }
++    }
++    CRender::g_pRender->DrawTriangles();
++}
++
+ #include "RSP_GBI0.h"
+ #include "RSP_GBI1.h"
+ #include "RSP_GBI2.h"
+diff --git a/gles2rice/src/Render.cpp b/gles2rice/src/Render.cpp
+index 4d6d167..712e25e 100644
+--- a/gles2rice/src/Render.cpp
++++ b/gles2rice/src/Render.cpp
+@@ -68,6 +68,8 @@ CRender::CRender() :
+     m_dwMinFilter(FILTER_POINT),
+     m_dwMagFilter(FILTER_POINT),
+     m_dwAlpha(0xFF),
++    m_tennisCapture(false),
++    m_tennisReady(false),
+     m_Mux(0),
+     m_bBlendModeValid(false)
+ {
+@@ -474,6 +476,26 @@ bool CRender::RemapTextureCoordinate
+     }
+ }
+ 
++/* Mario Tennis draws its fire, sparks and dust one at a time: the sprite into a small
++ * image of its own, that image over the screen as sprite + picture * (1 - sprite) with
++ * tile+1 holding that piece of the screen read from memory. 18-40 images a frame, each a
++ * render target switch the Mali pays dearly for. The same result is the sprite drawn
++ * straight on the screen with the GPU's blending, with no target and no read back. */
++#define TENNIS_SPRITE_RGB(mux) ((mux) == 0x0011e223ffc7f7fbULL || (mux) == 0x0030fe61fffffffbULL)
++#define TENNIS_SPRITE_OVER 0x00157ec0f1fff278ULL
++
++bool CRender::TennisSpriteStart(void)
++{
++    if( options.enableHackForGames != HACK_FOR_MARIO_TENNIS || !status.bHandleN64RenderTexture
++          || !TENNIS_SPRITE_RGB(m_Mux) || g_CI.dwSize != G_IM_SIZ_16b )
++        return false;
++
++    m_tennisCapture = true;
++    status.bHandleN64RenderTexture = false;
++    status.bCIBufferIsRendered = true;
++    return true;
++}
++
+ bool CRender::TexRect(int nX0, int nY0, int nX1, int nY1, float fS0, float fT0, float fScaleS, float fScaleT, bool colorFlag, uint32_t diffuseColor)
+ {
+     if( options.enableHackForGames == HACK_FOR_DUKE_NUKEM )
+@@ -505,7 +527,9 @@ bool CRender::TexRect(int nX0, int nY0, int nX1, int nY1, float fS0, float fT0,
+             return true;
+     }
+ 
+-    PrepareTextures();
++    bool tennisOver = m_tennisReady && m_Mux == TENNIS_SPRITE_OVER && !status.bHandleN64RenderTexture;
++    if( !tennisOver )
++        PrepareTextures();
+ 
+     if( status.bHandleN64RenderTexture && g_pRenderTextureInfo->CI_Info.dwSize == G_IM_SIZ_8b ) 
+         return true;
+@@ -547,7 +571,8 @@ bool CRender::TexRect(int nX0, int nY0, int nX1, int nY1, float fS0, float fT0,
+     // Scale to Actual texture coords
+     // The two cases are to handle the oversized textures hack on voodoos
+ 
+-    SetCombinerAndBlender();
++    if( !tennisOver )
++        SetCombinerAndBlender();
+     
+ 
+     if( gRDP.otherMode.cycle_type  >= G_CYC_COPY || !gRDP.otherMode.z_cmp )
+@@ -694,6 +719,48 @@ bool CRender::TexRect(int nX0, int nY0, int nX1, int nY1, float fS0, float fT0,
+     }
+ 
+ 
++    if( m_tennisCapture )
++    {
++        m_tennisCapture = false;
++        m_tennisTexture = TileTextureName(gRSP.curTile);
++        m_tennisReady = m_tennisTexture != 0;
++        m_tennisFlagU = TileUFlags[gRSP.curTile];
++        m_tennisFlagV = TileVFlags[gRSP.curTile];
++        m_tennisFilter = fScaleS >= 1 && fScaleT >= 1 ? FILTER_POINT : m_dwMagFilter;
++        m_tennisU0 = m_texRectTex1UV[0].u;
++        m_tennisU = m_texRectTex1UV[1].u;
++        m_tennisV0 = m_texRectTex1UV[0].v;
++        m_tennisV1 = m_texRectTex1UV[1].v;
++        m_tennisTint[0] = ((gRDP.primitiveColor>>16)&0xFF)/255.0f;
++        m_tennisTint[1] = ((gRDP.primitiveColor>>8)&0xFF)/255.0f;
++        m_tennisTint[2] = (gRDP.primitiveColor&0xFF)/255.0f;
++        ZBufferEnable(gRSP.bZBufferEnabled);
++        return true;
++    }
++
++    if( tennisOver )
++    {
++        float over = ((gRDP.primitiveColor>>24)&0xFF)/255.0f;
++        float tint[3] = { m_tennisTint[0]*over, m_tennisTint[1]*over, m_tennisTint[2]*over };
++        TextureFilter dwFilter = m_dwMagFilter, dwMinFilter = m_dwMinFilter;
++
++        m_tennisReady = false;
++        m_pColorCombiner->InitCombinerSpriteOver(tint);
++        BindTennisSprite(m_tennisTexture, m_tennisFlagU, m_tennisFlagV);
++        m_dwMagFilter = m_dwMinFilter = m_tennisFilter;
++        ApplyTextureFilter();
++        SetVertexTextureUVCoord(g_texRectTVtx[0], m_tennisU0, m_tennisV0);
++        SetVertexTextureUVCoord(g_texRectTVtx[1], m_tennisU, m_tennisV0);
++        SetVertexTextureUVCoord(g_texRectTVtx[2], m_tennisU, m_tennisV1);
++        SetVertexTextureUVCoord(g_texRectTVtx[3], m_tennisU0, m_tennisV1);
++        ApplyRDPScissor(false);
++        bool done = RenderTexRect();
++        m_dwMagFilter = dwFilter;
++        m_dwMinFilter = dwMinFilter;
++        ZBufferEnable(gRSP.bZBufferEnabled);
++        return done;
++    }
++
+     bool res;
+     TurnFogOnOff(false);
+     if( TileUFlags[gRSP.curTile]==TEXTURE_UV_FLAG_CLAMP && TileVFlags[gRSP.curTile]==TEXTURE_UV_FLAG_CLAMP && options.forceTextureFilter == FORCE_DEFAULT_FILTER )
+@@ -851,6 +918,12 @@ void CRender::StartDrawSimple2DTexture(float x0, float y0, float x1, float y1, f
+         g_texRectTVtx[2].tcord[0].v *= info.scaleY;
+         g_texRectTVtx[3].tcord[0].u *= info.scaleX;
+         g_texRectTVtx[3].tcord[0].v *= info.scaleY;
++        if( info.flipV )
++        {
++            float top = info.bufferHeight/txtr.m_fTexHeight;
++            for( int i=0; i<4; i++ )
++                g_texRectTVtx[i].tcord[0].v = top - g_texRectTVtx[i].tcord[0].v;
++        }
+     }
+ 
+     g_texRectTVtx[0].z = g_texRectTVtx[1].z = g_texRectTVtx[2].z = g_texRectTVtx[3].z = z;
+@@ -1224,6 +1297,8 @@ void SetVertexTextureUVCoord(TexCord &dst, const TexCord &src, int tile, TxtrCac
+ 
+         s *= info.scaleX;
+         t *= info.scaleY;
++        if( info.flipV )
++            t = info.bufferHeight/txtr.m_fTexHeight - t;
+     }
+ 
+     dst.u = s;
+diff --git a/gles2rice/src/Render.h b/gles2rice/src/Render.h
+index 3530742..1162f01 100644
+--- a/gles2rice/src/Render.h
++++ b/gles2rice/src/Render.h
+@@ -171,6 +171,18 @@ public:
+     bool DrawTriangles();
+     virtual bool RenderFlushTris()=0;
+ 
++    /* Mario Tennis' effects: see TennisSpriteStart */
++    bool TennisSpriteStart(void);
++    virtual uint32_t TileTextureName(uint32_t dwTile) { return 0; }
++    virtual void BindTennisSprite(uint32_t texture, TextureUVFlag flagU, TextureUVFlag flagV) {}
++    bool m_tennisCapture;
++    bool m_tennisReady;
++    uint32_t m_tennisTexture;
++    TextureUVFlag m_tennisFlagU, m_tennisFlagV;
++    TextureFilter m_tennisFilter;
++    float m_tennisU, m_tennisV0, m_tennisV1, m_tennisU0;
++    float m_tennisTint[3];
++
+     bool TexRect(int nX0, int nY0, int nX1, int nY1, float fS0, float fT0, float fScaleS, float fScaleT, bool colorFlag, uint32_t difcolor);
+     bool TexRectFlip(int nX0, int nY0, int nX1, int nY1, float fS0, float fT0, float fS1, float fT1);
+     bool FillRect(int nX0, int nY0, int nX1, int nY1, uint32_t dwColor);
+diff --git a/gles2rice/src/RenderBase.cpp b/gles2rice/src/RenderBase.cpp
+index 54b6957..84c46b7 100644
+--- a/gles2rice/src/RenderBase.cpp
++++ b/gles2rice/src/RenderBase.cpp
+@@ -962,9 +962,9 @@ void ProcessVertexDataDKR(uint32_t dwAddr, uint32_t dwV0, uint32_t dwNum)
+ 
+         if (gRSP.bLightingEnable)
+         {
+-            g_normal.x = (char)r; //norma.nx;
+-            g_normal.y = (char)g; //norma.ny;
+-            g_normal.z = (char)b; //norma.nz;
++            g_normal.x = (signed char)r; //norma.nx;
++            g_normal.y = (signed char)g; //norma.ny;
++            g_normal.z = (signed char)b; //norma.nz;
+ 
+             Vec3TransformNormal(g_normal, matWorldProject)
+                 g_dwVtxDifColor[i] = LightVert(g_normal, i);
+@@ -1102,10 +1102,10 @@ typedef union
+     
+     struct
+     {
+-        char na;    // A
+-        char nz;    // B
+-        char ny;    // G
+-        char nx;    // R
++        signed char na;    // A
++        signed char nz;    // B
++        signed char ny;    // G
++        signed char nx;    // R
+     };
+ } RS_Vtx_Color;
+ 
+diff --git a/gles2rice/src/RenderTexture.cpp b/gles2rice/src/RenderTexture.cpp
+index b3ced8d..9e221b6 100644
+--- a/gles2rice/src/RenderTexture.cpp
++++ b/gles2rice/src/RenderTexture.cpp
+@@ -21,18 +21,71 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
+ #include "Debugger.h"
+ #include "FrameBuffer.h"
+ #include "OGLTexture.h"
++#include "Video.h"
++#include "Render.h"
+ 
+ // ===========================================================================
++/* MinUI+: rendering into a texture, for the effects games draw off-screen
++ * (Mario Tennis' player shadows). The target holds the picture with the N64's
++ * top row first, so games can sample it with their usual coordinates: the
++ * vertex shader flips Y while one of these is bound (rice_setRenderFlip). */
++extern void rice_setRenderFlip(bool flip);
++
++/* the screen's sizes, kept while drawing to a target */
++static unsigned short rice_screenWidth, rice_screenHeight, rice_viWidth, rice_viHeight;
++extern "C" void rglSyncFramebuffer(void);
++
++static bool rice_inTarget = false;
++
++/* the size of the screen, which uDisplayWidth isn't while a target is being drawn */
++void rice_screenSize(uint32_t *width, uint32_t *height)
++{
++    *width  = rice_inTarget ? rice_screenWidth  : windowSetting.uDisplayWidth;
++    *height = rice_inTarget ? rice_screenHeight : windowSetting.uDisplayHeight;
++}
++
++/* Set when the game closes: the context and the process are going away, so the
++ * textures are left to them. */
++bool rice_renderTargetsClosing = false;
++
++/* Games start these over every frame, and making a framebuffer is the slow part,
++ * so a finished one waits here for the next of its size. */
++#define RICE_RENDER_POOL 8
++static struct {
++    COGLTexture *texture;
++    unsigned int fbo, depth;
++    int width, height;
++} rice_renderPool[RICE_RENDER_POOL];
++
+ COGLRenderTexture::COGLRenderTexture(int width, int height, RenderTextureInfo* pInfo, TextureUsage usage)
+     :   CRenderTexture(width, height, pInfo, usage),
+-        m_pOGLTexture(NULL)
++        m_pOGLTexture(NULL),
++        m_fbo(0),
++        m_depth(0)
+ {
+-    if( usage == AS_BACK_BUFFER_SAVE )
++    for( int i=0; i<RICE_RENDER_POOL; i++ )
++    {
++        if( rice_renderPool[i].texture && rice_renderPool[i].width == width && rice_renderPool[i].height == height )
++        {
++            m_pTexture = m_pOGLTexture = rice_renderPool[i].texture;
++            m_fbo = rice_renderPool[i].fbo;
++            m_depth = rice_renderPool[i].depth;
++            rice_renderPool[i].texture = NULL;
++            break;
++        }
++    }
++    if( !m_pOGLTexture )
+     {
+         m_pTexture = m_pOGLTexture = new COGLTexture(width, height, usage);
+-        if( !m_pTexture )
+-            TRACE0("Error to create OGL render_texture");
++        if( m_pOGLTexture )
++        {
++            glBindTexture(GL_TEXTURE_2D, m_pOGLTexture->m_dwTextureName);
++            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
++            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
++        }
+     }
++    if( !m_pTexture )
++        TRACE0("Error to create OGL render_texture");
+ 
+     m_width = width;
+     m_height = height;
+@@ -47,26 +100,139 @@ COGLRenderTexture::~COGLRenderTexture()
+         SetAsRenderTarget(false);
+     }
+ 
++    for( int i=0; i<RICE_RENDER_POOL && m_fbo; i++ )
++    {
++        if( !rice_renderPool[i].texture )
++        {
++            rice_renderPool[i].texture = m_pOGLTexture;
++            rice_renderPool[i].fbo = m_fbo;
++            rice_renderPool[i].depth = m_depth;
++            rice_renderPool[i].width = m_width;
++            rice_renderPool[i].height = m_height;
++            m_pTexture = NULL;
++            m_pOGLTexture = NULL;
++            m_fbo = 0;
++            m_depth = 0;
++            m_beingRendered = false;
++            return;
++        }
++    }
++
+     ShutdownPBuffer();
+     /* made with new: its destructor gives back the GL texture too */
+-    delete m_pTexture;
++    if( !rice_renderTargetsClosing )
++        delete m_pTexture;
+     m_pTexture      = NULL;
+     m_pOGLTexture   = NULL;
+     m_beingRendered = false;
+ }
+ 
++/* a target starts out holding this, not what it held last (and a clear also
++ * saves the GPU from loading the old pixels back in) */
++void rice_clearRenderTarget(uint32_t color)
++{
++    GLboolean depthMask = GL_TRUE;
++    glGetBooleanv(GL_DEPTH_WRITEMASK, &depthMask);
++    glDisable(GL_SCISSOR_TEST);
++    glDepthMask(GL_TRUE);
++    glClearColor(((color>>16)&0xFF)/255.0f, ((color>>8)&0xFF)/255.0f, (color&0xFF)/255.0f, ((color>>24)&0xFF)/255.0f);
++    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
++    glDepthMask(depthMask);
++    glEnable(GL_SCISSOR_TEST);
++}
++
+ bool COGLRenderTexture::InitPBuffer( void )
+ {
++    if( !m_pOGLTexture )
++        return false;
++
++    glGenRenderbuffers(1, &m_depth);
++    glBindRenderbuffer(GL_RENDERBUFFER, m_depth);
++    glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT16,
++        m_pOGLTexture->m_dwCreatedTextureWidth, m_pOGLTexture->m_dwCreatedTextureHeight);
++
++    glGenFramebuffers(1, &m_fbo);
++    glBindFramebuffer(GL_FRAMEBUFFER, m_fbo);
++    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, m_pOGLTexture->m_dwTextureName, 0);
++    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, m_depth);
++
++    if( glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE )
++    {
++        glBindFramebuffer(GL_FRAMEBUFFER, 0);
++        ShutdownPBuffer();
++        return false;
++    }
++
+     return true;
+ }
+ 
+ void COGLRenderTexture::ShutdownPBuffer(void)
+ {
++    if( m_fbo )
++        glDeleteFramebuffers(1, &m_fbo);
++    if( m_depth )
++        glDeleteRenderbuffers(1, &m_depth);
++    m_fbo = 0;
++    m_depth = 0;
+ }
+ 
+ bool COGLRenderTexture::SetAsRenderTarget(bool enable)
+ {
+-   return true;
++    if( enable == m_beingRendered )
++        return true;
++
++    if( enable )
++    {
++        if( !m_fbo && !InitPBuffer() )
++            return false;
++
++        glBindFramebuffer(GL_FRAMEBUFFER, m_fbo);
++        rice_inTarget = true;
++        rice_screenWidth  = windowSetting.uDisplayWidth;
++        rice_screenHeight = windowSetting.uDisplayHeight;
++        rice_viWidth      = windowSetting.uViWidth;
++        rice_viHeight     = windowSetting.uViHeight;
++        windowSetting.uDisplayWidth  = m_width;
++        windowSetting.uDisplayHeight = m_height;
++        windowSetting.uViWidth  = m_width;
++        windowSetting.uViHeight = m_height;
++        rice_setRenderFlip(true);
++    }
++    else
++    {
++        glBindFramebuffer(GL_FRAMEBUFFER, 0);
++        rice_inTarget = false;
++        windowSetting.uDisplayWidth  = rice_screenWidth;
++        windowSetting.uDisplayHeight = rice_screenHeight;
++        windowSetting.uViWidth  = rice_viWidth;
++        windowSetting.uViHeight = rice_viHeight;
++        rice_setRenderFlip(false);
++    }
++
++    status.curScissor = UNKNOWN_SCISSOR;
++    m_beingRendered = enable;
++    return true;
++}
++
++/* For games that use the screen as a texture, only when they ask for it: Mario
++ * Tennis' replay wipes, Banjo-Kazooie's jigsaw transition. */
++void COGLRenderTexture::CopyScreen(int width, int height)
++{
++    if( !m_pOGLTexture )
++        return;
++
++    /* glsm holds framebuffer binds back until its next draw; this copy isn't one */
++    GLint target = 0, bound = 0;
++    rglSyncFramebuffer();
++    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &target);
++    glGetIntegerv(GL_TEXTURE_BINDING_2D, &bound);
++    glBindFramebuffer(GL_FRAMEBUFFER, 0);
++    rglSyncFramebuffer();
++    glBindTexture(GL_TEXTURE_2D, m_pOGLTexture->m_dwTextureName);
++    glCopyTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 0, 0, width, height);
++    glBindTexture(GL_TEXTURE_2D, bound);
++    glBindFramebuffer(GL_FRAMEBUFFER, target);
++    gRDP.textureIsChanged = true;
+ }
+ 
+ void COGLRenderTexture::LoadTexture(TxtrCacheEntry* pEntry)
+@@ -76,4 +242,3 @@ void COGLRenderTexture::LoadTexture(TxtrCacheEntry* pEntry)
+ void COGLRenderTexture::StoreToRDRAM(int infoIdx)
+ {
+ }
+-
+diff --git a/gles2rice/src/RenderTexture.h b/gles2rice/src/RenderTexture.h
+index 3de059b..d8757f6 100644
+--- a/gles2rice/src/RenderTexture.h
++++ b/gles2rice/src/RenderTexture.h
+@@ -41,6 +41,8 @@ typedef struct {
+ 
+     bool        isUsed;
+     uint32_t      knownHeight;
++    bool        flipV;      // copied from the screen, so the N64's top row is last
++    uint32_t    copyUsedAtFrame;
+ 
+     uint32_t      crcInRDRAM;
+     uint32_t      crcCheckedAtFrame;
+@@ -107,6 +109,7 @@ public:
+     bool SetAsRenderTarget(bool enable);
+     void LoadTexture(TxtrCacheEntry* pEntry);
+     void StoreToRDRAM(int infoIdx);
++    void CopyScreen(int width, int height);
+ 
+ protected:
+     bool InitPBuffer(void);
+@@ -115,6 +118,9 @@ protected:
+     int     m_widthCreated;
+     int     m_heightCreated;
+ 
++    unsigned int m_fbo;
++    unsigned int m_depth;
++
+ 
+     COGLTexture *m_pOGLTexture;
+ };
+diff --git a/gles2rice/src/RiceConfig.cpp b/gles2rice/src/RiceConfig.cpp
+index 6d33d14..e7e0275 100644
+--- a/gles2rice/src/RiceConfig.cpp
++++ b/gles2rice/src/RiceConfig.cpp
+@@ -36,6 +36,10 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
+ #include "TextureManager.h"
+ #include "Video.h"
+ 
++extern "C" int rice_offscreen; /* MinUI+: "Rice Off-Screen Effects": 0 off, 1 listed games, 2 all */
++bool rice_screenInRDRAM; /* see rice_storeScreen */
++extern "C" int rice_fast_textures; /* MinUI+: the "Rice Fast Textures" core option */
++
+ #ifdef _MSC_VER
+ #define strncasecmp _strnicmp
+ #endif
+@@ -232,6 +236,18 @@ void GenerateFrameBufferOptions(void)
+    if( currentRomOptions.N64RenderToTextureEmuType != TXT_BUF_NONE )
+       currentRomOptions.N64RenderToTextureEmuType = TXT_BUF_IGNORE;
+ 
++   /* MinUI+: off-screen effects cost a framebuffer switch each, so only the
++    * games that need them draw them */
++   bool banjo = strncasecmp((char*)g_curRomInfo.szGameName, "Banjo-Kazooie", 13) == 0 ||
++                strncasecmp((char*)g_curRomInfo.szGameName, "BANJO KAZOOIE", 13) == 0;
++   rice_screenInRDRAM = banjo && rice_offscreen != 0;
++   if( rice_offscreen == 2 || (rice_offscreen == 1 &&
++       (strncasecmp((char*)g_curRomInfo.szGameName, "MarioTennis", 11) == 0 || banjo)) )
++   {
++      currentRomOptions.N64RenderToTextureEmuType = TXT_BUF_NORMAL;
++      currentRomOptions.N64FrameBufferEmuType = FRM_BUF_BASIC;
++   }
++
+     frameBufferOptions.bUpdateCIInfo            = false;
+ 
+     frameBufferOptions.bCheckBackBufs           = false;
+@@ -483,6 +499,8 @@ void GenerateCurrentRomOptions()
+     currentRomOptions.bNormalCombiner           =g_curRomInfo.dwNormalCombiner;
+     currentRomOptions.bNormalBlender            =g_curRomInfo.dwNormalBlender;
+     currentRomOptions.bFastTexCRC               =g_curRomInfo.dwFastTextureCRC;
++    if (rice_fast_textures) /* (the rom ini that would set this is compiled out) */
++        currentRomOptions.bFastTexCRC = true;
+     currentRomOptions.bAccurateTextureMapping   =g_curRomInfo.dwAccurateTextureMapping;
+ 
+     options.enableHackForGames = NO_HACK_FOR_GAME;
+diff --git a/gles2rice/src/TextureManager.cpp b/gles2rice/src/TextureManager.cpp
+index 51c2c47..627daeb 100644
+--- a/gles2rice/src/TextureManager.cpp
++++ b/gles2rice/src/TextureManager.cpp
+@@ -1,3 +1,7 @@
++#include <glsm/glsmsym.h>
++#include "OGLTexture.h"
++#include <stdio.h>
++#include <stdlib.h>
+ /*
+ Copyright (C) 2003 Rice1964
+ 
+@@ -527,7 +531,7 @@ TxtrCacheEntry * CTextureManager::GetTexture(TxtrInfo * pgti, bool fromTMEM, boo
+             // Check if it is the same size,
+             RenderTextureInfo &info = gRenderTextureInfos[txtBufIdxToLoadFrom];
+             //if( info.pRenderTexture && info.CI_Info.dwAddr == pgti->Address && info.CI_Info.dwFormat == pgti->Format 
+-            if( info.pRenderTexture && info.CI_Info.dwFormat == pgti->Format 
++            if( info.pRenderTexture && (info.CI_Info.dwFormat == pgti->Format || pgti->Size == G_IM_SIZ_8b) /* (a game can draw 8-bit as one format and read it as another) */
+                 && info.CI_Info.dwSize == pgti->Size )
+             {
+                 info.txtEntry.ti = *pgti;
+@@ -536,6 +540,16 @@ TxtrCacheEntry * CTextureManager::GetTexture(TxtrInfo * pgti, bool fromTMEM, boo
+         }
+     }
+ 
++    if (options.enableHackForGames == HACK_FOR_MARIO_TENNIS && frameBufferOptions.bCheckBackBufs
++        && pgti->Format == G_IM_FMT_RGBA && pgti->Size == G_IM_SIZ_16b
++        && pgti->Pitch == g_uRecentCIInfoPtrs[0]->dwWidth*2
++        && g_pFrameBufferManager->FindRecentCIInfoIndex(pgti->Address) < 0)
++    {
++        RenderTextureInfo &info = gRenderTextureInfos[g_pFrameBufferManager->CopyScreenForAddress(pgti->Address)];
++        info.txtEntry.ti = *pgti;
++        return &info.txtEntry;
++    }
++
+     if (frameBufferOptions.bCheckBackBufs && g_pFrameBufferManager->CheckAddrInBackBuffers(pgti->Address, pgti->HeightToLoad*pgti->Pitch, false) >= 0)
+     {
+         if( !frameBufferOptions.bWriteBackBufToRDRAM )
+@@ -548,7 +562,7 @@ TxtrCacheEntry * CTextureManager::GetTexture(TxtrInfo * pgti, bool fromTMEM, boo
+                 // Check if it is the same size,
+                 RenderTextureInfo &info = gRenderTextureInfos[txtBufIdxToLoadFrom];
+                 //if( info.pRenderTexture && info.CI_Info.dwAddr == pgti->Address && info.CI_Info.dwFormat == pgti->Format 
+-                if( info.pRenderTexture && info.CI_Info.dwFormat == pgti->Format 
++                if( info.pRenderTexture && (info.CI_Info.dwFormat == pgti->Format || pgti->Size == G_IM_SIZ_8b)
+                     && info.CI_Info.dwSize == pgti->Size )
+                 {
+                     info.txtEntry.ti = *pgti;
+diff --git a/gles2rice/src/TextureManager.h b/gles2rice/src/TextureManager.h
+index 3d6dd32..1d37700 100644
+--- a/gles2rice/src/TextureManager.h
++++ b/gles2rice/src/TextureManager.h
+@@ -131,8 +131,10 @@ typedef struct TxtrCacheEntry
+ 
+     ~TxtrCacheEntry()
+     {
+-       if (pTexture)
+-          free(pTexture);
++       /* MinUI+: delete, not free, or the GL texture and its pixels were never given
++        * back. A render target's entry only borrows its texture. */
++       if (pTexture && !txtrBufIdx)
++          delete pTexture;
+        if (pEnhancedTexture)
+           free(pEnhancedTexture);
+ 
+diff --git a/gles2rice/src/gSP_rice.cpp b/gles2rice/src/gSP_rice.cpp
+index 247dfc6..2603cba 100644
+--- a/gles2rice/src/gSP_rice.cpp
++++ b/gles2rice/src/gSP_rice.cpp
+@@ -131,9 +131,9 @@ void ricegSPCIVertex(uint32_t v, uint32_t n, uint32_t v0)
+ 
+       if( gRSP.bLightingEnable )
+       {
+-         g_normal.x = (char)r;
+-         g_normal.y = (char)g;
+-         g_normal.z = (char)b;
++         g_normal.x = (signed char)r;
++         g_normal.y = (signed char)g;
++         g_normal.z = (signed char)b;
+          {
+             Vec3TransformNormal(g_normal, gRSPmodelViewTop);
+             g_dwVtxDifColor[i] = LightVert(g_normal, i);
+diff --git a/gles2rice/src/typedefs.h b/gles2rice/src/typedefs.h
+index a2318e8..3a7d4db 100644
+--- a/gles2rice/src/typedefs.h
++++ b/gles2rice/src/typedefs.h
+@@ -45,7 +45,7 @@ typedef void* LPRICETEXTURE ;
+ typedef struct 
+ {
+     uint32_t dwRGBA, dwRGBACopy;
+-    char x,y,z;         // Direction
++    signed char x,y,z;         // Direction
+     uint8_t pad;
+ } N64Light;
+ 
+@@ -243,10 +243,11 @@ typedef struct
+ 
+ typedef struct
+ {
+-    char na;
+-    char nz;    // b
+-    char ny;    //g
+-    char nx;    //r
++    /* (signed: plain char isn't on ARM, and normals point both ways) */
++    signed char na;
++    signed char nz;    // b
++    signed char ny;    //g
++    signed char nx;    //r
+ }NormalStruct;
+ 
+ typedef struct
+diff --git a/libretro-common/glsm/glsm.c b/libretro-common/glsm/glsm.c
+index e289efe..ce1f86a 100644
+--- a/libretro-common/glsm/glsm.c
++++ b/libretro-common/glsm/glsm.c
+@@ -398,6 +398,12 @@ void rglBindSampler(	GLuint unit,
+  * Core in:
+  * OpenGL    : 1.0
+  */
++/* For GL calls that don't come through here but depend on the bound framebuffer */
++void rglSyncFramebuffer(void)
++{
++   bindFBO(GL_FRAMEBUFFER);
++}
++
+ void rglClear(GLbitfield mask)
+ {
+    bindFBO(GL_FRAMEBUFFER);
+@@ -1140,9 +1146,12 @@ void rglDeleteTextures(GLsizei n, const GLuint *textures)
+ #endif
+    int i, p;
+    for (i = 0; i < n; ++i) {
+-      if (textures[i] == gl_state.bind_textures.ids[active_texture]) {
+-         gl_state.bind_textures.ids[active_texture] = 0;
+-         gl_state.bind_textures.target[active_texture] = GL_TEXTURE_2D;
++      /* Deleting a texture unbinds it from every unit, and its name gets reused */
++      for (p = 0; p < glsm_max_textures; ++p) {
++         if (textures[i] == gl_state.bind_textures.ids[p]) {
++            gl_state.bind_textures.ids[p] = 0;
++            gl_state.bind_textures.target[p] = GL_TEXTURE_2D;
++         }
+       }
+       for (p = 0; p < MAX_FRAMEBUFFERS; ++p) {
+          if (framebuffers[p] != NULL) {
+diff --git a/libretro/libretro.c b/libretro/libretro.c
+index dbd6a84..0dd81b4 100644
+--- a/libretro/libretro.c
++++ b/libretro/libretro.c
+@@ -141,6 +141,8 @@ uint32_t CountPerScanlineOverride = 0;
+ retro_environment_t environ_cb                    = NULL;
+ /* mupen64plus-next core globals consumed by the adopted main.c/rom.c */
+ uint32_t CountPerOp = 0;
++int rice_offscreen = 1; /* MinUI+: see gles2rice's RiceConfig.cpp */
++int rice_fast_textures = 0; /* MinUI+: see gles2rice's RiceConfig.cpp */
+ /* ari64: alias GoldenEye's demand-paged segment onto the ROM (see
+  * tlb_speed_hacks). Read at startup; applied at dynarec init and on
+  * savestate load. */
+@@ -2813,6 +2815,21 @@ void update_variables(bool startup)
+           gfx_plugin_accuracy = 0;
+    }
+ 
++   var.key = "parallel-n64-rice-fasttex";
++   var.value = NULL;
++   if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
++      rice_fast_textures = !strcmp(var.value, "enabled");
++
++   var.key = "parallel-n64-rice-offscreen";
++   var.value = NULL;
++   if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
++      rice_offscreen = !strcmp(var.value, "all") ? 2 : !strcmp(var.value, "off") ? 0 : 1;
++
++   var.key = "parallel-n64-cpu-timing";
++   var.value = NULL;
++   if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
++      CountPerOp = strcmp(var.value, "auto") ? atoi(var.value) : 0;
++
+    var.key = "parallel-n64-virefresh";
+    var.value = NULL;
+ 
+diff --git a/libretro/libretro_core_options.h b/libretro/libretro_core_options.h
+index 7d68ef8..20f4f97 100644
+--- a/libretro/libretro_core_options.h
++++ b/libretro/libretro_core_options.h
+@@ -739,6 +739,50 @@ struct retro_core_option_v2_definition option_defs_us[] = {
+         },
+         "enabled"
+     },
++    {
++        CORE_NAME "-rice-fasttex",
++        "Rice Fast Textures",
++        NULL,
++        "Rice: textures are only looked up again when the game changes them, and big ones are checked by sampling. Faster; a texture the game changes only slightly may not update. Applies after a restart.",
++        NULL,
++        NULL,
++        {
++            {"disabled", NULL},
++            {"enabled", NULL},
++            { NULL, NULL },
++        },
++        "disabled"
++    },
++    {
++        CORE_NAME "-rice-offscreen",
++        "Rice Off-Screen Effects",
++        NULL,
++        "Effects some games draw to a texture first, such as the player shadows in Mario Tennis. Each one slows the frame a little, so Listed Games only draws them where they are needed.",
++        NULL,
++        NULL,
++        {
++           { "listed", "Listed Games" },
++           { "all", "All Games" },
++           { "off", "Off" },
++           { NULL, NULL },
++        },
++        "listed"
++    },
++    {
++        CORE_NAME "-cpu-timing",
++        "CPU Cycles Per Instruction",
++        NULL,
++        "How long the game thinks each instruction takes. Higher means less CPU to emulate per frame; a demanding game runs at a lower frame rate. Applies after a restart.",
++        NULL,
++        NULL,
++        {
++            {"auto", "Game's own"},
++            {"3", NULL},
++            {"4", NULL},
++            { NULL, NULL },
++        },
++        "auto"
++    },
+     {
+         CORE_NAME "-gfxplugin-accuracy",
+         "GFX Accuracy",

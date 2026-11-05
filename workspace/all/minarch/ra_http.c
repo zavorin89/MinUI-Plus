@@ -52,7 +52,10 @@ static int loadSSL(void) {
 	char* ssl_name = getenv("RA_LIBSSL");
 	void* crypto = dlopen(crypto_name ? crypto_name : "libcrypto.so.1.1", RTLD_NOW|RTLD_GLOBAL);
 	void* lib = dlopen(ssl_name ? ssl_name : "libssl.so.1.1", RTLD_NOW);
-	if (!crypto || !lib) return 0;
+	if (!crypto || !lib) {
+		fprintf(stderr, "RetroAchievements: no TLS library: %s\n", dlerror());
+		return 0;
+	}
 
 	#define LOAD(field, name) if (!(*(void**)&ssl.field = dlsym(lib, name))) return 0
 	LOAD(init_ssl, "OPENSSL_init_ssl");
@@ -135,7 +138,10 @@ int HTTP_request(const char* url, const char* post_data, const char* content_typ
 	host[host_len] = '\0';
 
 	int fd = openSocket(host, 443);
-	if (fd<0) return 0;
+	if (fd<0) {
+		fprintf(stderr, "RetroAchievements: can't reach %s (no network?)\n", host);
+		return 0;
+	}
 
 	int ok = 0;
 	SSL_CTX* ctx = ssl.ctx_new(ssl.client_method());
@@ -150,7 +156,10 @@ int HTTP_request(const char* url, const char* post_data, const char* content_typ
 	ssl.set_fd(conn, fd);
 	ssl.ctrl(conn, SSL_CTRL_SET_TLSEXT_HOSTNAME, TLSEXT_NAMETYPE_host_name, host); // SNI
 	ssl.set1_host(conn, host); // check the certificate is for this host
-	if (ssl.connect(conn)!=1 || ssl.get_verify_result(conn)!=X509_V_OK) goto done;
+	if (ssl.connect(conn)!=1 || ssl.get_verify_result(conn)!=X509_V_OK) {
+		fprintf(stderr, "RetroAchievements: secure connection to %s failed (is the clock right?)\n", host);
+		goto done;
+	}
 
 	size_t post_len = post_data ? strlen(post_data) : 0;
 	char header[1024];

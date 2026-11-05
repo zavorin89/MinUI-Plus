@@ -53,6 +53,7 @@ uint32_t RACache_consoleForTag(const char* tag) {
 		{"NGP", RC_CONSOLE_NEOGEO_POCKET}, {"NGPC", RC_CONSOLE_NEOGEO_POCKET},
 		{"VB", RC_CONSOLE_VIRTUAL_BOY}, {"PKM", RC_CONSOLE_POKEMON_MINI},
 		{"PS", RC_CONSOLE_PLAYSTATION}, // .chd discs are read by ra_chd.c
+		{"NDS", RC_CONSOLE_NINTENDO_DS}, // DraStic, through ndslayer, softcore only: see RA_init
 	};
 	for (size_t i=0; i<sizeof(map)/sizeof(map[0]); i++) {
 		if (exactMatch((char*)tag, (char*)map[i].tag)) return map[i].console;

@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -21,9 +22,56 @@ func fail(format string, args ...any) {
 	os.Exit(1)
 }
 
+// GitLab reports neither a checksum nor a size for release files, so a release's notes carry them on lines of their own.
+var (
+	checksumLine = regexp.MustCompile("(?i)^[\\s*`]*SHA-256:[\\s*`]*([0-9a-f]{64})[\\s*`]*$")
+	sizeLine     = regexp.MustCompile("(?i)^[\\s*`]*Size:[\\s*`]*([0-9]+)[\\s*`]*$")
+)
+
+// normalizeRelease turns a GitLab release into what update.sh reads: five lines (tag, asset, URL, SHA-256, size)
+// followed by the notes, without the checksum and size lines.
+func normalizeRelease(body io.Reader) (string, error) {
+	var parsed struct {
+		TagName     string `json:"tag_name"`
+		Description string `json:"description"`
+		Assets      struct {
+			Links []struct {
+				Name           string `json:"name"`
+				URL            string `json:"url"`
+				DirectAssetURL string `json:"direct_asset_url"`
+			} `json:"links"`
+		} `json:"assets"`
+	}
+	if err := json.NewDecoder(body).Decode(&parsed); err != nil {
+		return "", fmt.Errorf("decode GitLab release: %v", err)
+	}
+	var digest, size string
+	var notes []string
+	for _, line := range strings.Split(strings.ReplaceAll(parsed.Description, "\r\n", "\n"), "\n") {
+		if m := checksumLine.FindStringSubmatch(line); m != nil {
+			digest = strings.ToLower(m[1])
+		} else if m := sizeLine.FindStringSubmatch(line); m != nil {
+			size = m[1]
+		} else {
+			notes = append(notes, line)
+		}
+	}
+	for _, asset := range parsed.Assets.Links {
+		if strings.HasPrefix(asset.Name, "MinUIPlus-") && strings.HasSuffix(asset.Name, ".zip") {
+			url := asset.DirectAssetURL
+			if url == "" {
+				url = asset.URL
+			}
+			return fmt.Sprintf("%s\n%s\n%s\n%s\n%s\n%s\n", parsed.TagName, asset.Name, url, digest, size,
+				strings.TrimSpace(strings.Join(notes, "\n"))), nil
+		}
+	}
+	return "", fmt.Errorf("GitLab release has no MinUIPlus ZIP asset")
+}
+
 func main() {
 	timeout := flag.Duration("t", 30*time.Second, "total request timeout")
-	release := flag.Bool("release", false, "normalize a GitHub release for the updater")
+	release := flag.Bool("release", false, "normalize a GitLab release for the updater")
 	flag.Usage = func() { fmt.Fprintln(os.Stderr, "usage: https.elf [-t 30s] [-release] URL [OUTPUT]") }
 	flag.Parse()
 	if flag.NArg() < 1 || flag.NArg() > 2 {
@@ -81,27 +129,12 @@ func main() {
 		if flag.NArg() != 1 {
 			fail("-release writes to stdout and does not accept OUTPUT")
 		}
-		var parsed struct {
-			TagName string `json:"tag_name"`
-			Body    string `json:"body"`
-			Assets  []struct {
-				Name               string `json:"name"`
-				BrowserDownloadURL string `json:"browser_download_url"`
-				Digest             string `json:"digest"`
-				Size               int64  `json:"size"`
-			} `json:"assets"`
+		fields, err := normalizeRelease(resp.Body)
+		if err != nil {
+			fail("%v", err)
 		}
-		if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
-			fail("decode GitHub release: %v", err)
-		}
-		for _, asset := range parsed.Assets {
-			if strings.HasPrefix(asset.Name, "MinUIPlus-") && strings.HasSuffix(asset.Name, ".zip") {
-				digest := strings.TrimPrefix(asset.Digest, "sha256:")
-				fmt.Printf("%s\n%s\n%s\n%s\n%d\n%s\n", parsed.TagName, asset.Name, asset.BrowserDownloadURL, digest, asset.Size, parsed.Body)
-				return
-			}
-		}
-		fail("GitHub release has no MinUIPlus ZIP asset")
+		fmt.Print(fields)
+		return
 	}
 
 	var out io.Writer = os.Stdout

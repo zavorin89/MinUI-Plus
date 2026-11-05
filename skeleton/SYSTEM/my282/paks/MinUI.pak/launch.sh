@@ -9,7 +9,7 @@ export CORES_PATH="$SYSTEM_PATH/cores"
 export USERDATA_PATH="$SDCARD_PATH/.userdata/$PLATFORM"
 export SHARED_USERDATA_PATH="$SDCARD_PATH/.userdata/shared"
 export LOGS_PATH="$USERDATA_PATH/logs"
-export DATETIME_PATH="$SHARED_USERDATA_PATH/datetime.txt"
+export DATETIME_PATH="$SHARED_USERDATA_PATH/datetime-utc.txt" # in UTC, so a new time zone can't make it look ahead
 
 #######################################
 
@@ -35,18 +35,27 @@ reclock
 TIME_ZONE_PATH="$SHARED_USERDATA_PATH/.minui/time-zone.txt"
 [ -f "$TIME_ZONE_PATH" ] && export TZ="$(cat "$TIME_ZONE_PATH")"
 
-# the time as it was last saved, if the clock is behind it: the A30's clock stops while it's off, so this is the
-# best guess until wifi syncs it (the clock stays hidden until then). What the clock said is logged, to check that
+# the A30's clock keeps running while it's off. If it's now behind the time last saved, it didn't (eg. the battery ran
+# out): the saved time is the best guess, and the clock stays hidden until wifi syncs it or it's set in the settings.
+# It also stays hidden until one of those has happened once, or there's no telling if it was ever right. What it said
+# is logged, with the last few boots
 mkdir -p "$LOGS_PATH"
-BOOT_CLOCK=$(date +'%F %T')
+CLOCK_SYNCED="$SHARED_USERDATA_PATH/.minui/clock-synced"
+CLOCK_MANUAL="$SHARED_USERDATA_PATH/.minui/clock-manual" # set by hand with no time zone: shown as it was typed
+BOOT_CLOCK=$(date +'%F %T %Z')
 RESTORED=no
 if [ -f "$DATETIME_PATH" ]; then
-	SAVED=$(date -d "$(cat "$DATETIME_PATH")" +%s 2>/dev/null)
+	SAVED=$(TZ=UTC0 date -d "$(cat "$DATETIME_PATH")" +%s 2>/dev/null)
 	if [ -n "$SAVED" ] && [ "$(date +%s)" -lt "$SAVED" ]; then
-		date -s "$(cat "$DATETIME_PATH")" >/dev/null && hwclock --utc -w && RESTORED=yes
+		TZ=UTC0 date -s "$(cat "$DATETIME_PATH")" >/dev/null && hwclock --utc -w && RESTORED=yes
+		rm -f "$CLOCK_SYNCED" # (otherwise the guess would pass as the real time on the next boot)
 	fi
 fi
-echo "boot: the clock said $BOOT_CLOCK, last saved $(cat "$DATETIME_PATH" 2>/dev/null), restored: $RESTORED" > "$LOGS_PATH/clock.txt"
+[ "$RESTORED" = no ] && [ -f "$CLOCK_SYNCED" ] && { [ -f "$TIME_ZONE_PATH" ] || [ -f "$CLOCK_MANUAL" ]; } && [ "$(date +%s)" -gt 1735689600 ] && touch /tmp/minui_clock_ok
+{
+	tail -n 29 "$LOGS_PATH/clock.txt" 2>/dev/null
+	echo "boot: the clock said $BOOT_CLOCK, rtc $(cat /sys/class/rtc/rtc0/since_epoch 2>/dev/null), last saved $(cat "$DATETIME_PATH" 2>/dev/null) UTC, restored: $RESTORED, shown: $([ -f /tmp/minui_clock_ok ] && echo yes || echo no)"
+} > /tmp/minui_clock_log && mv /tmp/minui_clock_log "$LOGS_PATH/clock.txt"
 
 # the LEDs and what they can do (max_brightness 1 is only on or off), for the settings' Sleep light
 { for L in /sys/class/leds/*; do echo "$(basename "$L"): max_brightness $(cat "$L/max_brightness" 2>/dev/null), trigger $(cat "$L/trigger" 2>/dev/null)"; done; } > "$LOGS_PATH/leds.txt" 2>&1
@@ -159,7 +168,7 @@ while [ -f "$EXEC_PATH" ]; do
 		{ echo "=== `date +'%F %T'` minui exited with $STATUS"; tail -n 20 $LOGS_PATH/minui.txt; dmesg | tail -n 15; } >> $LOGS_PATH/minui-crash.txt
 	fi
 	reclock
-	echo `date +'%F %T'` > "$DATETIME_PATH"
+	echo `TZ=UTC0 date +'%F %T'` > "$DATETIME_PATH"
 	sync
 	
 	if [ -f $NEXT_PATH ]; then
@@ -167,7 +176,7 @@ while [ -f "$EXEC_PATH" ]; do
 		eval $CMD
 		rm -f $NEXT_PATH
 		reclock
-		echo `date +'%F %T'` > "$DATETIME_PATH"
+		echo `TZ=UTC0 date +'%F %T'` > "$DATETIME_PATH"
 		sync & # the game's saves reach the card while minui starts, instead of minui waiting on them
 	fi
 done

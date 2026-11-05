@@ -198,7 +198,7 @@ of where you left it. A picks a game up from that exact moment. In a game, holdi
 ### Settings (tap MENU)
 
 - **Wi-Fi**: the network you're on (or Off); A opens the Wi-Fi setup to scan, connect, or switch it off
-- **Updates**: after Wi-Fi connects, MinUI+ quietly checks its latest GitHub release. When a newer one exists,
+- **Updates**: after Wi-Fi connects, MinUI+ quietly checks its latest GitLab release. When a newer one exists,
   **Update Available!** appears above the systems. Open it to read the patch notes and confirm the update; the
   progress bar follows the verified download and installation. When it is ready, choose **Shut Down**, then turn
   the A30 back on to finish, or choose **Later** to return to MinUI+ and shut down when convenient
@@ -401,7 +401,7 @@ Some extra pieces live in `tools/`:
 ## Feedback and bugs
 
 MinUI+ is new, so bug reports help a lot. Open an issue at
-[github.com/zavorin89/MinUI-Plus/issues](https://github.com/zavorin89/MinUI-Plus/issues) with what you did, what
+[gitlab.com/zavorin89-group/MinUI-Plus/-/issues](https://gitlab.com/zavorin89-group/MinUI-Plus/-/issues) with what you did, what
 happened and the game, and attach `.userdata/my282/logs` from the card if you can.
 
 MinUI+ was built with a lot of help from AI (Claude), and tested on a real A30 every step of the way.

@@ -84,13 +84,17 @@ src/khronos:
 
 output/parallel_n64_libretro.so: src/parallel-n64 src/khronos
 	mkdir -p output
-	# (its whole-program link-time optimization, for an executable, drops a shared library's own exports: left out)
+	# (its whole-program link-time optimization is for an executable, and drops a shared library's own exports: plain link-time optimization instead)
 	# (and it insists every symbol is there at link: the GL ones come from minarch's preload at run time)
-	sed -i 's/-flto=4 -fwhole-program -fuse-linker-plugin//; s/ -Wl,--no-undefined//' src/parallel-n64/Makefile
+	sed -i 's/ -fwhole-program//; s/ -Wl,--no-undefined//' src/parallel-n64/Makefile
 	# (a frame the frontend's behind on isn't drawn at all, rather than drawn and hidden)
 	cd src/parallel-n64 && (git apply --reverse --check ../../parallel-n64-frameskip.patch 2>/dev/null || git apply ../../parallel-n64-frameskip.patch)
+	# (and its speed options: see default.cfg)
+	cd src/parallel-n64 && (git apply --reverse --check ../../parallel-n64-speed.patch 2>/dev/null || git apply ../../parallel-n64-speed.patch)
 	cd src/parallel-n64 && make platform=classic_armv7_a7 GL_LIB=-lm \
 		CC="$(CROSS_COMPILE)gcc $(ARM_CPU) -I$(CURDIR)/src/khronos" CXX="$(CROSS_COMPILE)g++ $(ARM_CPU) -I$(CURDIR)/src/khronos" AR=$(CROSS_COMPILE)ar -j8
+	# (its symbols, to read MINARCH_PROFILE's results with)
+	$(CROSS_COMPILE)nm -n --defined-only src/parallel-n64/parallel_n64_libretro.so > output/parallel_n64.symbols
 	$(CROSS_COMPILE)strip src/parallel-n64/parallel_n64_libretro.so -o $@
 
 clean:

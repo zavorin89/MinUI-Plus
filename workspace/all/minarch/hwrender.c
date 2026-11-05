@@ -7,12 +7,14 @@
 // itself is built without linking them too: MINARCH_GLES=1 (set by a GPU core's launch.sh) has MinArch load the
 // A30's libGLESv2.so for everything before the core is opened, and the core's GL calls find it there.
 
+#define _GNU_SOURCE // (dladdr)
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <dlfcn.h>
 #include <fcntl.h>
 #include <signal.h>
+#include <sys/time.h>
 #include <unistd.h>
 #include <ucontext.h>
 #include "sdl.h"
@@ -124,6 +126,70 @@ static void HW_crashed(int signal, siginfo_t* info, void* context) {
 	}
 #endif
 	_exit(1);
+}
+
+// MINARCH_PROFILE=<file>: where the CPU's time goes on the device itself, sampled by a timer and written to the file
+// when the game's closed: each 16-byte stretch of code and who called it, with its samples, then what's mapped where
+#define PROFILE_MOST (1<<18)
+typedef struct { uint32_t pc, lr; } ProfileSample;
+static ProfileSample* profile_samples = NULL;
+static volatile int profile_count = 0;
+static uint64_t profile_from = 0;
+static void HW_profileTick(int signal, siginfo_t* info, void* context) {
+#if defined(__arm__) && defined(__linux__)
+	int i = __sync_fetch_and_add(&profile_count, 1);
+	if (i<PROFILE_MOST) {
+		profile_samples[i].pc = ((ucontext_t*)context)->uc_mcontext.arm_pc & ~15u;
+		profile_samples[i].lr = ((ucontext_t*)context)->uc_mcontext.arm_lr & ~15u;
+	}
+#endif
+}
+static void HW_profileStart(void) {
+	if (!getenv("MINARCH_PROFILE") || profile_samples) return;
+	profile_samples = malloc(PROFILE_MOST * sizeof(ProfileSample));
+	if (!profile_samples) return;
+	struct sigaction tick = {0};
+	tick.sa_sigaction = HW_profileTick;
+	tick.sa_flags = SA_SIGINFO | SA_RESTART;
+	sigaction(SIGPROF, &tick, NULL);
+	struct itimerval every = { {0,1000}, {0,1000} }; // (as often as the kernel's timer goes)
+	setitimer(ITIMER_PROF, &every, NULL);
+	profile_from = getMicroseconds();
+}
+static int HW_compareSamples(const void* a, const void* b) {
+	const ProfileSample* sa = a;
+	const ProfileSample* sb = b;
+	if (sa->pc!=sb->pc) return sa->pc<sb->pc ? -1 : 1;
+	return sa->lr<sb->lr ? -1 : sa->lr>sb->lr;
+}
+static void HW_profileEnd(void) {
+	if (!profile_samples) return;
+	struct itimerval off = {{0,0},{0,0}};
+	setitimer(ITIMER_PROF, &off, NULL);
+	signal(SIGPROF, SIG_IGN);
+	int count = MIN(profile_count, PROFILE_MOST);
+	qsort(profile_samples, count, sizeof(ProfileSample), HW_compareSamples);
+	FILE* file = fopen(getenv("MINARCH_PROFILE"), "w");
+	if (file) {
+		fprintf(file, "%i samples in %i seconds\n", count, (int)((getMicroseconds() - profile_from) / 1000000));
+		for (int i=0; i<count; ) {
+			ProfileSample sample = profile_samples[i];
+			int from = i;
+			while (i<count && profile_samples[i].pc==sample.pc && profile_samples[i].lr==sample.lr) i++;
+			Dl_info at = {0}, caller = {0};
+			dladdr((void*)(uintptr_t)sample.pc, &at);
+			dladdr((void*)(uintptr_t)sample.lr, &caller);
+			fprintf(file, "%s|%x|%s|%s|%x|%i\n", at.dli_fname ? at.dli_fname : "?", sample.pc - (uint32_t)(uintptr_t)at.dli_fbase, at.dli_sname ? at.dli_sname : "",
+				caller.dli_fname ? caller.dli_fname : "?", sample.lr - (uint32_t)(uintptr_t)caller.dli_fbase, i - from);
+		}
+		FILE* maps = fopen("/proc/self/maps", "r");
+		char line[256];
+		while (maps && fgets(line, sizeof(line), maps)) fputs(line, file);
+		if (maps) fclose(maps);
+		fclose(file);
+	}
+	free(profile_samples);
+	profile_samples = NULL;
 }
 
 void HW_preload(void) {
@@ -278,6 +344,7 @@ void HW_start(void) {
 	if (hw.cb.context_reset) hw.cb.context_reset();
 	HW_makeCurrent(); // (in case the core's reset left another current)
 	gl.BindFramebuffer(GL_FRAMEBUFFER, hw.fbo);
+	HW_profileStart();
 }
 
 int HW_present(unsigned width, unsigned height, double aspect) {
@@ -328,6 +395,7 @@ const void* HW_readFrame(unsigned width, unsigned height, size_t* pitch) {
 
 void HW_quit(void) {
 	if (!hw.ready) return;
+	HW_profileEnd();
 	HW_makeCurrent();
 	if (hw.cb.context_destroy) hw.cb.context_destroy();
 	if (hw.depth) gl.DeleteRenderbuffers(1, &hw.depth);

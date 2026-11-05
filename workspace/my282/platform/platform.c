@@ -955,17 +955,25 @@ void PLAT_flip(SDL_Surface* IGNORED, int ignored) {
 
 // a GPU core draws straight into this one, so there's nothing to copy back or up. ABGR8888 is the format SDL's renderer
 // draws without swapping red and blue (it has no RGB565 of its own: asking for that gets a swapped one, and a blue game)
+static int gpu_filter = 0;
 SDL_Texture* PLAT_gpuTexture(int width, int height) {
 	SDL_Texture* texture = SDL_CreateTexture(vid.renderer, SDL_PIXELFORMAT_ABGR8888, SDL_TEXTUREACCESS_STATIC, width, height);
 	if (texture) SDL_SetTextureScaleMode(texture, SDL_ScaleModeNearest);
+	gpu_filter = 0;
 	return texture;
 }
-// as PLAT_flip, for a whole 2x picture (where Crisp and Sharp look the same) with no border or notification over it.
+// as PLAT_flip, for a whole 2x picture with no border or notification over it.
 // Anything else goes the long way, through PLAT_flip.
 int PLAT_flipGpuFrame(SDL_Texture* texture, int width, int height, double aspect, int bottom_up) {
-	if (vid.border || vid.notification || vid.sharpness==SHARPNESS_SOFT || aspect<=0) return 0;
-	int w = (int)(device_height * aspect + 0.5);
+	if (vid.border || vid.notification) return 0;
+	// a 2x frame fills this screen exactly, so Native (-1) and Fullscreen (0) are the same picture
+	int w = aspect>0 ? (int)(device_height * aspect + 0.5) : width*2;
 	if (w!=device_width || w!=width*2 || device_height!=height*2) return 0;
+	int filter = vid.sharpness==SHARPNESS_SOFT;
+	if (filter!=gpu_filter) { // (it stays on the texture, so only when it changes)
+		SDL_SetTextureScaleMode(texture, filter ? SDL_ScaleModeLinear : SDL_ScaleModeNearest);
+		gpu_filter = filter;
+	}
 	SDL_Rect src = {0,0,width,height};
 	SDL_Rect dst = {0,0,device_width,device_height};
 	int oy = (device_width-device_height)/2;
@@ -983,6 +991,21 @@ int PLAT_flipGpuFrame(SDL_Texture* texture, int width, int height, double aspect
 	}
 	SDL_RenderPresent(vid.renderer);
 	return 1;
+}
+
+// for all/ndslayer, which draws DraStic's screens itself
+int PLAT_getRotate(void) { return rotate; }
+void PLAT_drawNotification(void) { // for a layer that draws the frame itself
+	if (!vid.notification) return;
+	int oy = (device_width-device_height)/2;
+	int ox = -oy;
+	if (rotate) SDL_RenderCopyEx(vid.renderer,vid.notification,NULL,&(SDL_Rect){ox,oy,device_width,device_height},rotate*90,NULL,SDL_FLIP_NONE);
+	else SDL_RenderCopy(vid.renderer, vid.notification, NULL, NULL);
+}
+SDL_Texture* PLAT_getEffectTexture(int scale) { // the screen effect, NULL when it's off
+	effect.next_scale = scale;
+	updateEffect();
+	return effect.type==EFFECT_NONE ? NULL : vid.effect;
 }
 
 ///////////////////////////////
@@ -1017,7 +1040,20 @@ void PLAT_getBatteryStatus(int* is_charging, int* charge) {
 	// *charge = PWR_LOW_CHARGE;
 	// return;
 	
-	*is_charging = getInt("/sys/class/power_supply/usb/online");
+	// a wall charger can show up as ac rather than usb, and the battery says for itself, so any of them counts
+	char charging[16] = {0};
+	getFile("/sys/class/power_supply/battery/status", charging, 16);
+	int usb = getInt("/sys/class/power_supply/usb/online");
+	int ac = getInt("/sys/class/power_supply/ac/online");
+	*is_charging = usb || ac || prefixMatch("Charging", charging) || prefixMatch("Full", charging);
+	static int was_usb = -1, was_ac = -1;
+	static char was_charging[16];
+	if (usb!=was_usb || ac!=was_ac || strcmp(charging, was_charging)) { // what each says, whenever one changes (only the A30 itself can show that)
+		LOG_info("charging: %i (usb %i, ac %i, battery says %s)\n", *is_charging, usb, ac, charging);
+		was_usb = usb;
+		was_ac = ac;
+		memcpy(was_charging, charging, sizeof(was_charging));
+	}
 
 	int i = getInt("/sys/class/power_supply/battery/capacity");
 	// Preserve the driver's percentage instead of rounding up in 20% steps.

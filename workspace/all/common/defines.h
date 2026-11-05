@@ -30,8 +30,11 @@
 #define CLOCK_PATH SHARED_USERDATA_PATH "/.minui/clock.txt" // the clock beside wifi and the battery: 0 off, 1 12 hour, 2 24 hour
 #define SLEEP_LIGHT_PATH SHARED_USERDATA_PATH "/.minui/sleep-light.txt" // the light while asleep: 0 off, else on
 #define TIME_ZONE_PATH SHARED_USERDATA_PATH "/.minui/time-zone.txt" // the TZ rule picked in the settings (none: no syncing)
-#define CLOCK_SET_PATH "/tmp/minui_clock_set" // wifi synced the time since this boot: the clock shows only then
-#define UPDATE_AVAILABLE_PATH SHARED_USERDATA_PATH "/.minui/update-available.txt" // tag, asset, URL, SHA-256 and size from GitHub
+#define CLOCK_OK_PATH "/tmp/minui_clock_ok" // the clock kept running through the last power off and has been synced before: launch.sh
+#define CLOCK_SET_PATH "/tmp/minui_clock_set" // wifi synced the time since this boot, or it was set by hand
+#define CLOCK_SYNCED_PATH SHARED_USERDATA_PATH "/.minui/clock-synced" // it's been the real time, so it's trusted across power offs
+#define CLOCK_MANUAL_PATH SHARED_USERDATA_PATH "/.minui/clock-manual" // set by hand with no time zone: it shows as it was typed, wifi's sync ends that
+#define UPDATE_AVAILABLE_PATH SHARED_USERDATA_PATH "/.minui/update-available.txt" // tag, asset, URL, SHA-256 and size from GitLab
 #define UPDATE_NOTES_PATH SHARED_USERDATA_PATH "/.minui/update-notes.txt" // latest release's notes, shown before installing
 // RetroAchievements only counts hardcore unlocks from emulators it has approved, and MinUI+ isn't one, so hardcore is
 // hidden (and an old "on" ignored) until MinUI+ has its own: hardcore rules kept on this A30, unlocks sent as softcore
@@ -48,7 +51,7 @@
 #define FAUX_FAVORITES_PATH SDCARD_PATH "/Favorites"
 #define FAUX_MOSTPLAYED_PATH SDCARD_PATH "/Most Played" // opened from the info screen, not listed in the root
 #define FAUX_SWITCHER_PATH SDCARD_PATH "/Game Switcher" // opened by holding MENU, not listed in the root
-#define FAUX_UPDATE_PATH SDCARD_PATH "/Update Available!" // first in the system list only when GitHub has a newer release
+#define FAUX_UPDATE_PATH SDCARD_PATH "/Update Available!" // first in the system list only when GitLab has a newer release
 #define COLLECTIONS_PATH SDCARD_PATH "/Collections"
 #define BORDERS_PATH SDCARD_PATH "/Borders"
 

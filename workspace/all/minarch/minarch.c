@@ -576,6 +576,7 @@ static void State_write(void) { // from picoarch
 	int was_ff = fast_forward;
 	fast_forward = 0;
 
+	FILE *state_file = NULL;
 	void *state = calloc(1, state_size);
 	if (!state) {
 		LOG_error("Couldn't allocate memory for state\n");
@@ -585,21 +586,30 @@ static void State_write(void) { // from picoarch
 	char filename[MAX_PATH];
 	State_getPath(filename);
 	
-	FILE *state_file = fopen(filename, "w");
-	if (!state_file) {
-		LOG_error("Error opening state file: %s (%s)\n", filename, strerror(errno));
-		goto error;
-	}
-
 	if (!core.serialize(state, state_size)) {
 		LOG_error("Error creating save state: %s (%s)\n", filename, strerror(errno));
 		goto error;
 	}
 
-	if (state_size != fwrite(state, 1, state_size, state_file)) {
-		LOG_error("Error writing state data to file: %s (%s)\n", filename, strerror(errno));
+	// beside the old save until it's all on the card: losing power mid-write costs this save, not that one too
+	char tmp_name[MAX_PATH+8];
+	sprintf(tmp_name, "%s.tmp", filename);
+	state_file = fopen(tmp_name, "w");
+	if (!state_file) {
+		LOG_error("Error opening state file: %s (%s)\n", tmp_name, strerror(errno));
 		goto error;
 	}
+
+	if (state_size != fwrite(state, 1, state_size, state_file) || fflush(state_file) || fsync(fileno(state_file))) {
+		LOG_error("Error writing state data to file: %s (%s)\n", tmp_name, strerror(errno));
+		fclose(state_file);
+		state_file = NULL;
+		unlink(tmp_name);
+		goto error;
+	}
+	fclose(state_file);
+	state_file = NULL;
+	if (rename(tmp_name, filename)) LOG_error("Error replacing state file: %s (%s)\n", filename, strerror(errno));
 
 error:
 	if (state) free(state);
@@ -1077,6 +1087,12 @@ static int auto_level = AUTO_START;
 #define HW_SOUND_FRAMES 8 // the ring: it has to ride out slow frames, at 133ms of latency when it's full
 #define HW_SOUND_LOW 5 // below this many frames of sound, it skips
 #define HW_SKIP_MOST 2 // in a row
+#define HW_SOUND_DRY 2 // this few, it skips whatever else it's been doing
+#define HW_CAUGHT_UP 6 // frames since it last had to wait for room in the ring: games send sound in lumps, not every frame, so the ring dips even with time to spare
+static uint64_t hw_wait_seen = 0;
+static int hw_since_wait = 0;
+static uint64_t hw_worst_us = 0; // the longest frame's work, sound's wait left out
+static int hw_late = 0; // frames that took the time of two
 static int hw_skip = 0;
 static int hw_skip_row = 0;
 static int hw_skipped = 0;
@@ -1090,20 +1106,29 @@ static unsigned hw_frame_w = 0;
 static unsigned hw_frame_h = 0;
 static void HW_beforeFrame(void) {
 	if (!HW_active()) return;
-	hw_skip = !fast_forward && hw_skip_row<HW_SKIP_MOST && SND_queuedFrames()<HW_SOUND_LOW;
+	uint64_t waited = SND_waitedUs();
+	hw_since_wait = waited!=hw_wait_seen ? 0 : hw_since_wait + 1;
+	hw_wait_seen = waited;
+	int queued = SND_queuedFrames();
+	int behind = queued<HW_SOUND_DRY || (queued<HW_SOUND_LOW && hw_since_wait>=HW_CAUGHT_UP);
+	hw_skip = !fast_forward && hw_skip_row<HW_SKIP_MOST && behind;
 	hw_skip_row = hw_skip ? hw_skip_row + 1 : 0;
 	hw_skipped += hw_skip;
 }
 static void HW_afterFrame(uint64_t frame_us) {
 	if (!HW_active()) return;
 	hw_run_us += frame_us;
-	if (++hw_frames<600) return; // every 10 seconds or so, how it's going
 	uint64_t waited = SND_waitedUs();
-	LOG_info("hw: %i frames, each %ius: idle %ius, read back %ius, on screen %ius; %i drawn straight, %i skipped, sound ran dry %i times, %i frames of it queued\n", hw_frames, (int)(hw_run_us/hw_frames), (int)((waited-hw_waited)/hw_frames), (int)(HW_takeReadUs()/hw_frames), (int)(hw_flip_us/hw_frames), hw_direct, hw_skipped, SND_takeUnderruns(), SND_queuedFrames());
+	uint64_t frame_wait = waited - hw_wait_seen;
+	uint64_t work = frame_us>frame_wait ? frame_us - frame_wait : 0;
+	if (work>hw_worst_us) hw_worst_us = work;
+	hw_late += work>33333;
+	if (++hw_frames<600) return; // every 10 seconds or so, how it's going
+	LOG_info("hw: %i frames, each %ius: idle %ius, read back %ius, on screen %ius, worst %ius, %i late; %i drawn straight, %i skipped, sound ran dry %i times, %i frames of it queued\n", hw_frames, (int)(hw_run_us/hw_frames), (int)((waited-hw_waited)/hw_frames), (int)(HW_takeReadUs()/hw_frames), (int)(hw_flip_us/hw_frames), (int)hw_worst_us, hw_late, hw_direct, hw_skipped, SND_takeUnderruns(), SND_queuedFrames());
 	hw_waited = waited;
 	hw_direct = 0;
-	hw_frames = hw_skipped = 0;
-	hw_run_us = hw_flip_us = 0;
+	hw_frames = hw_skipped = hw_late = 0;
+	hw_run_us = hw_flip_us = hw_worst_us = 0;
 }
 
 static int auto_settle = 120; // the first two seconds of a game (loading, achievements signing in) say nothing
@@ -4592,6 +4617,7 @@ static int Menu_options(MenuList* list) {
 }
 
 static void Menu_scale(SDL_Surface* src, SDL_Surface* dst) {
+	if (!src || !src->pixels) return; // (the menu opened before the game's first frame)
 	// LOG_info("Menu_scale src: %ix%i dst: %ix%i\n", src->w,src->h,dst->w,dst->h);
 	
 	uint16_t* s = src->pixels;
@@ -5128,6 +5154,7 @@ static void Menu_loop(void) {
 	int status = STATUS_CONT; // TODO: no longer used?
 	int show_setting = 0;
 	int dirty = 1;
+	int title_scrolls = 0, title_width = 0;
 	int ignore_menu = 0;
 	int menu_start = 0;
 	
@@ -5296,30 +5323,11 @@ static void Menu_loop(void) {
 
 			int ox, oy;
 			int ow = GFX_blitHardwareGroup(screen, show_setting);
-			int max_width = screen->w - SCALE1(PADDING * 2) - ow;
+			int max_width = screen->w - SCALE1(PADDING * 2 + BUTTON_MARGIN) - ow; // a gap before the status pill
 			
-			char display_name[256];
-			int text_width = GFX_truncateText(font.large, rom_name, display_name, max_width, SCALE1(BUTTON_PADDING*2));
-			max_width = MIN(max_width, text_width);
-
+			title_scrolls = GFX_blitTitle(screen, rom_name, max_width);
+			title_width = max_width;
 			SDL_Surface* text;
-			text = TTF_RenderUTF8_Blended(font.large, display_name, COLOR_WHITE);
-			GFX_blitPill(ASSET_BLACK_PILL, screen, &(SDL_Rect){
-				SCALE1(PADDING),
-				SCALE1(PADDING),
-				max_width,
-				SCALE1(PILL_SIZE)
-			});
-			SDL_BlitSurface(text, &(SDL_Rect){
-				0,
-				0,
-				max_width-SCALE1(BUTTON_PADDING*2),
-				text->h
-			}, screen, &(SDL_Rect){
-				SCALE1(PADDING+BUTTON_PADDING),
-				SCALE1(PADDING+4)
-			});
-			SDL_FreeSurface(text);
 			
 			if (show_setting && !GetHDMI()) GFX_blitHardwareHints(screen, show_setting);
 			else {
@@ -5504,6 +5512,13 @@ static void Menu_loop(void) {
 	
 			GFX_flip(screen);
 			dirty = 0;
+		}
+		else if (title_scrolls) { // just its strip: the rest of the menu, and any preview, stay as drawn
+			SDL_Rect strip = { SCALE1(PADDING), SCALE1(PADDING), title_width, SCALE1(PILL_SIZE) };
+			SDL_BlitSurface(backing, &strip, screen, &(SDL_Rect){ strip.x, strip.y });
+			SDL_BlitSurface(menu.overlay, &strip, screen, &(SDL_Rect){ strip.x, strip.y });
+			GFX_blitTitle(screen, rom_name, title_width);
+			GFX_flip(screen);
 		}
 		else GFX_sync();
 		hdmimon();

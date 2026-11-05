@@ -1625,18 +1625,106 @@ static int autoResume(void) {
 // Their paks stay in Tools so they're listed there (and their launch.sh still runs each alone)
 static void freeThumbs(void);
 static void Carousel_quit(void);
+static void SetTime_open(SDL_Surface* screen);
 static void openTool(SDL_Surface* screen, char* name, char* game) {
 	SFX_forInput(1); // the tools click for moving, choosing and going back by themselves
-	if (exactMatch(name, "Controls.pak")) Controls_open(screen);
+	if (!name) SetTime_open(screen); // (no pak of its own)
+	else if (exactMatch(name, "Controls.pak")) Controls_open(screen);
 	else if (exactMatch(name, "Wi-Fi.pak")) Wifi_open(screen);
 	else if (exactMatch(name, "Box Art.pak")) BoxArt_open(screen, game);
 	else if (exactMatch(name, "RetroAchievements.pak")) RetroAchievements_open(screen);
 	SFX_forInput(0);
 	PAD_reset();
-	if (exactMatch(name, "Box Art.pak")) { // art it found or resized is read again
+	if (name && exactMatch(name, "Box Art.pak")) { // art it found or resized is read again
 		freeThumbs();
 		Carousel_quit();
 	}
+}
+// sets the clock that keeps running while the A30 is off, for anyone without Wi-Fi to sync it
+static int daysInMonth(int year, int month) {
+	static const int days[] = {31,28,31,30,31,30,31,31,30,31,30,31};
+	if (month==2 && ((year%4==0 && year%100!=0) || year%400==0)) return 29;
+	return days[month-1];
+}
+static void SetTime_open(SDL_Surface* screen) {
+	enum { FIELD_YEAR, FIELD_MONTH, FIELD_DAY, FIELD_HOUR, FIELD_MINUTE, FIELD_AMPM };
+	#define SET_TIME_YEAR_MIN 2026 // (launch.sh doesn't trust a clock from before 2025)
+	#define SET_TIME_YEAR_MAX 2100
+	time_t now = time(NULL);
+	struct tm tm = *localtime(&now);
+	int values[] = { MIN(MAX(tm.tm_year+1900, SET_TIME_YEAR_MIN), SET_TIME_YEAR_MAX), tm.tm_mon+1, tm.tm_mday, tm.tm_hour, tm.tm_min };
+	int hour24 = GFX_getClockMode()==CLOCK_24H;
+	int field_count = hour24 ? FIELD_AMPM : FIELD_AMPM+1;
+	int field = FIELD_YEAR;
+	int dirty = 1;
+	int show_setting = 0;
+	int result = 0; // 1 to set it, -1 to leave it
+	int two_w, four_w, ampm_w, slash_w, colon_w, text_h;
+	TTF_SizeUTF8(font.large, "00", &two_w, &text_h);
+	TTF_SizeUTF8(font.large, "0000", &four_w, NULL);
+	TTF_SizeUTF8(font.large, "AM", &ampm_w, NULL);
+	TTF_SizeUTF8(font.large, "/", &slash_w, NULL);
+	TTF_SizeUTF8(font.large, ":", &colon_w, NULL);
+	while (!result) {
+		GFX_startFrame();
+		PAD_poll();
+		int step = PAD_justRepeated(BTN_UP) ? 1 : (PAD_justRepeated(BTN_DOWN) ? -1 : 0);
+		if (PAD_justPressed(BTN_B)) result = -1;
+		else if (PAD_justPressed(BTN_A)) result = 1;
+		else if (PAD_justRepeated(BTN_LEFT)) { field = (field + field_count - 1) % field_count; dirty = 1; }
+		else if (PAD_justRepeated(BTN_RIGHT)) { field = (field + 1) % field_count; dirty = 1; }
+		else if (step) {
+			if (field==FIELD_YEAR) values[field] = SET_TIME_YEAR_MIN + (values[field] - SET_TIME_YEAR_MIN + step + (SET_TIME_YEAR_MAX-SET_TIME_YEAR_MIN+1)) % (SET_TIME_YEAR_MAX-SET_TIME_YEAR_MIN+1);
+			else if (field==FIELD_MONTH) values[field] = (values[field] - 1 + step + 12) % 12 + 1;
+			else if (field==FIELD_DAY) values[field] = (values[field] - 1 + step + daysInMonth(values[FIELD_YEAR], values[FIELD_MONTH])) % daysInMonth(values[FIELD_YEAR], values[FIELD_MONTH]) + 1;
+			else if (field==FIELD_HOUR) values[field] = (values[field] + step + 24) % 24;
+			else if (field==FIELD_MINUTE) values[field] = (values[field] + step + 60) % 60;
+			else values[FIELD_HOUR] = (values[FIELD_HOUR] + 12) % 24; // AM or PM
+			dirty = 1;
+		}
+		values[FIELD_DAY] = MIN(values[FIELD_DAY], daysInMonth(values[FIELD_YEAR], values[FIELD_MONTH])); // eg. Jan 31 to Feb
+		PWR_update(&dirty, &show_setting, NULL, NULL);
+		if (dirty) {
+			GFX_clear(screen);
+			int ow = GFX_blitHardwareGroup(screen, show_setting);
+			GFX_blitHeader(screen, "Set Time", ow);
+			if (show_setting && !GetHDMI()) GFX_blitHardwareHints(screen, show_setting);
+			GFX_blitButtonGroup((char*[]){ "B","CANCEL", "A","SET", NULL }, 1, screen, 1);
+			// year/month/day  hour:minute AM, the one being changed in a pill
+			int pad = SCALE1(BUTTON_PADDING)/2;
+			int widths[] = { four_w, two_w, two_w, two_w, two_w, ampm_w };
+			int gap = SCALE1(BUTTON_PADDING)*2;
+			int total = slash_w*2 + colon_w + gap;
+			for (int i=0; i<field_count; i++) total += widths[i] + pad*2;
+			if (!hour24) total += gap;
+			int x = (screen->w - total) / 2;
+			int y = (screen->h - text_h) / 2;
+			for (int i=0; i<field_count; i++) {
+				char label[8];
+				if (i==FIELD_AMPM) strcpy(label, values[FIELD_HOUR]<12 ? "AM" : "PM");
+				else if (i==FIELD_HOUR && !hour24) sprintf(label, "%i", values[i]%12 ? values[i]%12 : 12);
+				else sprintf(label, i==FIELD_YEAR ? "%i" : "%02i", values[i]);
+				int w = widths[i] + pad*2;
+				if (i==field) GFX_blitPill(ASSET_WHITE_PILL, screen, &(SDL_Rect){ x, (screen->h - SCALE1(PILL_SIZE)) / 2, w, SCALE1(PILL_SIZE) });
+				SDL_Surface* text = TTF_RenderUTF8_Blended(font.large, label, i==field ? COLOR_BLACK : COLOR_WHITE);
+				SDL_BlitSurface(text, NULL, screen, &(SDL_Rect){ x + (w - text->w) / 2, y });
+				SDL_FreeSurface(text);
+				x += w;
+				char* mark = i==FIELD_YEAR || i==FIELD_MONTH ? "/" : (i==FIELD_HOUR ? ":" : NULL);
+				if (mark) {
+					text = TTF_RenderUTF8_Blended(font.large, mark, COLOR_DARK_TEXT);
+					SDL_BlitSurface(text, NULL, screen, &(SDL_Rect){ x, y });
+					SDL_FreeSurface(text);
+					x += i==FIELD_HOUR ? colon_w : slash_w;
+				}
+				else if (i==FIELD_DAY || i==FIELD_MINUTE) x += gap;
+			}
+			GFX_flip(screen);
+			dirty = 0;
+		}
+		else GFX_sync();
+	}
+	if (result==1) PLAT_setDateTime(values[FIELD_YEAR], values[FIELD_MONTH], values[FIELD_DAY], values[FIELD_HOUR], values[FIELD_MINUTE], 0);
 }
 static int isTool(char* path) {
 	if (!prefixMatch(TOOLS_DIR "/", path)) return 0;
@@ -3843,6 +3931,53 @@ static void findCoreSaves(char* root, char* tag, char names[][MAX_PATH], int nam
 	}
 	closedir(d);
 }
+// DraStic keeps a game's saves in its own folder, by the game's name without its extension: backup/<name>.dsv and
+// savestates/<name>_<slot>.dss. The folder's the one NDS.pak/launch.sh runs it from
+#define NDS_TAG "NDS"
+static int ndsFolder(char* out, size_t size) {
+	char* folders[] = { SDCARD_PATH "/Emus/" PLATFORM "/NDS.pak/drastic", SDCARD_PATH "/Emus/" PLATFORM "/NDS.pak", PAKS_PATH "/Emus/NDS.pak" };
+	for (int i=0; i<3; i++) {
+		char file[MAX_PATH];
+		struct stat info;
+		snprintf(file, sizeof(file), "%s/drastic", folders[i]);
+		if (stat(file, &info) || !S_ISREG(info.st_mode)) continue;
+		snprintf(out, size, "%s", folders[i]);
+		return 1;
+	}
+	return 0;
+}
+static void ndsStem(const char* file, char* stem, size_t size) {
+	snprintf(stem, size, "%s", file);
+	char* dot = strrchr(stem, '.');
+	if (dot && dot>stem) *dot = '\0';
+}
+static void findNdsSaves(const char* stem, int states) {
+	char folder[MAX_PATH];
+	if (!ndsFolder(folder, sizeof(folder))) return;
+	char dir[MAX_PATH];
+	snprintf(dir, sizeof(dir), "%s/%s", folder, states ? "savestates" : "backup");
+	DIR* d = opendir(dir);
+	if (!d) return;
+	int len = strlen(stem);
+	struct dirent* e;
+	while ((e = readdir(d)) && delete_save_count<DELETE_MAX) {
+		if (strncmp(e->d_name, stem, len)) continue;
+		char* rest = e->d_name + len;
+		if (states) {
+			if (rest[0]!='_') continue;
+			int digits = strspn(rest+1, "0123456789");
+			if (!digits || strcmp(rest+1+digits, ".dss")) continue;
+		}
+		else if (strcmp(rest, ".dsv")) continue;
+		snprintf(delete_saves[delete_save_count++], MAX_PATH, "%s/%s", dir, e->d_name);
+	}
+	closedir(d);
+}
+static void findNdsConfig(const char* stem) { // the layer's settings for this one game
+	char path[MAX_PATH];
+	snprintf(path, sizeof(path), USERDATA_PATH "/NDS-layer/%s.cfg", stem);
+	if (exists(path) && delete_save_count<DELETE_MAX) snprintf(delete_saves[delete_save_count++], MAX_PATH, "%s", path);
+}
 // a multi-disc game's folder and everything in it
 static void removeTree(char* path) {
 	DIR* d = opendir(path);
@@ -3918,13 +4053,19 @@ static void deleteSelected(SDL_Surface* screen) {
 	delete_save_count = 0;
 	snprintf(dir, sizeof(dir), "%s/Saves/%s", SDCARD_PATH, tag);
 	findSaves(dir, names, name_count, 0); // in-game saves, clock
+	int is_nds = exactMatch(tag, NDS_TAG);
+	char nds_stem[MAX_PATH];
+	ndsStem(names[0], nds_stem, sizeof(nds_stem));
+	if (is_nds) findNdsSaves(nds_stem, 0);
 	int game_saves = delete_save_count;
 	findCoreSaves(SHARED_USERDATA_PATH, tag, names, name_count, 0); // save states
+	if (is_nds) findNdsSaves(nds_stem, 1);
 	int states = 0;
-	for (int i=game_saves; i<delete_save_count; i++) if (strstr(strrchr(delete_saves[i], '/'), ".st")) states += 1;
+	for (int i=game_saves; i<delete_save_count; i++) if (strstr(strrchr(delete_saves[i], '/'), ".st") || suffixMatch(".dss", delete_saves[i])) states += 1;
 	snprintf(dir, sizeof(dir), "%s/.minui/%s", SHARED_USERDATA_PATH, tag);
 	findSaves(dir, names, name_count, 0); // save state pictures, last slot used
 	findCoreSaves(USERDATA_PATH, tag, names, name_count, 1); // this game's own settings
+	if (is_nds) findNdsConfig(nds_stem);
 
 	int drop_saves = 0;
 	if (delete_save_count) {
@@ -4146,6 +4287,15 @@ static void renameSelected(SDL_Surface* screen) {
 	findCoreSaves(USERDATA_PATH, tag, names, 1, 1);
 	snprintf(save_dir, sizeof(save_dir), "%s/%s", BORDERS_PATH, tag);
 	findSaves(save_dir, names, 1, 0);
+	int nds_from = delete_save_count; // from here on they go by the name without its extension
+	char old_stem[MAX_PATH], new_stem[MAX_PATH];
+	ndsStem(old_save_name, old_stem, sizeof(old_stem));
+	ndsStem(new_save_name, new_stem, sizeof(new_stem));
+	if (exactMatch(tag, NDS_TAG)) {
+		findNdsSaves(old_stem, 0);
+		findNdsSaves(old_stem, 1);
+		findNdsConfig(old_stem);
+	}
 
 	// the game
 	if (is_dir && !exactMatch(old_save_name, new_save_name)) {
@@ -4175,7 +4325,8 @@ static void renameSelected(SDL_Surface* screen) {
 	for (int i=0; i<delete_save_count; i++) {
 		char* file = strrchr(delete_saves[i], '/') + 1;
 		char to[MAX_PATH];
-		snprintf(to, sizeof(to), "%.*s%s%s", (int)(file - delete_saves[i]), delete_saves[i], new_save_name, file + strlen(old_save_name));
+		int by_stem = i>=nds_from;
+		snprintf(to, sizeof(to), "%.*s%s%s", (int)(file - delete_saves[i]), delete_saves[i], by_stem ? new_stem : new_save_name, file + strlen(by_stem ? old_stem : old_save_name));
 		if (exists(to) && strcasecmp(to, delete_saves[i])) kept += 1; // never over another game's save
 		else rename(delete_saves[i], to);
 	}
@@ -4313,9 +4464,30 @@ static char* rumble_labels[] = { "Off", "1", "2", "3", "4", "5", "6", "7", "8", 
 #define RUMBLE_COUNT 11
 #define RUMBLE_DEFAULT 7
 typedef struct { char game[MAX_PATH]; char console[MAX_PATH]; char system_default[MAX_PATH]; char exe[64]; } GameConfig;
+// DraStic has no minarch: these are the NDS layer's settings files, in the same "key = value" form. They're read whole, the
+// game's or the console's, so a game's is started from the console's here too
+#define NDS_SPEED_KEY "cpu_speed"
+static char* nds_speed_values[] = { "0", "1", "2" }; // the layer's CPU_POWERSAVE...
+#define NDS_SPEED_COUNT 3
+#define NDS_SPEED_DEFAULT 1
+#define NDS_STICK_KEY "stick"
+static char* nds_stick_values[] = { "0", "1" };
+static char* nds_stick_labels[] = { "Stylus", "D-Pad" };
+#define NDS_STICK_COUNT 2
 static int getGameConfig(char* sd_path, GameConfig* cfg) {
 	char system_tag[MAX_PATH];
 	getEmuName(sd_path, system_tag);
+	if (exactMatch(system_tag, NDS_TAG)) {
+		char game[MAX_PATH];
+		snprintf(game, sizeof(game), "%s", strrchr(sd_path, '/') + 1);
+		char* dot = strrchr(game, '.');
+		if (dot) *dot = '\0';
+		snprintf(cfg->game, MAX_PATH, USERDATA_PATH "/NDS-layer/%s.cfg", game);
+		snprintf(cfg->console, MAX_PATH, USERDATA_PATH "/NDS-layer.cfg");
+		cfg->system_default[0] = '\0';
+		snprintf(cfg->exe, sizeof(cfg->exe), NDS_TAG);
+		return 1;
+	}
 	char tag[64];
 	if (!getGameCore(sd_path, tag)) snprintf(tag, sizeof(tag), "%s", system_tag);
 	char exe[64];
@@ -4409,8 +4581,8 @@ static void gameMenu(SDL_Surface* screen) {
 	char system_tag[MAX_PATH];
 	getEmuName(sd_path, system_tag);
 
-	enum { ROW_CORE, ROW_CPU, ROW_RUMBLE, ROW_ART, ROW_RENAME, ROW_DELETE };
-	int rows[6];
+	enum { ROW_CORE, ROW_CPU, ROW_RUMBLE, ROW_STICK, ROW_ART, ROW_RENAME, ROW_DELETE };
+	int rows[7];
 	int count = 0;
 	Core cores[CORE_MAX];
 	char core_name[64] = "";
@@ -4424,9 +4596,19 @@ static void gameMenu(SDL_Surface* screen) {
 	int speed_locked = 0;
 	int speed = 0;
 	int rumble = RUMBLE_DEFAULT;
+	int is_nds = exactMatch(system_tag, NDS_TAG);
+	char* speed_key = is_nds ? NDS_SPEED_KEY : GAME_SPEED_KEY;
+	char** speed_values = is_nds ? nds_speed_values : game_speed_labels;
+	int speed_count = is_nds ? NDS_SPEED_COUNT : GAME_SPEED_COUNT;
+	int stick = 0;
 	if (getGameConfig(sd_path, &cfg)) {
-		speed = getGameOption(&cfg, GAME_SPEED_KEY, game_speed_labels, GAME_SPEED_COUNT, GAME_SPEED_AUTO, &speed_locked);
+		speed = getGameOption(&cfg, speed_key, speed_values, speed_count, is_nds ? NDS_SPEED_DEFAULT : GAME_SPEED_AUTO, &speed_locked);
 		if (!speed_locked) rows[count++] = ROW_CPU;
+		if (is_nds) {
+			int stick_locked = 0;
+			stick = getGameOption(&cfg, NDS_STICK_KEY, nds_stick_values, NDS_STICK_COUNT, 0, &stick_locked);
+			rows[count++] = ROW_STICK;
+		}
 		int rumble_locked = 0;
 		rumble = getGameOption(&cfg, RUMBLE_KEY, rumble_labels, RUMBLE_COUNT, RUMBLE_DEFAULT, &rumble_locked);
 		if (!rumble_locked && VIB_coreHasRumble(cfg.exe)) rows[count++] = ROW_RUMBLE;
@@ -4453,8 +4635,14 @@ static void gameMenu(SDL_Surface* screen) {
 		if (PAD_justPressed(BTN_B)) result = 0; // (not a MENU tap: letting go of MENU from the combo would count)
 		else if (rows[selected]==ROW_CPU && (PAD_justRepeated(BTN_LEFT) || PAD_justRepeated(BTN_RIGHT) || PAD_justPressed(BTN_A))) {
 			// changed in place, and saved right away for this game (its in-game options show the same)
-			speed = (speed + (PAD_justRepeated(BTN_LEFT) ? GAME_SPEED_COUNT-1 : 1)) % GAME_SPEED_COUNT;
-			setGameOption(&cfg, GAME_SPEED_KEY, game_speed_labels[speed]);
+			speed = (speed + (PAD_justRepeated(BTN_LEFT) ? speed_count-1 : 1)) % speed_count;
+			setGameOption(&cfg, speed_key, speed_values[speed]);
+			SFX_play(SFX_TICK);
+			dirty = 1;
+		}
+		else if (rows[selected]==ROW_STICK && (PAD_justRepeated(BTN_LEFT) || PAD_justRepeated(BTN_RIGHT) || PAD_justPressed(BTN_A))) {
+			stick = !stick;
+			setGameOption(&cfg, NDS_STICK_KEY, nds_stick_values[stick]);
 			SFX_play(SFX_TICK);
 			dirty = 1;
 		}
@@ -4494,6 +4682,7 @@ static void gameMenu(SDL_Surface* screen) {
 				if (rows[i]==ROW_CORE) { name = "Change core"; value = core_name; if (is_selected) hint = "Pick which emulator runs this game"; }
 				else if (rows[i]==ROW_CPU) { name = "CPU speed"; value = game_speed_labels[speed]; if (is_selected) hint = speed==GAME_SPEED_PERFORMANCE ? "Faster, but can freeze some games" : "Saved for this game, as in its own options"; }
 				else if (rows[i]==ROW_RUMBLE) { name = "Rumble strength"; value = rumble_labels[rumble]; if (is_selected) hint = "Saved for this game; buzzes to show the strength"; }
+				else if (rows[i]==ROW_STICK) { name = "Thumbstick"; value = nds_stick_labels[stick]; if (is_selected) hint = "Moves the stylus, or works as a second d-pad"; }
 				else if (rows[i]==ROW_ART) { name = has_art ? "Replace box art" : "Get box art"; if (is_selected) hint = has_art ? "Compare the library's covers with yours, keep one" : "Downloads it from the libretro library (needs Wi-Fi)"; }
 				else if (rows[i]==ROW_RENAME) { name = "Rename"; if (is_selected) hint = "Its box art and saves keep up with the new name"; }
 				else if (rows[i]==ROW_DELETE) { name = "Delete game"; if (is_selected) hint = "Asks first, then about its saves and box art"; }
@@ -4514,7 +4703,7 @@ static void gameMenu(SDL_Surface* screen) {
 				SDL_BlitSurface(hint_txt, NULL, screen, &(SDL_Rect){ (screen->w - hint_txt->w) / 2, y + SCALE1(2) });
 				SDL_FreeSurface(hint_txt);
 			}
-			GFX_blitButtonGroup((char*[]){ "B","BACK", "A",rows[selected]==ROW_CPU || rows[selected]==ROW_RUMBLE ? "CHANGE" : "SELECT", NULL }, 1, screen, 1);
+			GFX_blitButtonGroup((char*[]){ "B","BACK", "A",rows[selected]==ROW_CPU || rows[selected]==ROW_RUMBLE || rows[selected]==ROW_STICK ? "CHANGE" : "SELECT", NULL }, 1, screen, 1);
 			GFX_flip(screen);
 			dirty = 0;
 		}
@@ -4680,10 +4869,11 @@ int main (int argc, char *argv[]) {
 	#define INFO_ROW_SOUNDS (3 + PWR_TIMER_COUNT)
 	#define INFO_ROW_MUSIC (4 + PWR_TIMER_COUNT)
 	#define INFO_ROW_CLOCK (5 + PWR_TIMER_COUNT)
-	#define INFO_ROW_TIME_ZONE (6 + PWR_TIMER_COUNT) // for syncing the clock over Wi-Fi
-	#define INFO_ROW_SWAP_AX (7 + PWR_TIMER_COUNT)
-	#define INFO_ROW_VERSION (8 + PWR_TIMER_COUNT) // deliberately last: subtle, but always findable
-	#define INFO_ROW_COUNT (9 + PWR_TIMER_COUNT)
+	#define INFO_ROW_SET_TIME (6 + PWR_TIMER_COUNT) // by hand, for anyone without Wi-Fi
+	#define INFO_ROW_TIME_ZONE (7 + PWR_TIMER_COUNT) // for syncing the clock over Wi-Fi
+	#define INFO_ROW_SWAP_AX (8 + PWR_TIMER_COUNT)
+	#define INFO_ROW_VERSION (9 + PWR_TIMER_COUNT) // deliberately last: subtle, but always findable
+	#define INFO_ROW_COUNT (10 + PWR_TIMER_COUNT)
 	#define INFO_ROWS_SHOWN 5 // the rest scroll into view
 	int info_row = 0; // selected row on the version screen
 	int info_start = 0; // first row shown
@@ -4805,6 +4995,11 @@ int main (int argc, char *argv[]) {
 				int modes = CLOCK_24H + 1; // wraps: 12 hour, 24 hour, off
 				GFX_setClockMode((GFX_getClockMode() + (PAD_justRepeated(BTN_LEFT) ? modes - 1 : 1)) % modes);
 				SFX_play(SFX_TICK);
+				dirty = 1;
+			}
+			else if (info_row==INFO_ROW_SET_TIME && PAD_justPressed(BTN_A)) {
+				SFX_play(SFX_CONFIRM);
+				openTool(screen, NULL, NULL);
 				dirty = 1;
 			}
 			else if (info_row==INFO_ROW_TIME_ZONE && (PAD_justRepeated(BTN_LEFT) || PAD_justRepeated(BTN_RIGHT))) {
@@ -5306,6 +5501,11 @@ int main (int argc, char *argv[]) {
 						name = "Sleep light";
 						strcpy(value, PWR_getSleepLight()==SLEEP_LIGHT_ON ? "On" : "Off");
 					}
+					else if (i==INFO_ROW_SET_TIME) {
+						name = "Set time";
+						time_t now_time = time(NULL);
+						strftime(value, sizeof(value), "%Y/%m/%d", localtime(&now_time));
+					}
 					else if (i==INFO_ROW_TIME_ZONE) {
 						name = "Time zone";
 						strcpy(value, GFX_getTimeZoneName(GFX_getTimeZone()));
@@ -5321,7 +5521,7 @@ int main (int argc, char *argv[]) {
 					}
 					else if (i==INFO_ROW_VERSION) {
 						name = "MinUI+";
-						strcpy(value, "v1.07");
+						strcpy(value, "v1.1");
 					}
 					else {
 						char* timer_names[PWR_TIMER_COUNT] = { "Sleep after", "Power off after" };
@@ -5345,14 +5545,16 @@ int main (int argc, char *argv[]) {
 				// buttons (duped and trimmed from below)
 				int right_w = 0;
 				if (info_row==INFO_ROW_WIFI) right_w = GFX_blitButtonGroup((char*[]){ "B","BACK", "A","SET UP", NULL }, 1, screen, 1);
+				else if (info_row==INFO_ROW_SET_TIME) right_w = GFX_blitButtonGroup((char*[]){ "B","BACK", "A","SET", NULL }, 1, screen, 1);
 				else if (info_row==INFO_ROW_MUSIC) right_w = GFX_blitButtonGroup((char*[]){ "B","BACK", "A",BGM_isEnabled() ? "OFF" : "ON", NULL }, 1, screen, 1);
 				else right_w = GFX_blitButtonGroup((char*[]){ "B","BACK",  NULL }, 0, screen, 1);
 
 				if (show_setting && !GetHDMI()) GFX_blitHardwareHints(screen, show_setting);
-				else if (info_row==INFO_ROW_MUSIC || info_row==INFO_ROW_TIME_ZONE || info_row==INFO_ROW_CLOCK || info_row==INFO_ROW_SLEEP_LIGHT || info_row==INFO_ROW_SWAP_AX) { // a line about the row, in place of the left hints
+				else if (info_row==INFO_ROW_MUSIC || info_row==INFO_ROW_TIME_ZONE || info_row==INFO_ROW_SET_TIME || info_row==INFO_ROW_CLOCK || info_row==INFO_ROW_SLEEP_LIGHT || info_row==INFO_ROW_SWAP_AX) { // a line about the row, in place of the left hints
 					char hint[64], shown[64];
 					if (info_row==INFO_ROW_TIME_ZONE) strcpy(hint, "Automatic, or pick yours");
-					else if (info_row==INFO_ROW_CLOCK) strcpy(hint, "Automatic; needs Wi-Fi");
+					else if (info_row==INFO_ROW_CLOCK) strcpy(hint, "Syncs over Wi-Fi, or use Set time");
+					else if (info_row==INFO_ROW_SET_TIME) strcpy(hint, "Without Wi-Fi. Kept while it's off");
 					else if (info_row==INFO_ROW_SLEEP_LIGHT) strcpy(hint, "The light while asleep");
 					else if (info_row==INFO_ROW_SWAP_AX) strcpy(hint, swap_ax ? "A Resume, X Open (after save state)" : "A Open, X Resume (after save state)");
 					else {

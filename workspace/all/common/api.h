@@ -192,6 +192,7 @@ enum {
 int GFX_getVsync(void);
 void GFX_setVsync(int vsync);
 
+int GFX_blitTitle(SDL_Surface* dst, const char* name, int max_width); // a game name that scrolls when too long; 1 while it does
 int GFX_truncateText(TTF_Font* font, const char* in_name, char* out_name, int max_width, int padding); // returns final width
 int GFX_wrapText(TTF_Font* font, char* str, int max_width, int max_lines);
 int GFX_wrapTextEnding(TTF_Font* font, char* str, int max_width, int max_lines, const char* ending);

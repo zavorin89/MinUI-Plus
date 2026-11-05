@@ -1,3 +1,4 @@
+#define _GNU_SOURCE // strcasestr
 // RetroAchievements (softcore) for minarch, built on rcheevos' rc_client.
 // Sign in uses .userdata/shared/retroachievements.txt:
 //   username=you
@@ -29,6 +30,10 @@
 #define RA_FADE_IN_MS 150
 #define RA_FADE_OUT_MS 300
 #define RA_QUIT_WAIT_MS 5000
+
+// the server's notice that it doesn't know this emulator, sent as an achievement in every set
+#define RA_NOTICE_ID 101000001
+#define RA_IS_NOTICE(achievement) ((achievement)->id>=RA_NOTICE_ID)
 
 static rc_client_t* client = NULL;
 static rc_libretro_memory_regions_t memory;
@@ -73,7 +78,12 @@ static int jobs_running = 0;
 
 ///////////////////////////////
 
+// however the server words it, that notice isn't shown
+static int isEmulatorNotice(const char* text) {
+	return text && strcasestr(text, "emulator") && (strcasestr(text, "unknown") || strcasestr(text, "unrecognized") || strcasestr(text, "unrecognised") || strcasestr(text, "unsupported"));
+}
 static void notifyFull(const char* title, const char* text, const char* detail, const char* badge, int ms) {
+	if (isEmulatorNotice(title) || isEmulatorNotice(text) || isEmulatorNotice(detail)) return;
 	pthread_mutex_lock(&notify_mx);
 	if (notify_count==NOTIFY_QUEUE_SIZE) { // full: drop the oldest waiting one
 		notify_head = (notify_head + 1) % NOTIFY_QUEUE_SIZE;
@@ -183,6 +193,7 @@ static void eventHandler(const rc_client_event_t* event, rc_client_t* c) {
 	char text[160];
 	switch (event->type) {
 		case RC_CLIENT_EVENT_ACHIEVEMENT_TRIGGERED: {
+			if (RA_IS_NOTICE(event->achievement)) break;
 			rc_client_user_game_summary_t summary;
 			rc_client_get_user_game_summary(c, &summary);
 			char title[128];
@@ -230,6 +241,7 @@ static void fetchBadges(rc_client_t* c) {
 	job->names = calloc(total ? total : 1, sizeof(job->names[0]));
 	for (uint32_t b=0; b<list->num_buckets; b++) {
 		for (uint32_t i=0; i<list->buckets[b].num_achievements; i++) {
+			if (RA_IS_NOTICE(list->buckets[b].achievements[i])) continue;
 			snprintf(job->names[job->count++], 8, "%s", list->buckets[b].achievements[i]->badge_name);
 		}
 	}
@@ -326,14 +338,14 @@ void RA_init(const char* core_tag, const char* rom_path, const void* rom_data, s
 	RA_getDiscReader(&hash_callbacks.cdreader);
 	hash_callbacks.error_message = hashError; // why a game couldn't be identified, in the log
 	rc_client_set_hash_callbacks(client, &hash_callbacks);
-	hardcore = RA_HARDCORE_AVAILABLE && exists(RA_HARDCORE_PATH);
+	hardcore = RA_HARDCORE_AVAILABLE && exists(RA_HARDCORE_PATH) && console_id!=RC_CONSOLE_NINTENDO_DS; // DraStic isn't on RA's list for hardcore
 	load_finished = 0;
 	hash_retry = 0;
 	rc_client_set_hardcore_enabled(client, hardcore); // hardcore games start fresh instead of resuming a state, see minarch
 
 	char clause[96] = "";
 	rc_client_get_user_agent_clause(client, clause, sizeof(clause));
-	snprintf(user_agent, sizeof(user_agent), "MinUI/%s %s", PLATFORM, clause);
+	snprintf(user_agent, sizeof(user_agent), "MinUI/%s%s %s", PLATFORM, console_id==RC_CONSOLE_NINTENDO_DS ? " (DraStic)" : "", clause);
 
 	if (creds.token[0]) rc_client_begin_login_with_token(client, creds.username, creds.token, loginCallback, NULL);
 	else rc_client_begin_login_with_password(client, creds.username, creds.password, loginCallback, NULL);
@@ -564,7 +576,10 @@ void RA_quit(void) {
 ///////////////////////////////
 
 int RA_hasAchievements(void) {
-	return client && rc_client_get_game_info(client) && rc_client_has_achievements(client);
+	if (!client || !rc_client_get_game_info(client)) return 0;
+	rc_client_user_game_summary_t summary; // counts the set without the notice
+	rc_client_get_user_game_summary(client, &summary);
+	return summary.num_promoted_achievements>0;
 }
 void RA_notify(const char* title, const char* text, const char* detail) {
 	if (client) notifyFull(title, text, detail, NULL, RA_NOTIFY_MS);
@@ -617,8 +632,12 @@ static int buildRows(rc_client_achievement_list_t* list, int sort, Row* rows) {
 	int n = 0;
 	if (sort==SORT_DEFAULT) {
 		for (uint32_t b=0; b<list->num_buckets; b++) {
-			rows[n++] = (Row){ list->buckets[b].label, NULL };
-			for (uint32_t i=0; i<list->buckets[b].num_achievements; i++) rows[n++] = (Row){ NULL, list->buckets[b].achievements[i] };
+			int header = n;
+			for (uint32_t i=0; i<list->buckets[b].num_achievements; i++) {
+				if (RA_IS_NOTICE(list->buckets[b].achievements[i])) continue;
+				if (n==header) rows[n++] = (Row){ list->buckets[b].label, NULL };
+				rows[n++] = (Row){ NULL, list->buckets[b].achievements[i] };
+			}
 		}
 		return n;
 	}
@@ -628,7 +647,9 @@ static int buildRows(rc_client_achievement_list_t* list, int sort, Row* rows) {
 	const rc_client_achievement_t** all = calloc(total ? total : 1, sizeof(*all));
 	int count = 0;
 	for (uint32_t b=0; b<list->num_buckets; b++) {
-		for (uint32_t i=0; i<list->buckets[b].num_achievements; i++) all[count++] = list->buckets[b].achievements[i];
+		for (uint32_t i=0; i<list->buckets[b].num_achievements; i++) {
+			if (!RA_IS_NOTICE(list->buckets[b].achievements[i])) all[count++] = list->buckets[b].achievements[i];
+		}
 	}
 
 	if (sort==SORT_UNLOCKED_FIRST) {

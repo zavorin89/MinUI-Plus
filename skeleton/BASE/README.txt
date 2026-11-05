@@ -1,8 +1,7 @@
 MinUI+ is a fork of MinUI for the Miyoo A30 that brings together the best of MinUI, Onion and spruce: the same simple launcher and in-game menu, plus a box art carousel, RetroAchievements, play time tracking, menu music, borders and screen effects, Wi-Fi, a game switcher, per-game emulator cores, themes, and lots of work on speed and battery life. It comes set up to look its best from the first boot.
 
 MinUI+:
-https://codeberg.org/zavorin89/MinUI-Plus
-https://github.com/zavorin89/MinUI-Plus
+https://gitlab.com/zavorin89-group/MinUI-Plus
 
 MinUI by Shaun Inman:
 https://github.com/shauninman/minui
@@ -47,12 +46,12 @@ The Controls tool lists these too.
 ----------------------------------------
 Clock
 
-The clock is part of Wi-Fi: it shows beside Wi-Fi and the battery once Wi-Fi has set it since the A30 was turned on, and syncs every time Wi-Fi connects. Change its format (12-hour, 24-hour or off) in the settings' Clock row. The time zone is found automatically the first time, or pick yours in the Time zone row (daylight saving included). The A30's clock stops while it's powered off (asleep it keeps going), so after a power-off the clock stays hidden until Wi-Fi syncs it again.
+The clock shows beside Wi-Fi and the battery, and Wi-Fi corrects it every time it connects. Change its format (12-hour, 24-hour or off) in the settings' Clock row. The time zone is found automatically the first time, or pick yours in the Time zone row (daylight saving included). The A30 normally keeps time while it's off. If it comes back behind the last time MinUI+ saw (eg. the battery ran out), the clock stays hidden until Wi-Fi syncs it or you set it. No Wi-Fi? Enter the time in the settings' Set time row: the A30 keeps it from there, through power offs.
 
 ----------------------------------------
 Updates
 
-After Wi-Fi connects, MinUI+ quietly checks its latest release on GitHub and Codeberg. When a newer version exists, "Update Available!" appears above the systems. Open it to read the patch notes and confirm the update. A progress bar follows the download and installation. When it is ready, choose Shut Down, then turn the A30 back on to finish, or choose Later to return to MinUI+ and shut down when convenient.
+After Wi-Fi connects, MinUI+ quietly checks its latest GitLab release. When a newer version exists, "Update Available!" appears above the systems. Open it to read the patch notes and confirm the update. A progress bar follows the download and installation. When it is ready, choose Shut Down, then turn the A30 back on to finish, or choose Later to return to MinUI+ and shut down when convenient.
 
 The installed MinUI+ version appears as a subtle final row at the bottom of Settings.
 
@@ -87,6 +86,25 @@ Roms
 Included in this zip is a clean "Roms" folder containing one fully named folder for each console MinUI+ supports (eg. "Game Boy Advance (GBA)"). Put games directly in these descriptive folders; short aliases such as "GBA" are not needed. You can rename a folder, but you must keep the uppercase tag in parentheses so it stays mapped to the correct emulator (eg. "Nintendo Entertainment System (FC)" could be renamed to "NES (FC)").
 
 When one or more folder share the same display name (eg. "Game Boy Advance (GBA)" and "Game Boy Advance (MGBA)") they will be combined into a single menu item containing the roms from both folders (continuing the previous example, "Game Boy Advance"). This allows opening specific roms with an alternate pak.
+
+----------------------------------------
+Nintendo 64
+
+Nintendo 64 is experimental, and your mileage may vary. The A30 is at the edge of what it needs, so results depend heavily on the game: expect graphics glitches and slowdowns, and some games won't be playable.
+
+----------------------------------------
+Nintendo DS
+
+MinUI+ plays Nintendo DS games with DraStic, which is not part of MinUI+ and is not included in this zip.
+
+1. Download drastic-v1.8_miyoo.zip from https://github.com/steward-fu/nds/releases/tag/v1.8
+2. Unzip it into "Emus/my282/NDS.pak" on your SD card, so that you have "Emus/my282/NDS.pak/drastic/drastic"
+3. Put your games in "Roms/Nintendo DS (NDS)"
+
+MinUI+ is built for DraStic r2.5.0.4. To check your copy, the SHA-256 of its "drastic" file is:
+caecd505c79ebb56701906e64bc9f487d9fcb03c06cb8b113a9165e2ca7c016d
+
+If another copy is used, MinUI+ warns once and still tries to run it. Saves and save states stay in the DraStic folder, so keep that folder when updating.
 
 ----------------------------------------
 Bios

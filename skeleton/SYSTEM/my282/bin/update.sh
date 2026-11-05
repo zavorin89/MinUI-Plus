@@ -1,6 +1,6 @@
 #!/bin/sh
 # update.sh check|install
-# Quietly checks the latest stable release on GitHub and on Codeberg, or downloads, verifies and installs the update the launcher offered.
+# Quietly checks the latest stable release on GitLab, or downloads, verifies and installs the update the launcher offered.
 
 SDCARD_PATH="${SDCARD_PATH:-/mnt/SDCARD}"
 SYSTEM_PATH="${SYSTEM_PATH:-$SDCARD_PATH/.system/my282}"
@@ -10,10 +10,8 @@ AVAILABLE="$STATE_DIR/update-available.txt"
 NOTES="$STATE_DIR/update-notes.txt"
 VERSION="$SDCARD_PATH/.system/version.txt"
 LOG="${LOGS_PATH:-$SDCARD_PATH/.userdata/my282/logs}/update.txt"
-GITHUB_API="https://api.github.com/repos/zavorin89/MinUI-Plus/releases/latest"
-GITHUB_DOWNLOADS="https://github.com/zavorin89/MinUI-Plus/releases/download/"
-CODEBERG_API="https://codeberg.org/api/v1/repos/zavorin89/MinUI-Plus/releases/latest"
-CODEBERG_DOWNLOADS="https://codeberg.org/zavorin89/MinUI-Plus/releases/download/"
+GITLAB_API="https://gitlab.com/api/v4/projects/zavorin89-group%2FMinUI-Plus/releases/permalink/latest"
+GITLAB_DOWNLOADS="https://gitlab.com/zavorin89-group/MinUI-Plus/-/releases/"
 HTTPS="$SYSTEM_PATH/bin/https.elf"
 CA_CERT="$SDCARD_PATH/.system/res/cacert.pem"
 RUNTIME_PATH="${MINUI_RUNTIME_PATH:-/tmp}"
@@ -80,9 +78,6 @@ read_release() {
 	DIGEST=$(printf '%s\n' "$RELEASE" | sed -n '4p')
 	SIZE=$(printf '%s\n' "$RELEASE" | sed -n '5p')
 	BODY=$(printf '%s\n' "$RELEASE" | sed '1,5d')
-	# Codeberg doesn't report a checksum for release files, so its releases carry a "SHA-256: <hex>" line in their notes.
-	[ -n "$DIGEST" ] || DIGEST=$(printf '%s\n' "$BODY" | sed -n 's/^.*SHA-256:[^0-9a-fA-F]*\([0-9a-fA-F]\{64\}\).*$/\1/p' | sed -n '1p')
-	BODY=$(printf '%s\n' "$BODY" | sed '/SHA-256:/d')
 	URL_STATE=missing; [ -n "$URL" ] && URL_STATE=present
 	case "$TAG|$ASSET|$URL" in
 		v*'|MinUIPlus-'*".zip|$3"*) ;;
@@ -94,7 +89,7 @@ read_release() {
 }
 
 check() {
-	# Reconnecting after sleep should not spend GitHub's anonymous API allowance: check at most once an hour.
+	# Reconnecting after sleep should not spend GitLab's anonymous API allowance: check at most once an hour.
 	NOW=$(date +%s)
 	LAST=$(cat "$CHECKED" 2>/dev/null)
 	case "$LAST" in *[!0-9]*|'') LAST=0 ;; esac
@@ -105,29 +100,13 @@ check() {
 	[ -x "$HTTPS" ] || { log "check failed: the HTTPS downloader is missing"; exit 1; }
 	[ -f "$CA_CERT" ] || { log "check failed: the CA bundle is missing"; exit 1; }
 
-	# Both sources are asked, so one that's down or behind can't hide a release on the other. GitHub wins a tie. The
-	# one-hour quiet period only starts after one of them gave a usable answer.
-	if read_release GitHub "$GITHUB_API" "$GITHUB_DOWNLOADS"; then
-		SOURCE=GitHub
-		BEST="$TAG|$ASSET|$URL|$DIGEST|$SIZE"; BEST_ASSET="$ASSET"; BEST_BODY="$BODY"
-	fi
-	if read_release Codeberg "$CODEBERG_API" "$CODEBERG_DOWNLOADS"; then
-		if [ -z "$SOURCE" ] || release_newer "$ASSET" "$BEST_ASSET"; then
-			SOURCE=Codeberg
-			BEST="$TAG|$ASSET|$URL|$DIGEST|$SIZE"; BEST_ASSET="$ASSET"; BEST_BODY="$BODY"
-		fi
-	fi
-	[ -n "$SOURCE" ] || exit 1
-	IFS='|' read -r TAG ASSET URL DIGEST SIZE <<EOF_BEST
-$BEST
-EOF_BEST
-	BODY="$BEST_BODY"
+	read_release GitLab "$GITLAB_API" "$GITLAB_DOWNLOADS" || exit 1
 
 	CURRENT=$(sed -n '1p' "$VERSION" 2>/dev/null)
 	if ! release_newer "$ASSET" "$CURRENT"; then # the installed one, or older: nothing to offer
 		rm -f "$AVAILABLE" "$NOTES"
 		echo "$NOW" > "$CHECKED"
-		log "up to date: $TAG from $SOURCE ($CURRENT)"
+		log "up to date: $TAG ($CURRENT)"
 		exit 0
 	fi
 
@@ -144,7 +123,7 @@ EOF_BEST
 	mv "$NOTES.tmp" "$NOTES"
 	mv "$AVAILABLE.tmp" "$AVAILABLE" # last: the launcher never sees metadata without its notes
 	echo "$NOW" > "$CHECKED"
-	log "available: $TAG ($ASSET) from $SOURCE"
+	log "available: $TAG ($ASSET)"
 }
 
 fail() {
@@ -186,7 +165,7 @@ install_update() {
 	DIGEST=$(sed -n '4p' "$AVAILABLE")
 	SIZE=$(sed -n '5p' "$AVAILABLE")
 	case "$TAG|$ASSET|$URL" in
-		v*'|MinUIPlus-'*".zip|$GITHUB_DOWNLOADS"*|v*'|MinUIPlus-'*".zip|$CODEBERG_DOWNLOADS"*) ;;
+		v*'|MinUIPlus-'*".zip|$GITLAB_DOWNLOADS"*) ;;
 		*) fail "The update information is invalid" ;;
 	esac
 	case "$DIGEST" in *[!0-9a-fA-F]*|'') fail "The update has no SHA-256" ;; esac

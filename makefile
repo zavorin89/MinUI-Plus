@@ -65,6 +65,9 @@ ifeq ($(PLATFORM),my282)
 	cp ./workspace/all/wifi/build/$(PLATFORM)/wifi.elf "./build/EXTRAS/Tools/$(PLATFORM)/Wi-Fi.pak/"
 	cp ./workspace/all/boxart/build/$(PLATFORM)/boxart.elf "./build/EXTRAS/Tools/$(PLATFORM)/Box Art.pak/"
 	cp ./workspace/all/controls/build/$(PLATFORM)/controls.elf "./build/EXTRAS/Tools/$(PLATFORM)/Controls.pak/"
+	mkdir -p ./build/EXTRAS/Emus/$(PLATFORM)/NDS.pak/lib
+	cp ./workspace/all/ndslayer/build/$(PLATFORM)/libndslayer.so ./build/EXTRAS/Emus/$(PLATFORM)/NDS.pak/
+	cp ./workspace/all/ndslayer/build/$(PLATFORM)/libasound.so.2 ./build/EXTRAS/Emus/$(PLATFORM)/NDS.pak/lib/
 endif
 
 cores: # TODO: can't assume every platform will have the same stock cores (platform should be responsible for copy too)

@@ -913,6 +913,40 @@ static int GFX_blitHardwareGroupNow(SDL_Surface* dst, int show_setting);
 static int clock_mode = -1;
 static time_t clock_drawn_minute = 0; // PWR_update redraws when the minute changes
 static int clock_left = 0; // in a pill of its own at the top left (the carousel: its art covers the top right)
+// a pause menu's game name in its pill, up to max_width: one that doesn't fit scrolls back and forth (and returns 1, so
+// call this again each frame, over a clean background) instead of being cut short
+#define TITLE_PAUSE_MS 700 // still at each end
+#define TITLE_SPEED 70 // unscaled pixels a second
+int GFX_blitTitle(SDL_Surface* dst, const char* name, int max_width) {
+	static uint32_t started = 0;
+	static char drawn[256] = "";
+	static SDL_Surface* text = NULL;
+	if (!text || !exactMatch((char*)name, drawn)) {
+		if (text) SDL_FreeSurface(text);
+		text = TTF_RenderUTF8_Blended(font.large, name, COLOR_WHITE);
+		snprintf(drawn, sizeof(drawn), "%s", name);
+		started = SDL_GetTicks();
+		if (!text) return 0; // (no name to draw)
+	}
+	static int drawn_width = 0;
+	if (max_width!=drawn_width) { // a volume or brightness bar came or went: from the start, not from a jump
+		drawn_width = max_width;
+		started = SDL_GetTicks();
+	}
+	int padding = SCALE1(BUTTON_PADDING*2);
+	int width = MIN(text->w + padding, max_width);
+	int overflow = text->w + padding - width;
+	int offset = 0;
+	if (overflow>0) {
+		int scroll_ms = overflow * 1000 / SCALE1(TITLE_SPEED);
+		int t = (SDL_GetTicks() - started) % (TITLE_PAUSE_MS + scroll_ms + TITLE_PAUSE_MS);
+		if (t>=TITLE_PAUSE_MS+scroll_ms) offset = overflow;
+		else if (t>=TITLE_PAUSE_MS) offset = (t - TITLE_PAUSE_MS) * overflow / scroll_ms;
+	}
+	GFX_blitPill(ASSET_BLACK_PILL, dst, &(SDL_Rect){ SCALE1(PADDING), SCALE1(PADDING), width, SCALE1(PILL_SIZE) });
+	SDL_BlitSurface(text, &(SDL_Rect){ offset, 0, width-padding, text->h }, dst, &(SDL_Rect){ SCALE1(PADDING+BUTTON_PADDING), SCALE1(PADDING+4) });
+	return overflow>0;
+}
 void GFX_setClockLeft(int left) {
 	clock_left = left;
 }
@@ -997,7 +1031,7 @@ static int refreshClock(void) { // 1 when the clock should be drawn again
 		tzset();
 		changed = 1;
 	}
-	int set = exists(CLOCK_SET_PATH);
+	int set = (mtime || exists(CLOCK_MANUAL_PATH)) && (exists(CLOCK_SET_PATH) || exists(CLOCK_OK_PATH)); // (no zone: it would show UTC, unless that's what was typed)
 	if (set!=clock_set_seen) {
 		clock_set_seen = set;
 		changed = 1;
@@ -1005,6 +1039,9 @@ static int refreshClock(void) { // 1 when the clock should be drawn again
 	return changed;
 }
 void GFX_setTimeZone(int zone) {
+	int keep = zone>=0 && zone<TIME_ZONE_COUNT && exists(CLOCK_MANUAL_PATH); // what was typed was meant for this zone, it shouldn't shift
+	time_t now = time(NULL);
+	struct tm typed = *localtime(&now);
 	if (zone>=0 && zone<TIME_ZONE_COUNT) {
 		putFile(TIME_ZONE_PATH, (char*)time_zones[zone].rule);
 		setenv("TZ", time_zones[zone].rule, 1); // launch.sh hands it to everything started later
@@ -1014,6 +1051,7 @@ void GFX_setTimeZone(int zone) {
 		unsetenv("TZ");
 	}
 	tzset();
+	if (keep) PLAT_setDateTime(typed.tm_year+1900, typed.tm_mon+1, typed.tm_mday, typed.tm_hour, typed.tm_min, typed.tm_sec);
 	clock_drawn_minute = 0; // redrawn in the new zone
 	if (PLAT_isOnline()) system("wifi.sh time >/dev/null 2>&1 &"); // synced in the new zone (automatic: looked up first)
 }
@@ -1107,7 +1145,7 @@ static int GFX_blitHardwareGroupNow(SDL_Surface* dst, int show_setting) {
 		char clock[16] = "";
 		int clock_mode = GFX_getClockMode();
 		if (clock_mode && clock_set_seen==-1) refreshClock();
-		if (clock_mode && clock_set_seen==1) { // only when wifi has set it since this boot: the A30 loses the time when off
+		if (clock_mode && clock_set_seen==1) { // when it can be trusted: see launch.sh
 			time_t now = time(NULL);
 			struct tm* local = localtime(&now);
 			if (clock_mode==CLOCK_24H) strftime(clock, sizeof(clock), "%H:%M", local);
@@ -2573,8 +2611,13 @@ int PWR_getBattery(void) { // 10-100 in 10-20% fragments
 
 // TODO: tmp? move to individual platforms or allow overriding like PAD_poll/PAD_wake?
 int PLAT_setDateTime(int y, int m, int d, int h, int i, int s) {
-	char cmd[512];
-	sprintf(cmd, "date -s '%d-%d-%d %d:%d:%d'; hwclock --utc -w; touch " CLOCK_SET_PATH, y,m,d,h,i,s); // (in TZ, when one's picked)
+	char cmd[1024];
+	// (in TZ, when one's picked) into the clock that runs while the A30 is off. It's saved too, or a time set back
+	// would look like a clock that stopped at the next boot (launch.sh)
+	sprintf(cmd, "date -s '%d-%d-%d %d:%d:%d'; hwclock --utc -w; TZ=UTC0 date +'%%F %%T' > \"$DATETIME_PATH\"; "
+		"touch " CLOCK_SET_PATH " '" CLOCK_SYNCED_PATH "'; "
+		"if [ -f '" TIME_ZONE_PATH "' ]; then rm -f '" CLOCK_MANUAL_PATH "'; else touch '" CLOCK_MANUAL_PATH "'; fi; sync", y,m,d,h,i,s);
 	system(cmd);
+	refreshClock();
 	return 0; // why does this return an int?
 }

@@ -1,7 +1,7 @@
 #!/bin/sh
 
 if [ -n "$DATETIME_PATH" ]; then
-	echo `date +'%F %T'` > "$DATETIME_PATH"
+	echo `TZ=UTC0 date +'%F %T'` > "$DATETIME_PATH"
 	sync
 fi
 

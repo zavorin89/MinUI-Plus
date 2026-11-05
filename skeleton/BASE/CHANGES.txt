@@ -1,4 +1,4 @@
-# MinUI+ v1.07 — changes since launch
+# MinUI+ v1.1 — changes since launch
 
 For the Miyoo A30. This ZIP is a complete release, suitable for manual download from a mirror.
 
@@ -7,9 +7,35 @@ replacing bundled application/tool files when asked. Keep MinUI.zip zipped; the 
 Copy the included Tools and Emus folders too so their fixes are installed. Preserve any personally customized artwork
 or borders from your backup. The updater's Shut Down prompt requires you to turn the A30 back on manually.
 
-From v1.07 the built-in updater checks both GitHub and Codeberg. Devices on v1.06 or older only check GitHub, so they need this one manual install to start receiving updates from Codeberg.
+From v1.1 the built-in updater checks GitLab. Devices on v1.07 or older still look for updates on GitHub, so they need this one manual install to start receiving them.
 
-This is a consolidated comparison with v1.0.0, rather than a list of every intermediate hotfix. This v1.07 package includes all changes below. The newest changes come first, then v1.0.1–v1.0.5, then v1.06.
+This is a consolidated comparison with v1.0.0, rather than a list of every intermediate hotfix. This v1.1 package includes all changes below. The newest changes come first, then v1.0.1–v1.0.5, then v1.06.
+
+## New in v1.1
+
+### New systems
+
+- Added **Nintendo DS**, through DraStic with MinUI+'s own in-game menu: save states, screen layouts, borders, Thumbstick and CPU Speed settings, and RetroAchievements (softcore). DraStic isn't included: the README says where to get it.
+
+### Nintendo 64
+
+- **Nintendo 64 stays experimental, and your mileage may vary.** Results depend heavily on the game. Speed and graphics improved in this version, but expect glitches and slowdowns, and some games won't be playable.
+- Mario Tennis: improved the effects around the ball and the screen after a replay. Some shimmering and odd textures remain in replays.
+
+### Clock and settings
+
+- The clock now stays right while the A30 is off, and shows only once it's been synced over Wi-Fi or set by hand. It may stay hidden after this update until you do one of those.
+- A new **Set time** in Settings sets the clock without Wi-Fi.
+
+### Menus and saves
+
+- A game name too long for the in-game menu now scrolls instead of being cut off.
+- A save state is written beside the old one first, so losing power mid-save no longer destroys the previous state.
+- RetroAchievements logs why it couldn't connect, and no longer lists the server's notice about unrecognized emulators.
+
+### Updates
+
+- The built-in updater now checks GitLab.
 
 ## New in v1.07
 
@@ -31,11 +57,10 @@ This is a consolidated comparison with v1.0.0, rather than a list of every inter
 - A lightning bolt now appears over the battery icon while a charger is connected, with the battery level still visible.
 - Tools you add to the Tools folder are no longer moved away at startup. If this removed one of yours, restore it from .minui/removed-official-tools.
 
-### Wi-Fi and updates
+### Wi-Fi
 
 - Several Wi-Fi networks can be saved, and MinUI+ joins whichever is in range.
 - A wrong password no longer looks like a successful connection, and clock sync no longer hangs when a time server doesn't answer.
-- Updates can now come from Codeberg as well as GitHub, whichever has the newer release.
 
 ### Stability
 
