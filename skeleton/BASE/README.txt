@@ -109,18 +109,33 @@ If another copy is used, MinUI+ warns once and still tries to run it. Saves and 
 ----------------------------------------
 Bios
 
-Some emulators require or perform much better with official bios. MinUI is strictly BYOB. Place the bios for each system in a folder that matches the tag in the corresponding "Roms" folder name (eg. bios for "Sony PlayStation (PS)" roms goes in "/Bios/PS/"),
+Some systems need a BIOS file, and MinUI+ doesn't include any. Most go in the "Bios" folder, in a folder named after the tag in the system's "Roms" folder (eg. "/Bios/PS/" for "Sony PlayStation (PS)"). File names are case-sensitive.
 
-Bios file names are case-sensitive:
+Needed:
 
-   FC: disksys.rom
-   GB: gb_bios.bin
-  GBA: gba_bios.bin
-  GBC: gbc_bios.bin
-   MD: bios_CD_E.bin
-       bios_CD_J.bin
-       bios_CD_U.bin
-   PS: psxonpsp660.bin
+   Neo Geo          neogeo.zip, beside the games in "Roms/Neo Geo (NEOGEO)"
+   Sega CD          /Bios/SEGACD/bios_CD_U.bin (US), bios_CD_E.bin (Europe), bios_CD_J.bin (Japan)
+   PC Engine CD     /Bios/PCE/syscard3.pce (only for CD games)
+   Famicom Disk     /Bios/FC/disksys.rom (only for Disk System games)
+   Other arcade     Final Burn Neo and MAME 2003+ games on a shared board need that board's BIOS zip (eg. pgm.zip), beside the game. MAME 2003+ "Full Non-Merged" sets already include it. A clone game also needs its parent game's zip beside it
+
+Recommended:
+
+   PlayStation      /Bios/PS/PSXONPSP660.bin, or a real console's scph*.bin. Games run without one, but some have problems
+
+Optional:
+
+   Game Boy         /Bios/GB/gb_bios.bin
+   Game Boy Color   /Bios/GBC/gbc_bios.bin
+   GBA              /Bios/GBA/gba_bios.bin (mGBA: /Bios/MGBA/gba_bios.bin)
+   Super Game Boy   /Bios/SGB/sgb_bios.bin
+   Pokemon mini     /Bios/PKM/bios.min
+
+Not needed: NES, Super Nintendo, Genesis, Master System, Game Gear, Sega 32X, PC Engine cards, Neo Geo Pocket, Virtual Boy, Pico-8, Nintendo 64, Capcom Play System 1, 2 and 3, and Nintendo DS (DraStic's download has what it needs).
+
+A BIOS zip beside your games shows in the list like a game. To hide it, add a map.txt to that folder (see Display names), with a tab between the two names:
+
+  neogeo.zip	.Neo Geo Bios
 
 ----------------------------------------
 Disc-based games

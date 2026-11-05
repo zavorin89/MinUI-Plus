@@ -27,6 +27,7 @@ optimized as Onion, without the clunkiness that comes with running everything th
 - [The launcher](#the-launcher)
 - [In game](#in-game)
 - [Systems and cores](#systems-and-cores)
+- [BIOS files](#bios-files)
 - [Nintendo DS](#nintendo-ds)
 - [Nintendo 64](#nintendo-64)
 - [Tools](#tools)
@@ -152,7 +153,7 @@ MinUI+ is one download with everything in it: every system, the borders and the 
    create shorter duplicate folders such as `GBA`. Put any BIOS files your systems need in `Bios`, insert the card
    and turn the A30 on. The first start installs MinUI+.
 
-Some systems need more from you: BIOS files for the arcade systems and Sega CD, and DraStic for the
+Some systems need more from you: [BIOS files](#bios-files) for Neo Geo and Sega CD among others, and DraStic for the
 [Nintendo DS](#nintendo-ds). None of these, and no games, come with MinUI+.
 
 ### Updating
@@ -367,9 +368,6 @@ Sign in with the RetroAchievements tool (on the on-screen keyboard), then just p
 | Nintendo 64 ([experimental](#nintendo-64)) | N64 | ParaLLEl N64 | |
 | Nintendo DS ([setup](#nintendo-ds)) | NDS | DraStic (not included) | |
 
-BIOS files aren't included. The arcade systems look for theirs in the matching `Bios/<TAG>` folder, and games stay
-zipped under the name their core expects.
-
 Each system starts with the look that suits it:
 
 | | Scaling | Effect | Border | Ghosting | Colors |
@@ -385,6 +383,47 @@ Each system starts with the look that suits it:
 | NES, SNES, Genesis, Master System, PC Engine, PlayStation, Sega CD, 32X, arcade, Nintendo 64 | Aspect | Scanlines | | | |
 
 Everything can be changed per system or per game in the pause menu's Options, like in MinUI.
+
+## BIOS files
+
+MinUI+ doesn't include any BIOS files. Most go in `Bios/<TAG>`, where the tag is the one in the system's `Roms` folder
+name. File names are case-sensitive.
+
+**Needed**
+
+| System | File | Where |
+| --- | --- | --- |
+| Neo Geo | `neogeo.zip` | Beside the games, in `Roms/Neo Geo (NEOGEO)` |
+| Sega CD | `bios_CD_U.bin` (US), `bios_CD_E.bin` (Europe), `bios_CD_J.bin` (Japan) | `Bios/SEGACD` |
+| PC Engine CD games only | `syscard3.pce` | `Bios/PCE` |
+| Famicom Disk System games only | `disksys.rom` | `Bios/FC` |
+| Final Burn Neo and MAME 2003+ games on a shared board | That board's BIOS zip, eg. `pgm.zip` | Beside the game |
+
+MAME 2003+ "Full Non-Merged" sets already include their BIOS. A clone game also needs its parent game's zip beside it.
+
+**Recommended**
+
+| System | File | Where |
+| --- | --- | --- |
+| PlayStation | `PSXONPSP660.bin`, or a real console's `scph*.bin` | `Bios/PS` |
+
+Games run without one, but some have problems.
+
+**Optional**
+
+| System | File | Where |
+| --- | --- | --- |
+| Game Boy | `gb_bios.bin` | `Bios/GB` |
+| Game Boy Color | `gbc_bios.bin` | `Bios/GBC` |
+| Game Boy Advance | `gba_bios.bin` | `Bios/GBA` (mGBA: `Bios/MGBA`) |
+| Super Game Boy | `sgb_bios.bin` | `Bios/SGB` |
+| Pokémon mini | `bios.min` | `Bios/PKM` |
+
+**Not needed**: NES, Super Nintendo, Genesis, Master System, Game Gear, Sega 32X, PC Engine cards, Neo Geo Pocket,
+Virtual Boy, Pico-8, Nintendo 64, Capcom Play System 1, 2 and 3, and Nintendo DS (DraStic's download has what it needs).
+
+A BIOS zip beside your games shows in the list like a game. To hide it, add a `map.txt` to that folder with
+`neogeo.zip`, a tab, then `.Neo Geo Bios`.
 
 ## Nintendo DS
 
@@ -545,7 +584,7 @@ Everything on screen has a button hint. These are the ones you won't see:
 | `Roms/<System (TAG)>` | Games, eg. `Roms/Game Boy Advance (GBA)` |
 | `Roms/<System>/.res` | Box art, `<game file>.png` (the Box Art tool fills it) |
 | `Roms/.res` | System art, `<System folder>.png` |
-| `Bios/<TAG>` | BIOS files |
+| `Bios/<TAG>` | [BIOS files](#bios-files) |
 | `Saves/<TAG>` | In-game saves |
 | `BGM` | Music for the menus: mp3, ogg, flac or wav |
 | `Borders` | Screen borders, `<TAG>.png` and `<TAG>-native.png` |
