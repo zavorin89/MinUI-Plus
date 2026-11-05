@@ -26,6 +26,8 @@ optimized as Onion, without the clunkiness that comes with running everything th
 - [The launcher](#the-launcher)
 - [In game](#in-game)
 - [Systems and cores](#systems-and-cores)
+- [Nintendo DS](#nintendo-ds)
+- [Nintendo 64](#nintendo-64)
 - [Tools](#tools)
 - [Speed and battery](#speed-and-battery)
 - [Controls](#controls)
@@ -37,7 +39,8 @@ optimized as Onion, without the clunkiness that comes with running everything th
 ## Screenshots
 
 The launcher screens are MinUI+'s own code drawing at the A30's 640x480, captured on a computer. The in-game ones
-were taken by the A30 itself, border and LCD grid included.
+were taken by the A30 itself, border and LCD grid included. The Nintendo DS ones are MinUI+'s DS menus drawing at
+640x480, also captured on a computer.
 
 | | |
 | :---: | :---: |
@@ -78,9 +81,18 @@ were taken by the A30 itself, border and LCD grid included.
 - **Borders** for every handheld system, at aspect and at native scaling, in each console's own colors
 - **Preconfigured looks**: LCD grid and ghosting on handhelds, scanlines on TV consoles, Game Boy Pocket greys,
   color correction for GBC and GBA
-- **Auto CPU speed**: each game runs at the lowest speed that keeps it smooth, and remembers what it needed
-- **Wi-Fi** in the settings: scan, pick a network and type its password on the on-screen keyboard. Choose whether
-  it connects at startup, and tools that need the internet offer to turn it on
+- **Nintendo DS** through DraStic, with the same in-game menu as every other system: save states, screen layouts,
+  borders, CPU speed and RetroAchievements. [DraStic is a separate download](#nintendo-ds)
+- **Nintendo 64**, experimental: [your mileage may vary](#nintendo-64)
+- **Arcade and more**: Capcom Play System 1, 2 and 3, Final Burn Neo, MAME 2003+, Neo Geo, Sega CD and Sega 32X
+- **Auto CPU speed**: each game runs at the lowest speed that keeps it smooth, and remembers what it needed.
+  [Auto, Normal, Performance or Powersave](#cpu-speed), per system or per game
+- **Rumble Strength**: one Off to 10 setting for every system with rumble, per system or per game, gentler than the
+  stock full-power buzz
+- **Updates on the device**: read the patch notes and install new versions over Wi-Fi
+- **Wi-Fi** in the settings: scan, pick a network and type its password on the on-screen keyboard. Several networks
+  can be saved, and it joins whichever is in range. Choose whether it connects at startup, and tools that need the
+  internet offer to turn it on
 - **Built for speed**: tuned until the A30's menus feel instant. They're GPU drawn, art decodes ahead of you on
   its own thread, the CPU boosts the instant you touch a button, and saving and the game switcher are quick
 - **Efficient sleep**: the CPU drops to a crawl, audio and Wi-Fi switch off, the device lasts far longer asleep
@@ -96,7 +108,18 @@ MinUI+ is one download with everything in it: every system, the borders and the 
    create shorter duplicate folders such as `GBA`. Put any BIOS files your systems need in `Bios`, insert the card
    and turn the A30 on. The first start installs MinUI+.
 
-To update, copy the new `MinUI.zip` to the root of the card (leave it zipped). Your games, saves and settings are
+Some systems need more from you: BIOS files for the arcade systems and Sega CD, and DraStic for the
+[Nintendo DS](#nintendo-ds). None of these, and no games, come with MinUI+.
+
+### Updating
+
+From v1.1 on, MinUI+ updates itself over Wi-Fi, from the
+[latest GitLab release](https://gitlab.com/zavorin89-group/MinUI-Plus/-/releases/permalink/latest): see
+[Updates](#settings-tap-menu).
+
+**On v1.07 or older, install v1.1 by hand once**, since those versions only know the old address. Copy `MinUI.zip`
+from the release to the root of the card (leave it zipped). To get the new systems too, also copy the zip's `Emus`
+folder, `Tools`, `Roms`, `Bios` and `Borders`, leaving out anything you've changed. Your games, saves and settings are
 kept.
 
 ## The launcher
@@ -142,6 +165,9 @@ MinUI+ keeps track of how long you play every game, automatically, from the mome
 
 - **Change core**: some systems have more than one emulator. Pick one per game, with a line about what each is good
   at; the system's default stays on top. Saves and states are kept per core, so switching never loses progress.
+- **CPU speed**: this game's [CPU speed](#cpu-speed), without starting it.
+- **Rumble Strength**: Off or 1 to 10 for this game, on the systems with rumble.
+- **Thumbstick** (Nintendo DS): whether the stick moves the stylus or acts as a second d-pad.
 - **Get box art** / **Replace box art**: downloads this game's cover from the libretro thumbnail library (turns
   Wi-Fi on if you'd like). When there's more than one match (regions, revisions), every one is downloaded and shown
   beside the art you have, to flip through and pick from. Covers are resized to 250 pixels wide so they load fast.
@@ -205,13 +231,15 @@ of where you left it. A picks a game up from that exact moment. In a game, holdi
 - **Sleep after** and **Power off after** timers
 - **Theme**: several color themes for the whole interface
 - **Menu sounds**: subtle clicks for moving, opening and going back
-- **Clock**: part of Wi-Fi. It shows (beside Wi-Fi and the battery, or at the top left in the carousel) once Wi-Fi
-  has set it, and syncs every time Wi-Fi connects. 12-hour, 24-hour or off. The A30's clock stops while it's powered
-  off (asleep it keeps going), so after a power-off the clock stays hidden until Wi-Fi syncs it again
+- **Clock**: shows beside Wi-Fi and the battery, or at the top left in the carousel, once it's been set. It syncs
+  every time Wi-Fi connects, and keeps its time while the A30 is off. 12-hour, 24-hour or off
+- **Set time**: sets the clock by hand, no Wi-Fi needed
 - **Time zone**: Automatic (looked up from your connection the first time it syncs) or pick yours, daylight saving
   included
-- **MinUI+ version**: shown subtly in the final row at the bottom
+- **Sleep light**: whether the power light stays on while asleep
+- **Swap A and X**: A resumes and X opens in game lists, if you'd rather
 - **Music**: background music on or off, and its volume (Left/Right). Put songs in the `BGM` folder
+- **MinUI+ version**: shown subtly in the final row at the bottom
 
 ### Music
 
@@ -237,8 +265,11 @@ The MinUI pause menu, quicker to open, with:
 - **Save / Load** with a picture of each save state slot as the game looked, border and grid included
 - **Achievements** (with RetroAchievements set up): every achievement with its badge, locked or unlocked, sortable
 - **Options**: emulator options, controls and shortcuts, now with clicks for moving and changing values
+- **A long game name** scrolls instead of being cut off
 - **Music** from the `BGM` folder, if it's on
 - **X** pins the game to the game switcher
+
+Save states are written beside the old one first, so losing power mid-save doesn't destroy the previous state.
 
 ### Screen
 
@@ -259,7 +290,8 @@ Sign in with the RetroAchievements tool (on the on-screen keyboard), then just p
 - Unlock popups with the achievement's badge and a chime, and a summary when a game starts
 - Games with no achievements, or that RetroAchievements doesn't know, show nothing at all
 - **No hardcore mode**: RetroAchievements only counts hardcore unlocks from emulators it has approved, and
-  MinUI+ isn't one, so unlocks are softcore. Possibly in the future.
+  MinUI+ isn't one, so unlocks are softcore.
+- **Nintendo DS** games work the same way, softcore too
 - **Offline**: unlocks earned without Wi-Fi are kept and sent the next time you're online. The tool syncs your games
   ahead of time so their achievements and badges work offline, and a rescan only looks at games that are new or changed
 - PlayStation `.chd` games are identified too
@@ -282,6 +314,17 @@ Sign in with the RetroAchievements tool (on the on-screen keyboard), then just p
 | Virtual Boy | VB | Beetle VB | |
 | Pico-8 | P8 | fake-08 | |
 | Super Game Boy | SGB | mGBA | |
+| Capcom Play System 1, 2 | CPS1, CPS2 | FB Alpha 2012 | |
+| Capcom Play System 3 | CPS3 | Final Burn Neo | |
+| Final Burn Neo | FBN | Final Burn Neo | |
+| MAME 2003+ | MAME | MAME 2003-Plus | |
+| Neo Geo | NEOGEO | FB Alpha 2012 Neo Geo | |
+| Sega CD, Sega 32X | SEGACD, THIRTYTWOX | PicoDrive | |
+| Nintendo 64 ([experimental](#nintendo-64)) | N64 | ParaLLEl N64 | |
+| Nintendo DS ([setup](#nintendo-ds)) | NDS | DraStic (not included) | |
+
+BIOS files aren't included. The arcade systems look for theirs in the matching `Bios/<TAG>` folder, and games stay
+zipped under the name their core expects.
 
 Each system starts with the look that suits it:
 
@@ -295,9 +338,83 @@ Each system starts with the look that suits it:
 | Pokémon mini | Aspect | its own dot matrix | Pokémon mini | Analog LCD | |
 | Virtual Boy, Pico-8 | Aspect | | yes | | |
 | Super Game Boy | Aspect | Scanlines | Super Game Boy | | |
-| NES, SNES, Genesis, Master System, PC Engine, PlayStation | Aspect | Scanlines | | | |
+| NES, SNES, Genesis, Master System, PC Engine, PlayStation, Sega CD, 32X, arcade, Nintendo 64 | Aspect | Scanlines | | | |
 
 Everything can be changed per system or per game in the pause menu's Options, like in MinUI.
+
+## Nintendo DS
+
+MinUI+ plays DS games with [DraStic](https://github.com/steward-fu/nds), wrapped in MinUI+'s own menu so it behaves
+like every other system. **DraStic isn't part of MinUI+ and isn't included.** You get it yourself:
+
+1. Download `drastic-v1.8_miyoo.zip` from
+   [steward-fu's nds v1.8 release](https://github.com/steward-fu/nds/releases/tag/v1.8).
+2. Unzip it into `Emus/my282/NDS.pak` on your card, so that you have `Emus/my282/NDS.pak/drastic/drastic`. Keep the
+   `launch.sh` and `libndslayer.so` that are already there.
+3. Put your games in `Roms/Nintendo DS (NDS)`, and start one.
+
+MinUI+ is built for DraStic r2.5.0.4. To check your copy, the SHA-256 of its `drastic` file is:
+
+```
+caecd505c79ebb56701906e64bc9f487d9fcb03c06cb8b113a9165e2ca7c016d
+```
+
+Any other copy gets one warning, and MinUI+ still tries to run it.
+
+**Saves and save states stay in the DraStic folder** (`backup` and `savestates`), so keep that folder. Updating MinUI+
+doesn't touch it.
+
+<p align="center">
+  <img src="github/screenshots/ds-menu.png" width="320" alt="The pause menu in a DS game">
+  <img src="github/screenshots/ds-options.png" width="320" alt="Frontend options for DS games">
+</p>
+
+### In a DS game
+
+MENU opens the same pause menu as every other system: Continue, Save, Load, Achievements, Options and Quit.
+
+| | |
+| --- | --- |
+| R2 | Stylus press |
+| Thumbstick | Move the stylus (or a second d-pad, see below) |
+| L2 | Swap screens |
+| MENU + R2 | Next screen layout |
+
+All of these can be changed in Options > Shortcuts and Options > Controls. Options also has:
+
+- **Frontend**: Screen Layout (Side by Side, Side by Side Large, Book, Single, Single Full, Stacked, Stacked Large, Big
+  Over Small, Big Beside Small, Big + Corner, Bigger + Corner, Bigger + Below; it starts on Big + Corner), Screen Border, Main Screen, Screen Effect (None, Line, Grid), Prevent Tearing,
+  Thumbstick (Stylus or D-Pad) and CPU Speed.
+- **Emulator**: DraStic's Frameskip, Frames To Skip, Threaded 3D, Fix Main 2D Screen, Disable Edge Marking, Cheats,
+  Sound, FPS Counter and Language.
+- **Save Changes**: for the console or for this game, like every other system.
+
+## Nintendo 64
+
+**Nintendo 64 is experimental, and your mileage may vary.** The A30 is at the edge of what it needs, so results depend
+heavily on the game. Expect graphics glitches and slowdowns, and some games won't be playable. Banjo-Kazooie and Mario
+Tennis are known to show visual problems, and many games don't reach full speed. It's here for the games that do run
+well, not as a promise that yours will.
+
+It's more than the stock core dropped in, though. MinUI+ builds ParaLLEl N64 with the Rice plugin for the A30, drawing
+on its GPU, and adds to it:
+
+- Frames go straight to the screen when nothing needs drawing over them.
+- When a game falls behind, a frame is skipped instead of letting the sound break up.
+- The same pause menu, save states, screen effects, and per-game settings as every other system. Auto CPU speed is the
+  default, and Performance is there for a game that needs more ([read the warning first](#cpu-speed)).
+
+Put games in `Roms/Nintendo 64 (N64)`. The buttons:
+
+| N64 | A30 | | N64 | A30 |
+| --- | --- | --- | --- | --- |
+| A | B | | C-Up | X |
+| B | Y | | C-Down | A |
+| Z | L2 | | C-Left | L1 |
+| R | R2 | | C-Right | R1 |
+| L | SELECT | | Start | START |
+
+Change them in Options > Controls.
 
 ## Tools
 
@@ -321,16 +438,36 @@ gives the battery back everywhere it can.
   the GPU through a ring of textures so frames never wait on it, and the CPU gets a short boost while you navigate.
 - **Quick everything**: the pause menu opens without waiting, saves write their picture at half size as a 16-bit
   image and flush the card in the background, and the game switcher starts without waiting on the card.
-- **Auto CPU speed** (the default for every system): each frame, minarch measures how much of its time went to
-  emulating it, and runs the CPU at the lowest of 480 to 1512 MHz that keeps every frame comfortably on time. It
-  steps up the moment a frame runs late, and remembers each game's needs so it starts at the right speed next time.
-  Game Boy games run at a fraction of the CPU; heavy PlayStation games get all of it. Powersave, Normal and
-  Performance are still there to pick by hand.
+- **Auto CPU speed**: see [below](#cpu-speed).
 - **Sleep**: one core at 240 MHz, the audio device closed, Wi-Fi off after a minute asleep (back on when you wake),
   and the background tasks quiet.
 - **Audio**: smoother resampling, and the A30's output at 48000 Hz.
 - **At boot**: stock firmware services a handheld has no use for are stopped, and the card isn't written to every
   time a file is read.
+
+### CPU speed
+
+Set in the pause menu (Options > Frontend > CPU Speed), per system or per game, or from the game menu (MENU + Y)
+without starting the game.
+
+| Setting | Speed | What it's for |
+| --- | --- | --- |
+| **Auto** (the default) | 480 to 1344 MHz | The lowest speed that keeps the game at full speed. Best for battery |
+| **Powersave** | 1056 MHz | A fixed speed for light games |
+| **Normal** | 1344 MHz | The fastest the A30 holds for long |
+| **Performance** | 1512 MHz | Faster, but **can freeze some games** |
+
+**Auto** watches how much of each frame's time goes to emulating it. It starts at Normal and steps down while a lower
+speed still leaves plenty of room, steps back up the moment a frame gets close to running late, and remembers what each
+game needed so it starts at the right speed next time. Game Boy games run at a fraction of the CPU, and heavy
+PlayStation games get all Auto allows.
+
+**Auto never goes past Normal, on purpose.** The A30 changes speed by writing its clock at the voltage it booted with,
+and 1512 MHz is past what it holds for long. That's why Performance is a choice you make for one game that needs it,
+and not a default: try it if a game is still slow on Auto, and go back if it freezes. Save first.
+
+**Nintendo DS** has Powersave, Normal and Performance, with Normal as its default. Auto doesn't apply, since DraStic
+isn't run by minarch.
 
 ## Controls
 
@@ -373,6 +510,7 @@ Everything on screen has a button hint. These are the ones you won't see:
 | `Saves/<TAG>` | In-game saves |
 | `BGM` | Music for the menus: mp3, ogg, flac or wav |
 | `Borders` | Screen borders, `<TAG>.png` and `<TAG>-native.png` |
+| `Emus/my282/NDS.pak/drastic` | DraStic, with DS saves and save states ([setup](#nintendo-ds)) |
 | `Tools` | Play Time, RetroAchievements, Box Art and Controls (Wi-Fi is in the settings) |
 | `.userdata` | Settings, save states, achievements, play time, logs (`.userdata/my282/logs`) |
 
@@ -404,7 +542,7 @@ MinUI+ is new, so bug reports help a lot. Open an issue at
 [gitlab.com/zavorin89-group/MinUI-Plus/-/issues](https://gitlab.com/zavorin89-group/MinUI-Plus/-/issues) with what you did, what
 happened and the game, and attach `.userdata/my282/logs` from the card if you can.
 
-MinUI+ was built with a lot of help from AI (Claude), and tested on a real A30 every step of the way.
+MinUI+ was built with a lot of help from AI (Claude), and tested on a real A30.
 
 ## Credits
 
@@ -414,19 +552,24 @@ MinUI+ was built with a lot of help from AI (Claude), and tested on a real A30 e
 - **System art** from the **Nao-Black** theme by **Naotib**, in the
   [NextUI Themes](https://github.com/Leviathanium/NextUI-Themes) collection (MIT license), trimmed for MinUI. The art
   for the systems it doesn't cover (Virtual Boy, Super Game Boy, Pokémon mini, Pico-8) and the Kiwi lime Game Boy
-  Color were made for MinUI+ in the same style. See `Roms/.res/CREDITS.txt`.
+  Color were made for MinUI+ in the same style. The arcade systems' art is credited, with its licenses, in
+  `Roms/.res/CREDITS.txt`.
 - **Screen borders** by **drkhrse**, from the [drkhrse Miyoo bezels](https://github.com/drkhrse/drkhrse_miyoo_bezels).
   The native borders are made for MinUI+ around their logos and power lights.
 - **Emulator cores** from **[libretro](https://github.com/libretro)** and their authors: gambatte, gpSP, mGBA,
   FCEUmm, snes9x 2005 / 2010 / current, Supafaust, PicoDrive, PCSX ReARMed, RACE, Beetle PCE Fast, Beetle VB,
-  PokeMini and fake-08. Each is under its own license; snes9x's allows non-commercial use only.
+  PokeMini, fake-08, FB Alpha 2012, Final Burn Neo, MAME 2003-Plus and ParaLLEl N64. Each is under its own license;
+  several, including snes9x's, FB Alpha's, Final Burn Neo's and MAME 2003-Plus's, allow non-commercial use only.
+- **[DraStic](https://drastic-ds.com)** by Exophase, which MinUI+ works with but doesn't include, and
+  **[steward-fu](https://github.com/steward-fu/nds)**'s Miyoo build of it.
 - **[rcheevos](https://github.com/RetroAchievements/rcheevos)** for RetroAchievements, and
   [RetroAchievements.org](https://retroachievements.org).
 - **[libchdr](https://github.com/rtissera/libchdr)** for reading `.chd` discs.
 - **[dr_libs](https://github.com/mackron/dr_libs)** (dr_mp3, dr_wav, dr_flac) and
   **[stb_vorbis](https://github.com/nothings/stb)** for music, both public domain.
 - Box art from the **[libretro thumbnails](https://github.com/libretro-thumbnails/libretro-thumbnails)** library.
-- Game Boy, Game Boy Color, Game Boy Advance and Nintendo are trademarks of Nintendo. SEGA and Game Gear are
-  trademarks of SEGA. Neo Geo Pocket is a trademark of SNK. MinUI+ isn't affiliated with any of them.
+- Game Boy, Game Boy Color, Game Boy Advance, Nintendo DS, Nintendo 64 and Nintendo are trademarks of Nintendo. SEGA,
+  Game Gear, Sega CD and 32X are trademarks of SEGA. Neo Geo and Neo Geo Pocket are trademarks of SNK. Capcom Play
+  System is a trademark of Capcom. MinUI+ isn't affiliated with any of them.
 
 MinUI's original README is in [docs/upstream-README.md](docs/upstream-README.md).
