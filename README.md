@@ -21,6 +21,7 @@ optimized as Onion, without the clunkiness that comes with running everything th
 > MinUI+ is made for and tested on the **Miyoo A30** only.
 
 - [Screenshots](#screenshots)
+- [What's new in v1.1](#whats-new-in-v11)
 - [Highlights](#highlights)
 - [Installing](#installing)
 - [The launcher](#the-launcher)
@@ -61,6 +62,48 @@ were taken by the A30 itself, border and LCD grid included.
 | **Play Time**: your games ranked by hours played | **Controls**: the shortcuts you can't see |
 
 <p align="center"><img src="github/screenshots/themes.png" width="640" alt="Color themes"><br><b>Color themes</b> for the whole interface (eleven in all)</p>
+
+## What's new in v1.1
+
+Everything that changed from v1.07. On v1.07 or older? [Install this one by hand](#updating), once.
+
+**Nintendo DS**
+
+- New system, through DraStic, which [you download yourself](#nintendo-ds)
+- The same pause menu as every other system, with save states and their pictures, play time, the game switcher and
+  resume
+- Screen layouts, borders, Main Screen, Screen Effect, Prevent Tearing, and rebindable controls and shortcuts
+- RetroAchievements (softcore)
+- CPU Speed and Thumbstick rows in the game menu (MENU + Y)
+- Renaming or deleting a DS game takes its saves, save states and settings along
+
+**Nintendo 64** (still experimental, [your mileage may vary](#nintendo-64))
+
+- Better speed and graphics overall, including lighting and off-screen effects
+- Mario Tennis: improved effects around the ball and the screen after a replay. Some shimmering and odd textures
+  remain in replays
+- Banjo-Kazooie: improved the black pieces in its transitions, though it can still show visual problems
+- Fixed a graphics memory leak
+
+**Clock**
+
+- New **Set time** in Settings sets the clock without Wi-Fi
+- The clock now stays right while the A30 is off, and shows only once it's been synced over Wi-Fi or set by hand. It
+  may stay hidden after this update until you do one of those
+
+**Menus and saves**
+
+- A game name too long for the pause menu now scrolls instead of being cut off
+- A save state is written beside the old one first, so losing power mid-save no longer destroys the previous state
+- The charging bolt now also shows on a wall charger
+
+**RetroAchievements**
+
+- It now logs why it couldn't connect, and no longer lists the server's notice about unrecognized emulators
+
+**Updates**
+
+- The built-in updater now checks [GitLab](https://gitlab.com/zavorin89-group/MinUI-Plus/-/releases)
 
 ## Highlights
 
