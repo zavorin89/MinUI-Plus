@@ -39,8 +39,7 @@ optimized as Onion, without the clunkiness that comes with running everything th
 ## Screenshots
 
 The launcher screens are MinUI+'s own code drawing at the A30's 640x480, captured on a computer. The in-game ones
-were taken by the A30 itself, border and LCD grid included. The Nintendo DS ones are MinUI+'s DS menus drawing at
-640x480, also captured on a computer.
+were taken by the A30 itself, border and LCD grid included.
 
 | | |
 | :---: | :---: |
@@ -56,6 +55,8 @@ were taken by the A30 itself, border and LCD grid included. The Nintendo DS ones
 | **Game menu**: core, box art, rename, delete | **Settings**: Wi-Fi, timers, themes, sounds, music, clock |
 | <img src="github/screenshots/ingame-gbc-native.jpg" width="320" alt="Game Boy Color native border"> | <img src="github/screenshots/ingame-gba-grid.jpg" width="320" alt="Game Boy Advance with LCD grid"> |
 | **Native borders**: the Kiwi lime Game Boy Color | **LCD grid** and border on the GBA |
+| <img src="github/screenshots/ingame-nds.png" width="320" alt="Final Fantasy Tactics A2 on Nintendo DS"> | <img src="github/screenshots/ingame-n64.png" width="320" alt="Ocarina of Time on Nintendo 64"> |
+| **[Nintendo DS](#nintendo-ds)** with a border and both screens | **[Nintendo 64](#nintendo-64)**, experimental |
 | <img src="github/screenshots/most-played.png" width="320" alt="Play Time"> | <img src="github/screenshots/controls.png" width="320" alt="Controls tool"> |
 | **Play Time**: your games ranked by hours played | **Controls**: the shortcuts you can't see |
 
@@ -363,11 +364,6 @@ Any other copy gets one warning, and MinUI+ still tries to run it.
 
 **Saves and save states stay in the DraStic folder** (`backup` and `savestates`), so keep that folder. Updating MinUI+
 doesn't touch it.
-
-<p align="center">
-  <img src="github/screenshots/ds-menu.png" width="320" alt="The pause menu in a DS game">
-  <img src="github/screenshots/ds-options.png" width="320" alt="Frontend options for DS games">
-</p>
 
 ### In a DS game
 
