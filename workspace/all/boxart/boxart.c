@@ -835,7 +835,7 @@ static void findOne(char* path) {
 	gameName(game.file, stat(path, &st)==0 && S_ISDIR(st.st_mode), game.name);
 	game.system = librarySystem(game.folder);
 	if (!game.system) {
-		showMessage("The box art library doesn't cover this system", 1);
+		showMessage("No box art library for this system", 1);
 		return;
 	}
 	PWR_setCPUSpeed(CPU_SPEED_NORMAL);
@@ -874,7 +874,7 @@ static void addMissed(Missed* missed, Game* game, const char* why) {
 	char tag[64] = "";
 	char* open = strrchr(game->folder, '(');
 	char* close = open ? strchr(open, ')') : NULL;
-	if (open && close && close-open-1<(int)sizeof(tag)) snprintf(tag, sizeof(tag), "%.*s, ", (int)(close-open-1), open+1);
+	if (open && close && close-open-1<(int)sizeof(tag)) snprintf(tag, sizeof(tag), "%.*s - ", (int)(close-open-1), open+1);
 	char note[128];
 	snprintf(note, sizeof(note), "%s%s", tag, why);
 	missed->names[missed->count] = strdup(game->name);
@@ -911,19 +911,19 @@ static void findMissing(int replace) {
 		Game* game = &games[i];
 		if (!replace && game->no_match_at) { // (no list to load or search for these)
 			skipped += 1;
-			addMissed(&missed, game, "no match last time");
+			addMissed(&missed, game, "No match last time");
 			ART_LOG("no match last time: %s/%s\n", strrchr(game->folder, '/')+1, game->file);
 			continue;
 		}
 		showProgress("Finding box art", done, to_find, game->name, done==0);
 		done += 1;
 		if (cancelled()) { stopped = 1; break; }
-		if (!game->system) { unsupported += 1; addMissed(&missed, game, "system not in the library"); continue; }
+		if (!game->system) { unsupported += 1; addMissed(&missed, game, "Unsupported system"); continue; }
 
 		if (game->system!=list_system) {
 			freeArtList(&list);
 			list_system = game->system;
-			showProgress("Finding box art", done-1, to_find, "Getting the list of art for this system...", 1);
+			showProgress("Finding box art", done-1, to_find, "Getting this system's art list...", 1);
 			if (!loadArtList(game->system, &list)) ART_LOG("couldn't get the art list for %s\n", game->system);
 		}
 		char href[MAX_PATH];
@@ -936,12 +936,12 @@ static void findMissing(int replace) {
 		else if (result==ART_NO_MATCH) {
 			unmatched += 1;
 			game->no_match_at = time(NULL);
-			addMissed(&missed, game, "no match");
+			addMissed(&missed, game, "No match");
 			ART_LOG("no match: %s/%s\n", strrchr(game->folder, '/')+1, game->file);
 		}
 		else {
 			failed += 1;
-			addMissed(&missed, game, "couldn't download");
+			addMissed(&missed, game, "Download failed");
 			ART_LOG("download failed: %s (%s)\n", game->file, href);
 		}
 	}
@@ -956,17 +956,17 @@ static void findMissing(int replace) {
 
 	char summary[512];
 	int n = snprintf(summary, sizeof(summary), "%s\n%i found", stopped ? "Stopped" : to_find ? "Box art done" : count ? "Nothing new to find" : "Every game has box art", found);
-	if (unmatched) n += snprintf(summary+n, sizeof(summary)-n, "\n%i with no match (listed in logs/box-art.txt)", unmatched);
-	if (skipped) n += snprintf(summary+n, sizeof(summary)-n, "\n%i skipped, no match last time (REPLACE tries them)", skipped);
+	if (unmatched) n += snprintf(summary+n, sizeof(summary)-n, "\n%i with no match", unmatched);
+	if (skipped) n += snprintf(summary+n, sizeof(summary)-n, "\n%i skipped (no match last time)", skipped);
 	if (failed) n += snprintf(summary+n, sizeof(summary)-n, "\n%i couldn't be downloaded", failed);
-	if (unsupported) n += snprintf(summary+n, sizeof(summary)-n, "\n%i on systems the library doesn't cover", unsupported);
+	if (unsupported) n += snprintf(summary+n, sizeof(summary)-n, "\n%i on unsupported systems", unsupported);
 	if (stopped) { // (the rest weren't tried, so a list of them would say little)
 		for (int i=0; i<missed.count; i++) { free(missed.names[i]); free(missed.notes[i]); }
 		missed.count = 0;
 	}
 	if (missed.count && ask(summary, "SEE LIST", "DONE")) {
 		char title[64];
-		snprintf(title, sizeof(title), "No box art: %i game%s", missed.count, missed.count==1 ? "" : "s");
+		snprintf(title, sizeof(title), "No box art: %i", missed.count);
 		GFX_showList(screen, title, missed.names, missed.notes, missed.count);
 	}
 	else if (!missed.count) showMessage(summary, 1);
@@ -1101,7 +1101,7 @@ void BoxArt_open(SDL_Surface* main_screen, char* game) {
 		}
 		else if (PAD_justPressed(BTN_A)) {
 			if (selected==ROW_MISSING) {
-				int replace = ask("Replace existing box art?\n\nGames with no matches will not be changed\nMISSING ONLY skips games with no match last time", "REPLACE", "MISSING ONLY");
+				int replace = ask("Replace existing box art?\n\nGames with no match keep their art\nMISSING ONLY skips recent misses", "REPLACE", "MISSING ONLY");
 				findMissing(replace);
 				missing = collectMissing(scratch, &known); // (a quick look: no art is opened)
 				if (replace) resizable = collectResizable(NULL); // new art never needs resizing, but replaced art might have

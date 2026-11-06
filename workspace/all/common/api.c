@@ -1060,6 +1060,16 @@ void GFX_setTimeZone(int zone) {
 // a header too long for the room left of the hardware group (with a gap before its pill) scrolls there and back
 #define HEADER_PAUSE_MS 1200 // still at each end
 #define HEADER_SPEED 30 // unscaled pixels a second
+// how far a text overflow pixels too wide has scrolled, there and back with a pause at each end
+static int scrollOffset(int overflow, uint32_t started) {
+	if (overflow<=0) return 0;
+	int scroll_ms = MAX(1, overflow * 1000 / SCALE1(HEADER_SPEED));
+	int t = (SDL_GetTicks() - started) % (HEADER_PAUSE_MS*2 + scroll_ms*2);
+	if (t<HEADER_PAUSE_MS) return 0;
+	if (t<HEADER_PAUSE_MS+scroll_ms) return (t - HEADER_PAUSE_MS) * overflow / scroll_ms;
+	if (t<HEADER_PAUSE_MS*2+scroll_ms) return overflow;
+	return overflow - (t - HEADER_PAUSE_MS*2 - scroll_ms) * overflow / scroll_ms;
+}
 int GFX_blitHeaderText(SDL_Surface* dst, TTF_Font* f, SDL_Color color, const char* title, int ow) {
 	static SDL_Surface* text;
 	static char drawn[256];
@@ -1080,15 +1090,7 @@ int GFX_blitHeaderText(SDL_Surface* dst, TTF_Font* f, SDL_Color color, const cha
 	int room = dst->w - SCALE1(PADDING) - ow - SCALE1(PADDING) - x;
 	if (room<=0) return 0;
 	int overflow = text->w - room;
-	int offset = 0;
-	if (overflow>0) {
-		int scroll_ms = MAX(1, overflow * 1000 / SCALE1(HEADER_SPEED));
-		int t = (SDL_GetTicks() - started) % (HEADER_PAUSE_MS*2 + scroll_ms*2);
-		if (t<HEADER_PAUSE_MS) offset = 0;
-		else if (t<HEADER_PAUSE_MS+scroll_ms) offset = (t - HEADER_PAUSE_MS) * overflow / scroll_ms;
-		else if (t<HEADER_PAUSE_MS*2+scroll_ms) offset = overflow;
-		else offset = overflow - (t - HEADER_PAUSE_MS*2 - scroll_ms) * overflow / scroll_ms;
-	}
+	int offset = scrollOffset(overflow, started);
 	SDL_BlitSurface(text, &(SDL_Rect){ offset, 0, MIN(room, text->w), text->h }, dst, &(SDL_Rect){ x, SCALE1(PADDING) + (SCALE1(PILL_SIZE) - text->h) / 2 });
 	return overflow>0;
 }
@@ -1097,43 +1099,65 @@ int GFX_blitHeaderText(SDL_Surface* dst, TTF_Font* f, SDL_Color color, const cha
 #define LIST_SHOWN 5
 void GFX_showList(SDL_Surface* dst, const char* title, char** names, char** notes, int count) {
 	int selected = 0, start = 0, dirty = 1, show_setting = 0;
+	// the shown rows' text, rendered only when the rows or the selection change (the A30 is slow at rendering text,
+	// and a slow frame can lose a quick tap): the selected name whole (it scrolls when too long), the others cut short
+	SDL_Surface* row_name[LIST_SHOWN] = {0};
+	SDL_Surface* row_note[LIST_SHOWN] = {0};
+	int drawn_start = -1, drawn_selected = -1;
+	uint32_t selected_at = 0;
+	int x = SCALE1(PADDING), w = dst->w - SCALE1(PADDING*2);
 	PAD_reset();
 	while (1) {
 		GFX_startFrame();
 		PAD_poll();
 		if (PAD_justPressed(BTN_A) || PAD_justPressed(BTN_B)) break;
 		int next = selected;
-		if (PAD_justRepeated(BTN_UP)) next = (selected + count - 1) % MAX(1, count);
-		else if (PAD_justRepeated(BTN_DOWN)) next = (selected + 1) % MAX(1, count);
-		else if (PAD_justRepeated(BTN_LEFT)) next = MAX(0, selected - LIST_SHOWN);
-		else if (PAD_justRepeated(BTN_RIGHT)) next = MIN(count - 1, selected + LIST_SHOWN);
+		// (justPressed too: a press and release read in the same poll leave no repeat)
+		if (PAD_justPressed(BTN_UP) || PAD_justRepeated(BTN_UP)) next = (selected + count - 1) % MAX(1, count);
+		else if (PAD_justPressed(BTN_DOWN) || PAD_justRepeated(BTN_DOWN)) next = (selected + 1) % MAX(1, count);
+		else if (PAD_justPressed(BTN_LEFT) || PAD_justRepeated(BTN_LEFT)) next = MAX(0, selected - LIST_SHOWN);
+		else if (PAD_justPressed(BTN_RIGHT) || PAD_justRepeated(BTN_RIGHT)) next = MIN(count - 1, selected + LIST_SHOWN);
 		if (next!=selected && next>=0) {
 			selected = next;
 			dirty = 1;
 		}
 		if (selected<start) start = selected;
 		if (selected>=start+LIST_SHOWN) start = selected - LIST_SHOWN + 1;
+		if (start!=drawn_start || selected!=drawn_selected) {
+			for (int j=0; j<LIST_SHOWN; j++) {
+				if (row_name[j]) SDL_FreeSurface(row_name[j]);
+				if (row_note[j]) SDL_FreeSurface(row_note[j]);
+				row_name[j] = row_note[j] = NULL;
+				int i = start + j;
+				if (i>=count) continue;
+				int is_selected = i==selected;
+				if (notes && notes[i] && notes[i][0]) row_note[j] = TTF_RenderUTF8_Blended(font.tiny, notes[i], is_selected ? COLOR_BLACK : COLOR_LIGHT_TEXT);
+				int room = w - SCALE1(BUTTON_PADDING*3) - (row_note[j] ? row_note[j]->w : 0);
+				char shown[256];
+				if (is_selected) snprintf(shown, sizeof(shown), "%s", names[i]);
+				else GFX_truncateText(font.large, names[i], shown, room, 0);
+				row_name[j] = TTF_RenderUTF8_Blended(font.large, shown, is_selected ? COLOR_BLACK : COLOR_WHITE);
+			}
+			if (selected!=drawn_selected) selected_at = SDL_GetTicks();
+			drawn_start = start;
+			drawn_selected = selected;
+		}
 		PWR_update(&dirty, &show_setting, NULL, NULL);
 		if (dirty) {
 			GFX_clear(dst);
 			int scrolls = GFX_blitHeader(dst, (char*)title, GFX_blitHardwareGroup(dst, show_setting));
-			int x = SCALE1(PADDING), w = dst->w - SCALE1(PADDING*2);
-			for (int i=start, j=0; i<count && j<LIST_SHOWN; i++, j++) {
+			for (int j=0; j<LIST_SHOWN && start+j<count; j++) {
 				int y = SCALE1(PADDING + (j+1)*PILL_SIZE);
-				int is_selected = i==selected;
-				if (is_selected) GFX_blitPill(ASSET_WHITE_PILL, dst, &(SDL_Rect){ x, y, w, SCALE1(PILL_SIZE) });
-				SDL_Surface* note = notes && notes[i] && notes[i][0] ? TTF_RenderUTF8_Blended(font.tiny, notes[i], is_selected ? COLOR_BLACK : COLOR_LIGHT_TEXT) : NULL;
-				int note_w = note ? note->w + SCALE1(BUTTON_PADDING) : 0;
-				char shown[256];
-				GFX_truncateText(font.large, names[i], shown, w - SCALE1(BUTTON_PADDING*2) - note_w, 0);
-				SDL_Surface* text = TTF_RenderUTF8_Blended(font.large, shown, is_selected ? COLOR_BLACK : COLOR_WHITE);
-				if (text) {
-					SDL_BlitSurface(text, NULL, dst, &(SDL_Rect){ x + SCALE1(BUTTON_PADDING), y + (SCALE1(PILL_SIZE) - text->h) / 2 });
-					SDL_FreeSurface(text);
-				}
-				if (note) {
-					SDL_BlitSurface(note, NULL, dst, &(SDL_Rect){ x + w - SCALE1(BUTTON_PADDING) - note->w, y + (SCALE1(PILL_SIZE) - note->h) / 2 });
-					SDL_FreeSurface(note);
+				if (start+j==selected) GFX_blitPill(ASSET_WHITE_PILL, dst, &(SDL_Rect){ x, y, w, SCALE1(PILL_SIZE) });
+				SDL_Surface* note = row_note[j];
+				SDL_Surface* name = row_name[j];
+				if (note) SDL_BlitSurface(note, NULL, dst, &(SDL_Rect){ x + w - SCALE1(BUTTON_PADDING) - note->w, y + (SCALE1(PILL_SIZE) - note->h) / 2 });
+				if (name) {
+					int room = w - SCALE1(BUTTON_PADDING*3) - (note ? note->w : 0);
+					int overflow = name->w - room;
+					if (overflow>0 && start+j==selected) scrolls = 1;
+					int offset = start+j==selected ? scrollOffset(overflow, selected_at) : 0;
+					SDL_BlitSurface(name, &(SDL_Rect){ offset, 0, MIN(room, name->w), name->h }, dst, &(SDL_Rect){ x + SCALE1(BUTTON_PADDING), y + (SCALE1(PILL_SIZE) - name->h) / 2 });
 				}
 			}
 			if (show_setting && !GetHDMI()) GFX_blitHardwareHints(dst, show_setting);
@@ -1148,9 +1172,13 @@ void GFX_showList(SDL_Surface* dst, const char* title, char** names, char** note
 			}
 			GFX_blitButtonGroup((char*[]){ "B","BACK", NULL }, 0, dst, 1);
 			GFX_flip(dst);
-			dirty = scrolls; // (a long title keeps scrolling)
+			dirty = scrolls; // (a long title or selected name keeps scrolling)
 		}
 		else GFX_sync();
+	}
+	for (int j=0; j<LIST_SHOWN; j++) {
+		if (row_name[j]) SDL_FreeSurface(row_name[j]);
+		if (row_note[j]) SDL_FreeSurface(row_note[j]);
 	}
 	PAD_reset();
 }

@@ -364,7 +364,7 @@ static void addMissed(Missed* missed, const char* path, const char* why) {
 	char tag[64] = "";
 	char* open = strrchr(folder, '(');
 	char* close = open ? strchr(open, ')') : NULL;
-	if (open && close && close-open-1<(int)sizeof(tag)) snprintf(tag, sizeof(tag), "%.*s, ", (int)(close-open-1), open+1);
+	if (open && close && close-open-1<(int)sizeof(tag)) snprintf(tag, sizeof(tag), "%.*s - ", (int)(close-open-1), open+1);
 	char note[128];
 	snprintf(note, sizeof(note), "%s%s", tag, why);
 	missed->names[missed->count] = strdup(name);
@@ -453,7 +453,7 @@ static void runSync(void) {
 				if (!hashGame(games[i].path, games[i].console, hash)) {
 					SYNC_LOG("%s: couldn't identify\n", games[i].path);
 					failed += 1;
-					addMissed(&missed, games[i].path, "couldn't identify");
+					addMissed(&missed, games[i].path, "Couldn't identify");
 					continue;
 				}
 
@@ -467,8 +467,8 @@ static void runSync(void) {
 				if (RACache_key(req.post_data, key, sizeof(key)) && (RACache_has(key) || RACache_isKnownUnknown(key))) { // synced before
 					SYNC_LOG("%s: already synced\n", games[i].path);
 					skipped += 1;
-					if (!RACache_has(key)) addMissed(&missed, games[i].path, "not in RetroAchievements"); // (a 404 kept from before)
-					else if (!cachedHasAchievements(key)) addMissed(&missed, games[i].path, "no achievements yet");
+					if (!RACache_has(key)) addMissed(&missed, games[i].path, "Not in RA"); // (a 404 kept from before)
+					else if (!cachedHasAchievements(key)) addMissed(&missed, games[i].path, "No achievements");
 					rc_api_destroy_request(&req);
 					continue;
 				}
@@ -506,11 +506,11 @@ static void runSync(void) {
 				else if (last_status==404) {
 					unknown += 1;
 					SYNC_LOG("%s: not in RetroAchievements\n", games[i].path);
-					addMissed(&missed, games[i].path, "not in RetroAchievements");
+					addMissed(&missed, games[i].path, "Not in RA");
 				}
 				else if (last_status!=401) {
 					failed += 1;
-					if (last_connected) addMissed(&missed, games[i].path, "couldn't check"); // (offline ones are tried again next time)
+					if (last_connected) addMissed(&missed, games[i].path, "Couldn't check"); // (offline ones are tried again next time)
 				}
 				HTTP_freeResponse(&response);
 				rc_api_destroy_request(&req);
@@ -527,7 +527,7 @@ static void runSync(void) {
 
 				// your unlocks, so offline play doesn't re-award achievements you already have
 				if (ids[0]) with_achievements += 1;
-				else if (last_status==200) addMissed(&missed, games[i].path, "no achievements yet");
+				else if (last_status==200) addMissed(&missed, games[i].path, "No achievements");
 				for (int j=0; j<2; j++) {
 					if (!ids[j]) continue;
 					rc_api_fetch_user_unlocks_request_t unlock_params = {0};
@@ -546,7 +546,7 @@ static void runSync(void) {
 			char summary[512];
 			int n;
 			if (rejected) n = snprintf(summary, sizeof(summary), "Sync failed\nRetroAchievements rejected your login\nSign in again from this menu");
-			else if (lost) n = snprintf(summary, sizeof(summary), "Sync failed\nLost the connection to RetroAchievements\nStopped at game %i of %i\nRun it again to continue where it left off", done+1, count);
+			else if (lost) n = snprintf(summary, sizeof(summary), "Sync failed\nLost connection to RetroAchievements\nStopped at game %i of %i\nRun it again to continue from there", done+1, count);
 			else {
 				n = snprintf(summary, sizeof(summary), "%s\n%i synced, %i already synced", cancelled ? "Sync cancelled" : "Sync complete", synced, skipped);
 				if (with_achievements) n += snprintf(summary+n, sizeof(summary)-n, "\n%i new with achievements", with_achievements);
@@ -559,7 +559,7 @@ static void runSync(void) {
 			PWR_enableAutosleep(); // the summary waits for a button, sleeping is fine again
 			if (askSummary(summary, missed.count && !rejected)) {
 				char title[64];
-				snprintf(title, sizeof(title), "No achievements: %i game%s", missed.count, missed.count==1 ? "" : "s");
+				snprintf(title, sizeof(title), "No achievements: %i", missed.count);
 				GFX_showList(screen, title, missed.names, missed.notes, missed.count);
 			}
 			for (int i=0; i<missed.count; i++) {
