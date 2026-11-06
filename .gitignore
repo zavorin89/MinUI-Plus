@@ -37,3 +37,9 @@ workspace/hash.txt
 workspace/readmes
 
 FAKESD
+# the official PICO-8 is the user's own (personal license): never committed
+skeleton/EXTRAS/Emus/my282/PICO8.pak/pico-8/
+skeleton/EXTRAS/Emus/my282/PICO8.pak/pico8/
+skeleton/EXTRAS/Emus/my282/PICO8.pak/pico8*
+# DraStic is brought by the user too: never committed
+skeleton/EXTRAS/Emus/my282/NDS.pak/drastic/

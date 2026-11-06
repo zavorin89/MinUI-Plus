@@ -983,7 +983,7 @@ static int Menu_options(MenuList* list) {
 
 		if (dirty) {
 			GFX_clear(screen);
-			GFX_blitHeader(screen, list->title, GFX_blitHardwareGroup(screen, show_settings));
+			int header_scrolls = GFX_blitHeader(screen, list->title, GFX_blitHardwareGroup(screen, show_settings));
 
 			char* desc = NULL;
 			SDL_Surface* text;
@@ -1085,7 +1085,7 @@ static int Menu_options(MenuList* list) {
 			}
 
 			flipMenu();
-			dirty = 0;
+			dirty = header_scrolls; // (a long title keeps scrolling)
 		}
 		else GFX_sync();
 	}
@@ -1337,6 +1337,7 @@ static void runMenu(void) {
 
 	int save_exists = 0, preview_exists = 0;
 	char bmp_path[800] = "";
+	char preview_shown[800] = ""; // the picture already in preview, so redraws don't read it from the card again
 	int show_setting = 0;
 	int dirty = 1;
 	int title_scrolls = 0, title_width = 0;
@@ -1496,17 +1497,20 @@ static void runMenu(void) {
 				ox += SCALE1(WINDOW_RADIUS);
 				oy += SCALE1(WINDOW_RADIUS);
 
-				SDL_Surface* bmp = preview_exists ? IMG_Load(bmp_path) : NULL;
-				if (bmp) {
-					SDL_Surface* raw = SDL_ConvertSurface(bmp, screen->format, SDL_SWSURFACE);
-					SDL_FillRect(preview, NULL, 0);
-					if (raw) {
-						SDL_BlitScaled(raw, NULL, preview, NULL);
-						SDL_FreeSurface(raw);
+				if (preview_exists && strcmp(preview_shown, bmp_path)) {
+					SDL_Surface* bmp = IMG_Load(bmp_path);
+					if (bmp) {
+						SDL_Surface* raw = SDL_ConvertSurface(bmp, screen->format, SDL_SWSURFACE);
+						SDL_FillRect(preview, NULL, 0);
+						if (raw) {
+							SDL_BlitScaled(raw, NULL, preview, NULL);
+							SDL_FreeSurface(raw);
+						}
+						SDL_FreeSurface(bmp);
+						snprintf(preview_shown, sizeof(preview_shown), "%s", bmp_path);
 					}
-					SDL_BlitSurface(preview, NULL, screen, &(SDL_Rect){ox,oy});
-					SDL_FreeSurface(bmp);
 				}
+				if (preview_exists && !strcmp(preview_shown, bmp_path)) SDL_BlitSurface(preview, NULL, screen, &(SDL_Rect){ox,oy});
 				else {
 					SDL_Rect preview_rect = {ox,oy,hw,hh};
 					SDL_FillRect(screen, &preview_rect, 0);

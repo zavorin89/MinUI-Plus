@@ -213,7 +213,9 @@ void GFX_blitButton(char* hint, char*button, SDL_Surface* dst, SDL_Rect* dst_rec
 void GFX_blitMessage(TTF_Font* font, char* msg, SDL_Surface* dst, SDL_Rect* dst_rect);
 
 int GFX_blitHardwareGroup(SDL_Surface* dst, int show_setting);
-void GFX_blitHeader(SDL_Surface* dst, char* title, int ow); // a screen's title, grey, on the top row beside the hardware group (ow: its width)
+int GFX_blitHeader(SDL_Surface* dst, char* title, int ow); // a screen's title, grey, on the top row beside the hardware group (ow: its width); 1 while it scrolls (too long), so draw it again each frame
+int GFX_blitHeaderText(SDL_Surface* dst, TTF_Font* font, SDL_Color color, const char* title, int ow); // the same in another font or color
+void GFX_showList(SDL_Surface* dst, const char* title, char** names, char** notes, int count); // a list to read through, names with a note each (notes may be NULL); A or B closes it
 int GFX_settingFading(void); // the volume/brightness bar is still fading out (GFX_blitHardwareGroup draws it)
 enum { CLOCK_OFF, CLOCK_12H, CLOCK_24H };
 enum { SLEEP_LIGHT_OFF, SLEEP_LIGHT_ON, SLEEP_LIGHT_COUNT }; // (the A30's LED is on or off: it doesn't dim)

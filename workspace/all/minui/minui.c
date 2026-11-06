@@ -548,6 +548,7 @@ static Array* stack; // DirectoryArray
 static int inSwitcher(void) {
 	return top && exactMatch(top->path, FAUX_SWITCHER_PATH);
 }
+static char* noStateNote(Entry* entry);
 // lists of games can switch to the carousel; the main menu and Tools are always lists
 static int canCarousel(void) {
 	if (!top || stack->count<2) return 0;
@@ -1576,11 +1577,28 @@ static int getSlotPath(char* rom_path, int type, char* slot_path) {
 	
 	return exists(slot_path);
 }
-static void readyResumePath(char* rom_path, int type) {
-	can_resume = getSlotPath(rom_path, type, slot_path);
-}
+// Resume picks up where the game switcher would: the newer of the quick save (leaving through the switcher) and the
+// last manual save, so both carry on from the same point
+static int lookUpSwitcherSave(Entry* entry, char* preview_path, int* slot);
+static int getGameCore(char* sd_path, char* tag);
+static int resume_pick = -1; // that save's slot
 static void readyResume(Entry* entry) {
-	readyResumePath(entry->path, entry->type);
+	int has_manual = getSlotPath(entry->path, entry->type, slot_path);
+	char preview[256];
+	int slot;
+	if (lookUpSwitcherSave(entry, preview, &slot)) {
+		can_resume = 1;
+		resume_pick = slot;
+	}
+	else { // a manual save without its picture
+		can_resume = has_manual;
+		resume_pick = -1; // (the slot in slot_path)
+	}
+	if (can_resume) { // a native core has no save states to resume (eg. a Pico-8 cart moved to the official PICO-8)
+		char emu_name[256], tag[64];
+		getEmuName(entry->path, emu_name);
+		if (exactMatch(emu_name, "PICO8") || (exactMatch(emu_name, "P8") && getGameCore(entry->path, tag) && exactMatch(tag, "PICO8"))) can_resume = 0;
+	}
 }
 
 static void saveLast(char* path);
@@ -1626,6 +1644,7 @@ static int autoResume(void) {
 static void freeThumbs(void);
 static void Carousel_quit(void);
 static void SetTime_open(SDL_Surface* screen);
+static int speed_unknown = 0; // a tool set the CPU speed itself (Box Art leaves it at the menu's), so the launcher's idea of it is stale
 static void openTool(SDL_Surface* screen, char* name, char* game) {
 	SFX_forInput(1); // the tools click for moving, choosing and going back by themselves
 	if (!name) SetTime_open(screen); // (no pak of its own)
@@ -1635,6 +1654,7 @@ static void openTool(SDL_Surface* screen, char* name, char* game) {
 	else if (exactMatch(name, "RetroAchievements.pak")) RetroAchievements_open(screen);
 	SFX_forInput(0);
 	PAD_reset();
+	speed_unknown = 1;
 	if (name && exactMatch(name, "Box Art.pak")) { // art it found or resized is read again
 		freeThumbs();
 		Carousel_quit();
@@ -1833,6 +1853,11 @@ static int getPakExe(char* tag, char* exe) {
 static void getCoreName(char* tag, char* name, const char** about) {
 	snprintf(name, 64, "%s", tag);
 	*about = NULL;
+	if (exactMatch(tag, "PICO8")) { // native, so it names no core
+		snprintf(name, 64, "PICO-8 (official)");
+		*about = "Your own copy of PICO-8 (see the README): every cart\nruns as made. No save states; MENU opens its own menu.";
+		return;
+	}
 	char exe[64];
 	if (!getPakExe(tag, exe)) return;
 	static const char* known[][3] = {
@@ -1848,6 +1873,7 @@ static void getCoreName(char* tag, char* name, const char** about) {
 		{"picodrive","PicoDrive",				"Fast Genesis, Master System and Game Gear emulation."},
 		{"pcsx_rearmed","PCSX ReARMed",			"PlayStation emulation tuned for ARM handhelds."},
 		{"mednafen_pce_fast","Beetle PCE Fast",	"Fast, accurate PC Engine / TurboGrafx-16 emulation."},
+		{"fake08","FAKE-08",					"Open-source PICO-8 emulator with save states and the\ngame menu. A few carts don't run."},
 	};
 	for (int i=0; i<(int)(sizeof(known)/sizeof(known[0])); i++) {
 		if (exactMatch((char*)known[i][0], exe)) {
@@ -2801,8 +2827,10 @@ static int getSlotPath(char* rom_path, int type, char* slot_path);
 #define SWITCHER_SAVE_CACHE (SWITCHER_MAX+2)
 static struct { char path[MAX_PATH]; char preview[256]; int slot; int found; } switcher_saves[SWITCHER_SAVE_CACHE];
 static int switcher_save_count = 0;
+static char note_path[MAX_PATH];
 static void forgetSwitcherSaves(void) {
 	switcher_save_count = 0;
+	note_path[0] = '\0'; // (a game's core may have changed)
 }
 static int lookUpSwitcherSave(Entry* entry, char* preview_path, int* slot);
 static int getSwitcherSave(Entry* entry, char* preview_path, int* slot) {
@@ -3096,9 +3124,16 @@ static void blitCarousel(SDL_Surface* screen, Directory* dir, int can_decode, fl
 	GFX_truncateText(font.large, name, shown, screen->w - SCALE1(PADDING*4) - dot_width, 0);
 	if (entry->favorite) strcat(shown, FAVORITE_DOT);
 	SDL_Surface* text = shown[0] ? TTF_RenderUTF8_Blended(font.large, shown, COLOR_WHITE) : NULL;
+	int name_h = text ? text->h : 0;
 	if (text) {
 		SDL_BlitSurface(text, NULL, screen, &(SDL_Rect){ cx - text->w/2, bottom + SCALE1(8) });
 		SDL_FreeSurface(text);
+	}
+	char* note = noStateNote(entry);
+	SDL_Surface* note_txt = note ? TTF_RenderUTF8_Blended(font.tiny, note, COLOR_LIGHT_TEXT) : NULL;
+	if (note_txt) {
+		SDL_BlitSurface(note_txt, NULL, screen, &(SDL_Rect){ cx - note_txt->w/2, bottom + SCALE1(8) + name_h });
+		SDL_FreeSurface(note_txt);
 	}
 }
 
@@ -3385,6 +3420,20 @@ static int Carousel_has(char* res_path) {
 	for (int i=0; i<CAROUSEL_CACHE_SIZE; i++) if (carousel_cache[i].loaded && exactMatch(carousel_cache[i].path, res_path)) return 1;
 	return 0;
 }
+// in the switcher: under a PICO-8 game's picture, that picking it starts over (PICO-8 has no save states)
+static int isPico8Native(char* sd_path, char* system_tag);
+// asked every frame: the last answer, until the switcher is opened again: the last answer, until the switcher is opened again
+static char* note_text;
+static char* noStateNote(Entry* entry) {
+	if (!inSwitcher()) return NULL;
+	if (exactMatch(note_path, entry->path)) return note_text;
+	char emu_name[256];
+	getEmuName(entry->path, emu_name);
+	note_text = NULL;
+	if (isPico8Native(entry->path, emu_name)) note_text = suffixMatch(".splore", entry->path) ? "Splore doesn't save its state" : "PICO-8 doesn't save its state";
+	snprintf(note_path, sizeof(note_path), "%s", entry->path);
+	return note_text;
+}
 // where the carousel's picture for an entry comes from: its box art, its switcher screenshot, or "card:" for none
 static void getCarouselPath(Entry* entry, char* res_path) {
 	if (inSwitcher()) {
@@ -3629,6 +3678,9 @@ static void blitCarouselGPU(SDL_Surface* screen, Directory* dir, int decodes, fl
 	if (entry->favorite) strcat(shown, FAVORITE_DOT);
 	SDL_Surface* text = renderText(font.large, shown, COLOR_WHITE);
 	if (text) SDL_BlitSurface(text, NULL, screen, &(SDL_Rect){ cx - text->w/2, bottom + SCALE1(8) });
+	char* note = noStateNote(entry);
+	SDL_Surface* note_txt = note ? renderText(font.tiny, note, COLOR_LIGHT_TEXT) : NULL;
+	if (note_txt) SDL_BlitSurface(note_txt, NULL, screen, &(SDL_Rect){ cx - note_txt->w/2, bottom + SCALE1(8) + (text ? text->h : 0) });
 }
 // GPU version of Carousel_preload: decodes and uploads the art either side, one per call
 static int Carousel_preloadGPU(Directory* dir, SDL_Surface* screen) {
@@ -4568,6 +4620,22 @@ static void setGameOption(GameConfig* cfg, char* key, char* label) {
 	if (from) free(from);
 }
 
+// PICO-8 (official): libp8layer keeps one set of settings for every cart, Splore included, in this file (its in-game
+// Options show the same)
+#define P8_SETTINGS_PATH SDCARD_PATH "/Saves/PICO8/minuiplus.txt"
+#define P8_SETTING_COUNT 4
+static struct { char* key; char* name; char* hint; char* labels[3]; int count; int fallback; } p8_settings[P8_SETTING_COUNT] = {
+	{ "p8_scaling", "Screen scaling", "Integer keeps every pixel the same size", { "Integer", "Fullscreen" }, 2, 1 },
+	{ "p8_effect", "Screen effect", "An LCD's pixel grid, or scanlines", { "None", "Line", "Grid" }, 3, 2 },
+	{ "p8_border", "Screen border", "The frame from Borders: P8.png, or the cart's own", { "Off", "On" }, 2, 1 },
+	{ "p8_buttons", "Button layout", "Which of A and B is PICO-8's O button", { "A is O, B is X", "A is X, B is O" }, 2, 0 },
+};
+static int isPico8Native(char* sd_path, char* system_tag) {
+	if (exactMatch(system_tag, "PICO8")) return 1;
+	char tag[64];
+	return exactMatch(system_tag, "P8") && getGameCore(sd_path, tag) && exactMatch(tag, "PICO8");
+}
+
 // the game menu (MENU + Y): change its core or CPU speed, get its box art, rename or delete it
 static void gameMenu(SDL_Surface* screen) {
 	Entry* entry = top->entries->items[top->selected];
@@ -4581,8 +4649,8 @@ static void gameMenu(SDL_Surface* screen) {
 	char system_tag[MAX_PATH];
 	getEmuName(sd_path, system_tag);
 
-	enum { ROW_CORE, ROW_CPU, ROW_RUMBLE, ROW_STICK, ROW_ART, ROW_RENAME, ROW_DELETE };
-	int rows[7];
+	enum { ROW_CORE, ROW_CPU, ROW_RUMBLE, ROW_STICK, ROW_ART, ROW_RENAME, ROW_DELETE, ROW_P8 }; // (ROW_P8 + a p8_settings index)
+	int rows[7 + P8_SETTING_COUNT];
 	int count = 0;
 	Core cores[CORE_MAX];
 	char core_name[64] = "";
@@ -4612,6 +4680,21 @@ static void gameMenu(SDL_Surface* screen) {
 		int rumble_locked = 0;
 		rumble = getGameOption(&cfg, RUMBLE_KEY, rumble_labels, RUMBLE_COUNT, RUMBLE_DEFAULT, &rumble_locked);
 		if (!rumble_locked && VIB_coreHasRumble(cfg.exe)) rows[count++] = ROW_RUMBLE;
+	}
+	GameConfig p8_cfg;
+	int p8_values[P8_SETTING_COUNT];
+	if (isPico8Native(sd_path, system_tag)) {
+		snprintf(p8_cfg.game, MAX_PATH, P8_SETTINGS_PATH);
+		snprintf(p8_cfg.console, MAX_PATH, P8_SETTINGS_PATH);
+		for (int i=0; i<P8_SETTING_COUNT; i++) {
+			char value[64];
+			int locked = 0;
+			p8_values[i] = p8_settings[i].fallback;
+			if (getCfgValue(P8_SETTINGS_PATH, p8_settings[i].key, value, &locked)) {
+				for (int j=0; j<p8_settings[i].count; j++) if (exactMatch(value, p8_settings[i].labels[j])) p8_values[i] = j;
+			}
+			rows[count++] = ROW_P8 + i;
+		}
 	}
 	char art_path[MAX_PATH];
 	getResPath(entry, art_path);
@@ -4653,6 +4736,14 @@ static void gameMenu(SDL_Surface* screen) {
 			SFX_play(SFX_TICK);
 			dirty = 1;
 		}
+		else if (rows[selected]>=ROW_P8 && (PAD_justRepeated(BTN_LEFT) || PAD_justRepeated(BTN_RIGHT) || PAD_justPressed(BTN_A))) {
+			int i = rows[selected] - ROW_P8;
+			int n = p8_settings[i].count;
+			p8_values[i] = (p8_values[i] + (PAD_justRepeated(BTN_LEFT) ? n-1 : 1)) % n;
+			setGameOption(&p8_cfg, p8_settings[i].key, p8_settings[i].labels[p8_values[i]]);
+			SFX_play(SFX_TICK);
+			dirty = 1;
+		}
 		else if (PAD_justPressed(BTN_A)) result = 1;
 		else if (PAD_justRepeated(BTN_UP)) { selected = (selected + count - 1) % count; SFX_play(SFX_TICK); dirty = 1; }
 		else if (PAD_justRepeated(BTN_DOWN)) { selected = (selected + 1) % count; SFX_play(SFX_TICK); dirty = 1; }
@@ -4686,6 +4777,12 @@ static void gameMenu(SDL_Surface* screen) {
 				else if (rows[i]==ROW_ART) { name = has_art ? "Replace box art" : "Get box art"; if (is_selected) hint = has_art ? "Compare the library's covers with yours, keep one" : "Downloads it from the libretro library (needs Wi-Fi)"; }
 				else if (rows[i]==ROW_RENAME) { name = "Rename"; if (is_selected) hint = "Its box art and saves keep up with the new name"; }
 				else if (rows[i]==ROW_DELETE) { name = "Delete game"; if (is_selected) hint = "Asks first, then about its saves and box art"; }
+				else if (rows[i]>=ROW_P8) {
+					int s = rows[i] - ROW_P8;
+					name = p8_settings[s].name;
+					value = p8_settings[s].labels[p8_values[s]];
+					if (is_selected) hint = p8_settings[s].hint;
+				}
 				if (is_selected) GFX_blitPill(ASSET_WHITE_PILL, screen, &(SDL_Rect){ x - SCALE1(BUTTON_PADDING), y, rows_w + SCALE1(BUTTON_PADDING*2), SCALE1(PILL_SIZE) });
 				SDL_Surface* name_txt = TTF_RenderUTF8_Blended(font.large, name, is_selected ? COLOR_BLACK : COLOR_WHITE);
 				SDL_BlitSurface(name_txt, NULL, screen, &(SDL_Rect){ x, y + (SCALE1(PILL_SIZE) - name_txt->h) / 2 });
@@ -4703,7 +4800,7 @@ static void gameMenu(SDL_Surface* screen) {
 				SDL_BlitSurface(hint_txt, NULL, screen, &(SDL_Rect){ (screen->w - hint_txt->w) / 2, y + SCALE1(2) });
 				SDL_FreeSurface(hint_txt);
 			}
-			GFX_blitButtonGroup((char*[]){ "B","BACK", "A",rows[selected]==ROW_CPU || rows[selected]==ROW_RUMBLE || rows[selected]==ROW_STICK ? "CHANGE" : "SELECT", NULL }, 1, screen, 1);
+			GFX_blitButtonGroup((char*[]){ "B","BACK", "A",rows[selected]==ROW_CPU || rows[selected]==ROW_RUMBLE || rows[selected]==ROW_STICK || rows[selected]>=ROW_P8 ? "CHANGE" : "SELECT", NULL }, 1, screen, 1);
 			GFX_flip(screen);
 			dirty = 0;
 		}
@@ -4914,7 +5011,8 @@ int main (int argc, char *argv[]) {
 		int wanted_speed = CPU_SPEED_MENU;
 		if (boot_boost_until && (int32_t)(boot_boost_until-now)>0) wanted_speed = CPU_SPEED_NORMAL;
 		else if (last_input_at && now-last_input_at<NAV_BOOST_MS) wanted_speed = CPU_SPEED_NORMAL; // both cores: the second decodes the carousel's art
-		if (wanted_speed!=cpu_speed) {
+		if (wanted_speed!=cpu_speed || speed_unknown) { // (without the check, scrolling on after a tool stayed at 576MHz)
+			speed_unknown = 0;
 			cpu_speed = wanted_speed;
 			PWR_setCPUSpeedAsync(cpu_speed);
 		}
@@ -5316,6 +5414,7 @@ int main (int argc, char *argv[]) {
 			else if (resume_game) {
 				SFX_play(SFX_CONFIRM);
 				should_resume = 1;
+				resume_slot = resume_pick;
 				Entry_open(top->entries->items[top->selected], screen);
 				dirty = 1;
 			}
@@ -5325,7 +5424,7 @@ int main (int argc, char *argv[]) {
 				if (inSwitcher()) { // the switcher picks up from the newer of its quick save and the last manual save
 					char preview[256];
 					int slot;
-					if (getSwitcherSave(top->entries->items[top->selected], preview, &slot)) {
+					if (getSwitcherSave(top->entries->items[top->selected], preview, &slot) && !noStateNote(top->entries->items[top->selected])) { // (PICO-8 only has the picture)
 						should_resume = 1;
 						resume_slot = slot;
 					}
@@ -5717,7 +5816,7 @@ int main (int argc, char *argv[]) {
 					if (stack->count>1) {
 						char preview[256];
 						int slot;
-						int resumable = inSwitcher() ? getSwitcherSave(top->entries->items[top->selected], preview, &slot) : swap_ax && can_resume;
+						int resumable = inSwitcher() ? getSwitcherSave(top->entries->items[top->selected], preview, &slot) && !noStateNote(top->entries->items[top->selected]) : swap_ax && can_resume; // (PICO-8 starts over)
 						GFX_blitButtonGroup((char*[]){ "B","BACK", "A",resumable ? "RESUME" : "OPEN", NULL }, 1, screen, 1);
 					}
 					else {

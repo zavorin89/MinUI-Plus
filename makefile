@@ -50,6 +50,9 @@ system:
 	
 	# populate system
 	cp ./workspace/$(PLATFORM)/keymon/keymon.elf ./build/SYSTEM/$(PLATFORM)/bin/
+ifeq ($(PLATFORM),my282)
+	cp ./workspace/all/p8layer/build/$(PLATFORM)/libp8layer.so ./build/EXTRAS/Emus/$(PLATFORM)/PICO8.pak/
+endif
 	cp ./workspace/$(PLATFORM)/libmsettings/libmsettings.so ./build/SYSTEM/$(PLATFORM)/lib
 	cp ./workspace/all/minui/build/$(PLATFORM)/minui.elf ./build/SYSTEM/$(PLATFORM)/bin/
 	cp ./workspace/all/minarch/build/$(PLATFORM)/minarch.elf ./build/SYSTEM/$(PLATFORM)/bin/

@@ -1,0 +1,32 @@
+#!/bin/sh
+# PICO-8's downloads for Splore, through MinUI+'s own https.elf. With use_wget 1 in its config.txt PICO-8 runs wget
+# itself, and the A30's BusyBox wget can't do HTTPS. PICO-8 runs it two ways:
+#   wget "URL" -q -O "FILE"
+#   wget "URL" -q -O "FILE" --post-file=FILE
+# Only PICO-8 sees this (launch.sh puts this folder first on its PATH). Requests say who they're from rather than
+# passing as wget, and plain http:// addresses (lexaloffle.com redirects them anyway) go straight to https://.
+
+URL=""
+OUT=""
+POST=""
+while [ "$#" -gt 0 ]; do
+	case "$1" in
+		-O) OUT="$2"; shift ;;
+		-O*) OUT="${1#-O}" ;;
+		--post-file=*) POST="${1#--post-file=}" ;;
+		--post-file) POST="$2"; shift ;;
+		-*) ;; # (-q and anything newer: quiet is all this does anyway)
+		*) [ -z "$URL" ] && URL="$1" ;;
+	esac
+	shift
+done
+[ -n "$URL" ] || exit 1
+case "$URL" in
+	http://*) URL="https://${URL#http://}" ;;
+esac
+
+set -- -t 60s -ua "MinUIPlus-PICO8/1 (Splore through PICO-8's use_wget)"
+[ -n "$POST" ] && set -- "$@" -post "$POST"
+set -- "$@" "$URL"
+[ -n "$OUT" ] && set -- "$@" "$OUT"
+exec "$SYSTEM_PATH/bin/https.elf" "$@" 2>> "$LOGS_PATH/PICO8-downloads.txt"

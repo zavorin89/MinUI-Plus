@@ -45,7 +45,7 @@ COPYFILE_DISABLE=1 tar -cf - workspace | docker run --rm -i -e BUILD_SNES=$([ -n
 		(cd my282/libmsettings && make)
 		(cd my282 && make early)
 		(cd my282/keymon && make)
-		for d in minui minarch clock minput syncsettings say rasync wifi boxart controls ndslayer; do (cd all/$d && make); done
+		for d in minui minarch clock minput syncsettings say rasync wifi boxart controls ndslayer p8layer; do (cd all/$d && make); done
 		(cd my282 && make)
 		if [ "$BUILD_SNES" = 1 ]; then (cd my282/cores && make snes); fi
 	} > /tmp/build.log 2>&1 || { tail -40 /tmp/build.log >&2; exit 1; }

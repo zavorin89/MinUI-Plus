@@ -21,6 +21,7 @@ optimized as Onion, without the clunkiness that comes with running everything th
 > MinUI+ is made for and tested on the **Miyoo A30** only.
 
 - [Screenshots](#screenshots)
+- [What's new in v1.2](#whats-new-in-v12)
 - [What's new in v1.1](#whats-new-in-v11)
 - [Highlights](#highlights)
 - [Installing](#installing)
@@ -30,6 +31,7 @@ optimized as Onion, without the clunkiness that comes with running everything th
 - [BIOS files](#bios-files)
 - [Nintendo DS](#nintendo-ds)
 - [Nintendo 64](#nintendo-64)
+- [PICO-8](#pico-8)
 - [Tools](#tools)
 - [Speed and battery](#speed-and-battery)
 - [Controls](#controls)
@@ -63,6 +65,50 @@ were taken by the A30 itself, border and LCD grid included.
 | **Play Time**: your games ranked by hours played | **Controls**: the shortcuts you can't see |
 
 <p align="center"><img src="github/screenshots/themes.png" width="640" alt="Color themes"><br><b>Color themes</b> for the whole interface (eleven in all)</p>
+
+## What's new in v1.2
+
+Everything that changed from v1.1. On v1.1 the built-in updater offers it; on v1.07 or older,
+[install it by hand](#updating) once.
+
+**PICO-8, the official one** ([bring your own](#pico-8))
+
+- If you've bought PICO-8, play carts with it, Splore included, in the new `Pico-8 Native (PICO8)` folder. PICO-8
+  isn't included
+- It plays like every other system: MENU opens the in-game menu with your play time, and Options has Screen Scaling,
+  Screen Effect, Screen Border and Button Layout. START is PICO-8's own pause menu, and the power button sleeps
+- The same settings are in MENU + Y on its carts and on Splore. Fullscreen with the LCD grid is the default
+- Hold MENU for the game switcher. PICO-8 has no save states, so the switcher keeps a picture and starts the cart over,
+  and says so under the picture
+- One `Pico-8 (P8)` cart can switch to the official PICO-8 in MENU + Y, and back to fake-08
+- Splore has its own box art and shows up as "Splore"
+
+**Game switcher and resume**
+
+- Fixed a freeze when opening the game switcher in some games, such as Advance Wars on the GBA
+- Resume (X) picks up from the newer of the switcher's quick save and your last save, the same spot the switcher would
+
+**Box Art**
+
+- Much faster on a big card: opening it no longer reads every piece of art, and Find box art > MISSING ONLY skips games
+  the library had no match for in the last 14 days (REPLACE still tries them)
+- Art it saves is smaller, and resizing also shrinks older art that had transparency
+- Fixed the game lists scrolling slowly after using Box Art
+- When it's done, SEE LIST shows the games that still have no art and why
+
+**RetroAchievements**
+
+- A long achievement description now shows in full: smaller text, and the list makes room when it has to
+- The achievements list's heading no longer runs into the clock: it scrolls when it's too long
+- Syncing is faster, especially again later: games it has already identified aren't read again
+- When a sync is done, SEE LIST shows the games without achievements and why
+
+**Menus**
+
+- A title too long for the top of a menu (Options, the on-screen keyboard) scrolls instead of being cut off
+- The pause menu's save picture loads once per slot, so moving through it is snappier
+- The system art files are smaller
+- The README lists which BIOS files each system needs
 
 ## What's new in v1.1
 
@@ -357,7 +403,8 @@ Sign in with the RetroAchievements tool (on the on-screen keyboard), then just p
 | PC Engine | PCE | Beetle PCE Fast | |
 | Pokémon mini | PKM | PokeMini | |
 | Virtual Boy | VB | Beetle VB | |
-| Pico-8 | P8 | fake-08 | |
+| Pico-8 | P8 | fake-08 | PICO-8 (official, [bring your own](#pico-8)) |
+| Pico-8 Native ([bring your own](#pico-8)) | PICO8 | the official PICO-8, with Splore | |
 | Super Game Boy | SGB | mGBA | |
 | Capcom Play System 1, 2 | CPS1, CPS2 | FB Alpha 2012 | |
 | Capcom Play System 3 | CPS3 | Final Burn Neo | |
@@ -493,6 +540,36 @@ Put games in `Roms/Nintendo 64 (N64)`. The buttons:
 | L | SELECT | | Start | START |
 
 Change them in Options > Controls.
+
+## PICO-8
+
+`Pico-8 (P8)` plays carts with the open-source [fake-08](https://github.com/jtothebell/fake-08), which is included. If
+you've bought [PICO-8](https://www.lexaloffle.com/pico-8.php), you can also play with the official one, Splore
+included. **PICO-8 isn't part of MinUI+ and isn't included**: its license is for you alone.
+
+1. Download the Raspberry Pi version from your [Lexaloffle account](https://www.lexaloffle.com/games.php?page=updates).
+2. Unzip it into `Emus/my282/PICO8.pak` on your card, so that you have `Emus/my282/PICO8.pak/pico-8/pico8_dyn` with
+   `pico8.dat` beside it.
+3. Put carts (`.p8` or `.p8.png`) in `Roms/Pico-8 Native (PICO8)`. Its **Splore** entry opens PICO-8's cart browser,
+   which needs Wi-Fi.
+
+To play one `Pico-8 (P8)` cart with the official PICO-8 instead, press MENU + Y on it and pick PICO-8 (official).
+
+It plays like the other systems:
+
+- **MENU** opens the in-game menu: Continue, Options and Quit, with your play time. **Options > Frontend** has Screen
+  Scaling (Fullscreen or Integer), Screen Effect (Grid, Line or None) and Screen Border (`Borders/P8.png`, or one named
+  after the cart); **Options > Controls** has the Button Layout. The same settings are in MENU + Y on any of its carts
+  or on Splore, and they apply to every cart.
+- **START** opens PICO-8's own pause menu. A and X are PICO-8's O, B and Y are its X, and the d-pad and stick both move.
+- **Hold MENU** for the Game Switcher. PICO-8 has no save states, so the switcher keeps a picture of where you were,
+  and picking it starts the cart (or Splore) over. The switcher says so under its picture.
+- The power button sleeps, and the volume and brightness keys work as everywhere else.
+
+Saves and PICO-8's own settings are in `Saves/PICO8`. For save states, play the cart with fake-08.
+
+Splore downloads through MinUI+'s own HTTPS client (`PICO8.pak/bin/wget`), because the A30's wget can't do HTTPS. It
+only ever runs when PICO-8 asks for something.
 
 ## Tools
 

@@ -137,12 +137,8 @@ int KB_enterText(SDL_Surface* screen, const char* title, char* text, int max_len
 
 		if (dirty) {
 			GFX_clear(screen);
-			GFX_blitHardwareGroup(screen, show_setting);
-
-			// title and the typed text (shown, even passwords: it's your own handheld)
-			char shown[128];
-			GFX_truncateText(font.large, (char*)title, shown, screen->w - SCALE1(PADDING*2 + PILL_SIZE*3), 0);
-			blitText(screen, font.large, shown, COLOR_DARK_TEXT, SCALE1(PADDING + BUTTON_PADDING), SCALE1(PADDING+4)); // grey, as every header
+			// title (scrolling when it's long) and the typed text (shown, even passwords: it's your own handheld)
+			int header_scrolls = GFX_blitHeader(screen, (char*)title, GFX_blitHardwareGroup(screen, show_setting));
 
 			int field_y = SCALE1(PADDING + PILL_SIZE + 4);
 			GFX_blitPill(ASSET_DARK_GRAY_PILL, screen, &(SDL_Rect){ SCALE1(PADDING), field_y, screen->w - SCALE1(PADDING*2), SCALE1(PILL_SIZE) });
@@ -209,7 +205,7 @@ int KB_enterText(SDL_Surface* screen, const char* title, char* text, int max_len
 			GFX_blitButtonGroup((char*[]){ "B","DEL", "START",(char*)done, NULL }, 1, screen, 1);
 
 			GFX_flip(screen);
-			dirty = 0;
+			dirty = header_scrolls;
 		}
 		else GFX_sync();
 	}

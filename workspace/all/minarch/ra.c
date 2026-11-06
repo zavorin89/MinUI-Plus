@@ -698,6 +698,12 @@ void RA_showAchievements(SDL_Surface* screen, RA_SleepCallback before_sleep, RA_
 	SDL_Surface** badges = calloc(capacity, sizeof(SDL_Surface*)); // loaded the first time each row is drawn
 	char* badge_tried = calloc(capacity, 1);
 
+	int summary_ow = 0, summary_scrolls = 0;
+	// the highlighted achievement's description as laid out, worked out again only when another is highlighted
+	int laid_out = -1;
+	char laid_description[512+3]; // room for wrapping's "..."
+	TTF_Font* desc_font = font.small;
+	int desc_step = 0, rows_shown = LIST_ROWS;
 	int selected = firstAchievement(rows, count); // row 0 is a header
 	int start = 0;
 	int dirty = 1;
@@ -724,6 +730,7 @@ void RA_showAchievements(SDL_Surface* screen, RA_SleepCallback before_sleep, RA_
 			count = buildRows(list, sort, rows);
 			selected = firstAchievement(rows, count);
 			start = 0;
+			laid_out = -1; // (another achievement may be at the same row now)
 			flash_until = SDL_GetTicks() + 1000;
 			dirty = 1;
 		}
@@ -759,12 +766,61 @@ void RA_showAchievements(SDL_Surface* screen, RA_SleepCallback before_sleep, RA_
 			GFX_clear(screen);
 			int ow = GFX_blitHardwareGroup(screen, show_setting);
 			
-			SDL_Surface* text = TTF_RenderUTF8_Blended(font.small, summary_text, COLOR_WHITE);
-			SDL_BlitSurface(text, NULL, screen, &(SDL_Rect){ SCALE1(PADDING+BUTTON_PADDING), SCALE1(PADDING) + (SCALE1(PILL_SIZE)-text->h)/2 });
-			SDL_FreeSurface(text);
+			summary_ow = ow;
+			summary_scrolls = GFX_blitHeaderText(screen, font.small, COLOR_WHITE, summary_text, ow);
+			SDL_Surface* text = NULL;
 			
 			int width = screen->w - SCALE1(PADDING*2);
-			for (int i=start, j=0; i<count && j<LIST_ROWS; i++, j++) {
+			// the highlighted achievement's description, with progress when it tracks any, all of it when it can be:
+			// two lines, or smaller ones, and for the longest the list shows a row or two fewer
+			const rc_client_achievement_t* a = rows[selected].achievement;
+			char description[512+3];
+			if (laid_out!=selected) {
+				laid_out = selected;
+				description[0] = '\0';
+				desc_font = font.small;
+				desc_step = TTF_FontHeight(font.small);
+				rows_shown = LIST_ROWS;
+				if (a) {
+					char raw[512];
+					if (a->measured_progress[0] && !a->unlocked) snprintf(raw, sizeof(raw), "%s (%s)", a->description, a->measured_progress);
+					else snprintf(raw, sizeof(raw), "%s", a->description);
+					for (char* c=raw; *c; c++) if (c[0]==' ' && c[1]==' ') { memmove(c, c+1, strlen(c)); c--; } // "Temple.  When"
+					int max_w = width - SCALE1(BUTTON_PADDING*2);
+					int bar = screen->h - SCALE1(PADDING + PILL_SIZE); // the buttons' top
+					int fitted = 0;
+					for (int shown=LIST_ROWS; shown>=2 && !fitted; shown--) {
+						int room = bar - SCALE1(PADDING + (shown+1)*PILL_SIZE + 2);
+						for (int small=shown==LIST_ROWS; small>=0 && !fitted; small--) {
+							TTF_Font* f = small ? font.small : font.tiny;
+							snprintf(description, sizeof(description), "%s", raw);
+							GFX_wrapText(f, description, max_w, 0);
+							int lines = 1;
+							for (char* c=description; *c; c++) if (*c=='\n') lines++;
+							int h = TTF_FontHeight(f);
+							int step = MIN(h, room / lines);
+							if (step*100 >= h*(small ? 100 : 88)) { // (small lines a touch closer together still read fine)
+								fitted = 1;
+								rows_shown = shown;
+								desc_font = f;
+								desc_step = step;
+							}
+						}
+					}
+					if (!fitted) { // the longest of all: as much as fits under two rows
+						rows_shown = 2;
+						int room = bar - SCALE1(PADDING + (rows_shown+1)*PILL_SIZE + 2);
+						desc_font = font.tiny;
+						desc_step = TTF_FontHeight(font.tiny)*88/100;
+						snprintf(description, sizeof(description), "%s", raw);
+						GFX_wrapText(font.tiny, description, max_w, MAX(1, room / desc_step));
+					}
+				}
+				snprintf(laid_description, sizeof(laid_description), "%s", description);
+			}
+			else snprintf(description, sizeof(description), "%s", laid_description); // (drawing cuts it up)
+			if (selected>=start+rows_shown) start = selected - rows_shown + 1; // the highlighted row stays in view
+			for (int i=start, j=0; i<count && j<rows_shown; i++, j++) {
 				int y = SCALE1(PADDING + (j+1)*PILL_SIZE);
 				Row* row = &rows[i];
 				if (row->header) {
@@ -802,20 +858,16 @@ void RA_showAchievements(SDL_Surface* screen, RA_SleepCallback before_sleep, RA_
 				SDL_FreeSurface(points_txt);
 			}
 			
-			// description of the highlighted achievement, two lines at most, with progress when it tracks any
-			const rc_client_achievement_t* a = rows[selected].achievement;
-			if (a) {
-				char description[512+3]; // room for wrapping's "..."
-				if (a->measured_progress[0] && !a->unlocked) snprintf(description, sizeof(description)-3, "%s (%s)", a->description, a->measured_progress);
-				else snprintf(description, sizeof(description)-3, "%s", a->description);
-				GFX_wrapText(font.small, description, width - SCALE1(BUTTON_PADDING*2), 2);
-				int y = SCALE1(PADDING + (LIST_ROWS+1)*PILL_SIZE + 2);
+			if (description[0]) {
+				int y = SCALE1(PADDING + (rows_shown+1)*PILL_SIZE + 2);
 				char* line = strtok(description, "\n");
 				while (line) {
-					text = TTF_RenderUTF8_Blended(font.small, line, COLOR_WHITE);
-					SDL_BlitSurface(text, NULL, screen, &(SDL_Rect){ SCALE1(PADDING+BUTTON_PADDING), y });
-					y += text->h;
-					SDL_FreeSurface(text);
+					text = TTF_RenderUTF8_Blended(desc_font, line, COLOR_WHITE);
+					if (text) {
+						SDL_BlitSurface(text, NULL, screen, &(SDL_Rect){ SCALE1(PADDING+BUTTON_PADDING), y });
+						SDL_FreeSurface(text);
+					}
+					y += desc_step;
 					line = strtok(NULL, "\n");
 				}
 			}
@@ -836,6 +888,12 @@ void RA_showAchievements(SDL_Surface* screen, RA_SleepCallback before_sleep, RA_
 			GFX_blitButtonGroup((char*[]){ "B","BACK", NULL }, 0, screen, 1);
 			GFX_flip(screen);
 			dirty = 0;
+		}
+		else if (summary_scrolls) {
+			int x = SCALE1(PADDING+BUTTON_PADDING);
+			SDL_FillRect(screen, &(SDL_Rect){ x, SCALE1(PADDING), screen->w - SCALE1(PADDING*2) - summary_ow - x, SCALE1(PILL_SIZE) }, 0); // only its strip
+			GFX_blitHeaderText(screen, font.small, COLOR_WHITE, summary_text, summary_ow);
+			GFX_flip(screen);
 		}
 		else GFX_sync();
 	}

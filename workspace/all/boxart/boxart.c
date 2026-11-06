@@ -27,6 +27,8 @@
 #define THUMBS_URL "https://thumbnails.libretro.com/"
 #define LIST_DIR SHARED_USERDATA_PATH "/.boxart" // each system's list of available art, so it's fetched once
 #define LIST_MAX_AGE (14*24*60*60)
+#define NO_MATCH_PATH LIST_DIR "/no-match.txt" // games the library had nothing for, so finding missing art skips them for a while
+#define SIZES_PATH LIST_DIR "/sizes.txt" // each art folder's count of art to resize, kept until the folder changes
 #define LOG_PATH USERDATA_PATH "/logs/box-art.txt"
 #define MAX_GAMES 4096
 
@@ -115,7 +117,13 @@ static void showMessage(char* msg, int wait) {
 }
 
 // title, game, a bar that fills as games are done, and a count
-static void showProgress(char* title, int done, int count, char* name) {
+#define PROGRESS_MS 100
+static void showProgress(char* title, int done, int count, char* name, int force) {
+	// drawn at most every PROGRESS_MS: a frame per game (waiting on vsync) was most of the time for games it skips
+	static uint32_t drawn_at = 0;
+	uint32_t now = SDL_GetTicks();
+	if (!force && drawn_at && now-drawn_at<PROGRESS_MS) return;
+	drawn_at = now;
 	int show_setting = 0;
 	int dirty = 1;
 	GFX_startFrame();
@@ -187,13 +195,46 @@ static void writeChunk(FILE* file, const char* type, const unsigned char* data, 
 	putBE32(tail, crc);
 	fwrite(tail, 1, 4, file);
 }
-static int savePNG(const char* path, const uint8_t* rgba, int w, int h) { // rgba rows, 4 bytes per pixel
-	size_t raw_size = (size_t)h * (w*4 + 1);
-	unsigned char* raw = malloc(raw_size);
-	for (int y=0; y<h; y++) {
-		raw[y*(w*4+1)] = 0; // no filter
-		memcpy(raw + y*(w*4+1) + 1, rgba + (size_t)y*w*4, w*4);
+// the PNG filter (sub, up, average or paeth) that leaves a row smallest, by the usual sum of differences
+static int paeth(int a, int b, int c) {
+	int p = a + b - c, pa = abs(p-a), pb = abs(p-b), pc = abs(p-c);
+	return pa<=pb && pa<=pc ? a : pb<=pc ? b : c;
+}
+static void filterRow(const uint8_t* row, const uint8_t* prev, int length, int bpp, unsigned char* out) {
+	static unsigned char tries[5][250*3]; // ART_WIDTH rows of rgb
+	unsigned char* trial[5];
+	unsigned char* spare = length>(int)sizeof(tries[0]) ? malloc(length*5) : NULL;
+	for (int f=0; f<5; f++) trial[f] = spare ? spare + f*length : tries[f];
+	long best_sum = -1;
+	int best = 0;
+	for (int f=0; f<5; f++) {
+		long sum = 0;
+		for (int i=0; i<length; i++) {
+			int a = i>=bpp ? row[i-bpp] : 0, b = prev ? prev[i] : 0, c = prev && i>=bpp ? prev[i-bpp] : 0;
+			int predicted = f==0 ? 0 : f==1 ? a : f==2 ? b : f==3 ? (a+b)/2 : paeth(a,b,c);
+			unsigned char v = row[i] - predicted;
+			trial[f][i] = v;
+			sum += v<128 ? v : 256-v;
+		}
+		if (best_sum<0 || sum<best_sum) { best_sum = sum; best = f; }
 	}
+	out[0] = best;
+	memcpy(out+1, trial[best], length);
+	free(spare);
+}
+// saved as rgb, flattened onto black: the launcher draws art onto black anyway, and without an alpha channel the
+// files are smaller and it's a straight copy rather than a blend when they're loaded
+static int savePNG(const char* path, const uint8_t* rgba, int w, int h) { // rgba rows, 4 bytes per pixel
+	int stride = w*3;
+	uint8_t* rgb = malloc((size_t)h * stride);
+	for (size_t i=0; i<(size_t)w*h; i++) {
+		int a = rgba[i*4+3];
+		for (int k=0; k<3; k++) rgb[i*3+k] = (rgba[i*4+k] * a + 127) / 255;
+	}
+	size_t raw_size = (size_t)h * (stride + 1);
+	unsigned char* raw = malloc(raw_size);
+	for (int y=0; y<h; y++) filterRow(rgb + (size_t)y*stride, y ? rgb + (size_t)(y-1)*stride : NULL, stride, 3, raw + (size_t)y*(stride+1));
+	free(rgb);
 	uLongf packed_size = compressBound(raw_size);
 	unsigned char* packed = malloc(packed_size);
 	int ok = compress2(packed, &packed_size, raw, raw_size, 6)==Z_OK;
@@ -210,7 +251,7 @@ static int savePNG(const char* path, const uint8_t* rgba, int w, int h) { // rgb
 	putBE32(ihdr, w);
 	putBE32(ihdr+4, h);
 	ihdr[8] = 8; // bits per channel
-	ihdr[9] = 6; // RGBA
+	ihdr[9] = 2; // RGB
 	ihdr[10] = ihdr[11] = ihdr[12] = 0;
 	writeChunk(file, "IHDR", ihdr, 13);
 	writeChunk(file, "IDAT", packed, packed_size);
@@ -223,15 +264,17 @@ static int savePNG(const char* path, const uint8_t* rgba, int w, int h) { // rgb
 	return ok;
 }
 
-// the width of a PNG from its header, 0 if it isn't one
-static int pngWidth(const char* path) {
-	unsigned char head[24];
+// from a PNG's header: art that isn't ART_WIDTH wide, or has an alpha channel (art saved before it was dropped)
+static int needsResize(const char* path) {
+	unsigned char head[26];
 	FILE* file = fopen(path, "rb");
 	if (!file) return 0;
 	size_t got = fread(head, 1, sizeof(head), file);
 	fclose(file);
-	if (got<24 || memcmp(head+1, "PNG", 3)) return 0;
-	return (head[16]<<24) | (head[17]<<16) | (head[18]<<8) | head[19];
+	if (got<26 || memcmp(head+1, "PNG", 3)) return 0;
+	int width = (head[16]<<24) | (head[17]<<16) | (head[18]<<8) | head[19];
+	int color_type = head[25];
+	return width!=ART_WIDTH || color_type==4 || color_type==6;
 }
 
 // resizes to ART_WIDTH wide (keeping its shape) and saves as PNG: averages when shrinking, blends when growing
@@ -456,9 +499,33 @@ typedef struct Game {
 	char file[MAX_PATH]; // the game's file (or folder) name
 	char name[MAX_PATH]; // without the extension
 	const char* system;
+	time_t no_match_at; // when the library last had nothing for it (0: never, or long enough ago to try again)
 } Game;
 
 // every game in the Roms folders, each system's games together; only ones without art when missing_only
+// one Roms folder's games, added from games[count] (all of them, or the ones with no art), returning the new count
+static int collectFolder(char* folder, Game* games, int count, int missing_only) {
+	const char* system = librarySystem(folder);
+	DIR* dh = opendir(folder);
+	if (!dh) return count;
+	struct dirent* dp;
+	while ((dp = readdir(dh)) && count<MAX_GAMES) {
+		int is_dir = dp->d_type==DT_DIR;
+		if (dp->d_name[0]=='.' || (!is_dir && !isGameFile(dp->d_name))) continue;
+		if (is_dir && suffixMatch(".pak", dp->d_name)) continue;
+		char art_path[MAX_PATH];
+		sprintf(art_path, "%s/.res/%s.png", folder, dp->d_name);
+		if (missing_only && exists(art_path)) continue;
+		Game* game = &games[count++];
+		strcpy(game->folder, folder);
+		strcpy(game->file, dp->d_name);
+		gameName(dp->d_name, is_dir, game->name);
+		game->system = system;
+		game->no_match_at = 0;
+	}
+	closedir(dh);
+	return count;
+}
 static int collectGames(Game* games, int missing_only) {
 	int count = 0;
 	DIR* roms = opendir(ROMS_PATH);
@@ -468,27 +535,67 @@ static int collectGames(Game* games, int missing_only) {
 		if (sys->d_name[0]=='.' || sys->d_type!=DT_DIR) continue;
 		char folder[MAX_PATH];
 		sprintf(folder, "%s/%s", ROMS_PATH, sys->d_name);
-		const char* system = librarySystem(folder);
-		DIR* dh = opendir(folder);
-		if (!dh) continue;
-		struct dirent* dp;
-		while ((dp = readdir(dh)) && count<MAX_GAMES) {
-			int is_dir = dp->d_type==DT_DIR;
-			if (dp->d_name[0]=='.' || (!is_dir && !isGameFile(dp->d_name))) continue;
-			if (is_dir && suffixMatch(".pak", dp->d_name)) continue;
-			char art_path[MAX_PATH];
-			sprintf(art_path, "%s/.res/%s.png", folder, dp->d_name);
-			if (missing_only && exists(art_path)) continue;
-			Game* game = &games[count++];
-			strcpy(game->folder, folder);
-			strcpy(game->file, dp->d_name);
-			gameName(dp->d_name, is_dir, game->name);
-			game->system = system;
-		}
-		closedir(dh);
+		count = collectFolder(folder, games, count, missing_only);
 	}
 	closedir(roms);
 	return count;
+}
+
+// the games with no match last time, from NO_MATCH_PATH ("time<tab>folder/file" lines): marked on the games given,
+// for as long as the library's lists are kept (after that the library may have added their art)
+typedef struct NoMatch { char* path; time_t at; } NoMatch;
+static int byPath(const void* a, const void* b) { return strcmp(((NoMatch*)a)->path, ((NoMatch*)b)->path); }
+static int markNoMatch(Game* games, int count) {
+	FILE* file = fopen(NO_MATCH_PATH, "r");
+	if (!file) return 0;
+	int capacity = 256, total = 0;
+	NoMatch* known = malloc(capacity * sizeof(NoMatch));
+	char line[MAX_PATH*2+32];
+	time_t now = time(NULL);
+	while (fgets(line, sizeof(line), file)) {
+		trimTrailingNewlines(line);
+		char* tab = strchr(line, '\t');
+		time_t at = atol(line);
+		if (!tab || !at || now-at>=LIST_MAX_AGE) continue;
+		if (total==capacity) known = realloc(known, (capacity *= 2) * sizeof(NoMatch));
+		known[total++] = (NoMatch){ strdup(tab+1), at };
+	}
+	fclose(file);
+	qsort(known, total, sizeof(NoMatch), byPath);
+	int marked = 0;
+	for (int i=0; i<count && total; i++) {
+		char path[MAX_PATH*2+2];
+		snprintf(path, sizeof(path), "%s/%s", games[i].folder, games[i].file);
+		NoMatch key = { path, 0 };
+		NoMatch* hit = bsearch(&key, known, total, sizeof(NoMatch), byPath);
+		if (!hit) continue;
+		games[i].no_match_at = hit->at;
+		marked += 1;
+	}
+	for (int i=0; i<total; i++) free(known[i].path);
+	free(known);
+	return marked;
+}
+// keeps the no-match times of the games given (the ones that still have no art), dropping the rest
+static void saveNoMatch(Game* games, int count) {
+	mkdir(LIST_DIR, 0755);
+	char tmp_path[MAX_PATH];
+	sprintf(tmp_path, "%s.tmp", NO_MATCH_PATH);
+	FILE* file = fopen(tmp_path, "w");
+	if (!file) return;
+	for (int i=0; i<count; i++) {
+		if (games[i].no_match_at) fprintf(file, "%li\t%s/%s\n", (long)games[i].no_match_at, games[i].folder, games[i].file);
+	}
+	int ok = !ferror(file);
+	fclose(file);
+	if (ok) rename(tmp_path, NO_MATCH_PATH);
+	else unlink(tmp_path);
+}
+// the games with no art that are worth looking for (not known to have no match), and how many are
+static int collectMissing(Game* games, int* known) {
+	int count = collectGames(games, 1);
+	*known = markNoMatch(games, count);
+	return count - *known;
 }
 
 // one piece of art from the library, decoded, or NULL (url, when given, gets the address tried)
@@ -758,6 +865,33 @@ static void findOne(char* path) {
 	if (message[0]) showMessage(message, 1);
 }
 
+// the games a run left without art, shown after it: "Name" and "TAG, why"
+typedef struct Missed { char** names; char** notes; int count; } Missed;
+static void addMissed(Missed* missed, Game* game, const char* why) {
+	char art_path[MAX_PATH*2+16];
+	snprintf(art_path, sizeof(art_path), "%s/.res/%s.png", game->folder, game->file);
+	if (exists(art_path)) return; // (replacing: it kept the art it had)
+	char tag[64] = "";
+	char* open = strrchr(game->folder, '(');
+	char* close = open ? strchr(open, ')') : NULL;
+	if (open && close && close-open-1<(int)sizeof(tag)) snprintf(tag, sizeof(tag), "%.*s, ", (int)(close-open-1), open+1);
+	char note[128];
+	snprintf(note, sizeof(note), "%s%s", tag, why);
+	missed->names[missed->count] = strdup(game->name);
+	missed->notes[missed->count] = strdup(note);
+	missed->count += 1;
+}
+static void freeMissed(Missed* missed) {
+	for (int i=0; i<missed->count; i++) {
+		free(missed->names[i]);
+		free(missed->notes[i]);
+	}
+	free(missed->names);
+	free(missed->notes);
+}
+static int ask(char* question, char* yes, char* no);
+
+// replacing tries every game; otherwise only the ones with no art, less any the library had nothing for last time
 static void findMissing(int replace) {
 	if (!hasWifi() && !WIFI_offer(screen, "Box art needs Wi-Fi")) return;
 	PWR_setCPUSpeed(CPU_SPEED_NORMAL); // decoding and resizing is the slow part (not the top speed: minutes flat out there is asking for trouble)
@@ -766,38 +900,53 @@ static void findMissing(int replace) {
 
 	Game* games = calloc(MAX_GAMES, sizeof(Game));
 	int count = collectGames(games, !replace); // replacing: every game (one with no match keeps the art it has)
-	int found = 0, unmatched = 0, failed = 0, unsupported = 0;
-	int stopped = 0;
+	int known = markNoMatch(games, count);
+	int to_find = replace ? count : count - known;
+	int found = 0, unmatched = 0, failed = 0, unsupported = 0, skipped = 0;
+	int stopped = 0, done = 0;
 	ArtList list = {0};
 	const char* list_system = NULL;
+	Missed missed = { calloc(MAX(1, count), sizeof(char*)), calloc(MAX(1, count), sizeof(char*)), 0 };
 	for (int i=0; i<count; i++) {
 		Game* game = &games[i];
-		showProgress("Finding box art", i, count, game->name);
+		if (!replace && game->no_match_at) { // (no list to load or search for these)
+			skipped += 1;
+			addMissed(&missed, game, "no match last time");
+			ART_LOG("no match last time: %s/%s\n", strrchr(game->folder, '/')+1, game->file);
+			continue;
+		}
+		showProgress("Finding box art", done, to_find, game->name, done==0);
+		done += 1;
 		if (cancelled()) { stopped = 1; break; }
-		if (!game->system) { unsupported += 1; continue; }
+		if (!game->system) { unsupported += 1; addMissed(&missed, game, "system not in the library"); continue; }
 
 		if (game->system!=list_system) {
 			freeArtList(&list);
 			list_system = game->system;
-			showProgress("Finding box art", i, count, "Getting the list of art for this system...");
+			showProgress("Finding box art", done-1, to_find, "Getting the list of art for this system...", 1);
 			if (!loadArtList(game->system, &list)) ART_LOG("couldn't get the art list for %s\n", game->system);
 		}
 		char href[MAX_PATH];
 		int result = fetchArt(game, &list, href);
 		if (result==ART_FOUND) {
 			found += 1;
+			game->no_match_at = 0;
 			ART_LOG("found: %s -> %s\n", game->file, href);
 		}
 		else if (result==ART_NO_MATCH) {
 			unmatched += 1;
+			game->no_match_at = time(NULL);
+			addMissed(&missed, game, "no match");
 			ART_LOG("no match: %s/%s\n", strrchr(game->folder, '/')+1, game->file);
 		}
 		else {
 			failed += 1;
+			addMissed(&missed, game, "couldn't download");
 			ART_LOG("download failed: %s (%s)\n", game->file, href);
 		}
 	}
 	freeArtList(&list);
+	saveNoMatch(games, count);
 	free(games);
 	if (log_file) fclose(log_file);
 	log_file = NULL;
@@ -806,28 +955,94 @@ static void findMissing(int replace) {
 	PWR_setCPUSpeed(CPU_SPEED_MENU);
 
 	char summary[512];
-	int n = snprintf(summary, sizeof(summary), "%s\n%i found", stopped ? "Stopped" : count ? "Box art done" : "Every game has box art", found);
+	int n = snprintf(summary, sizeof(summary), "%s\n%i found", stopped ? "Stopped" : to_find ? "Box art done" : count ? "Nothing new to find" : "Every game has box art", found);
 	if (unmatched) n += snprintf(summary+n, sizeof(summary)-n, "\n%i with no match (listed in logs/box-art.txt)", unmatched);
+	if (skipped) n += snprintf(summary+n, sizeof(summary)-n, "\n%i skipped, no match last time (REPLACE tries them)", skipped);
 	if (failed) n += snprintf(summary+n, sizeof(summary)-n, "\n%i couldn't be downloaded", failed);
 	if (unsupported) n += snprintf(summary+n, sizeof(summary)-n, "\n%i on systems the library doesn't cover", unsupported);
-	showMessage(summary, 1);
+	if (stopped) { // (the rest weren't tried, so a list of them would say little)
+		for (int i=0; i<missed.count; i++) { free(missed.names[i]); free(missed.notes[i]); }
+		missed.count = 0;
+	}
+	if (missed.count && ask(summary, "SEE LIST", "DONE")) {
+		char title[64];
+		snprintf(title, sizeof(title), "No box art: %i game%s", missed.count, missed.count==1 ? "" : "s");
+		GFX_showList(screen, title, missed.names, missed.notes, missed.count);
+	}
+	else if (!missed.count) showMessage(summary, 1);
+	freeMissed(&missed);
 }
 
-// existing art that isn't ART_WIDTH wide
+// art that isn't ART_WIDTH wide or still has an alpha channel: collected into games, or just counted when games is NULL.
+// Reading every header is slow on a big card, so each folder's count is kept in SIZES_PATH ("res time<tab>roms time<tab>
+// count<tab>folder") and only folders that changed since are read again (saving or copying art changes its .res folder)
+typedef struct FolderSize { char folder[MAX_PATH]; long res_time, roms_time; int count; } FolderSize;
+#define MAX_FOLDERS 256
 static int collectResizable(Game* games) {
-	Game* all = calloc(MAX_GAMES, sizeof(Game));
-	int total = collectGames(all, 0);
-	int count = 0;
-	for (int i=0; i<total; i++) {
-		char art_path[MAX_PATH];
-		sprintf(art_path, "%s/.res/%s.png", all[i].folder, all[i].file);
-		int width = pngWidth(art_path);
-		if (width && width!=ART_WIDTH) games[count++] = all[i];
+	FolderSize* sizes = calloc(MAX_FOLDERS, sizeof(FolderSize));
+	int cached = 0;
+	FILE* file = fopen(SIZES_PATH, "r");
+	if (file) {
+		char line[MAX_PATH+64];
+		while (cached<MAX_FOLDERS && fgets(line, sizeof(line), file)) {
+			trimTrailingNewlines(line);
+			FolderSize* size = &sizes[cached];
+			int used = 0;
+			if (sscanf(line, "%ld\t%ld\t%d\t%n", &size->res_time, &size->roms_time, &size->count, &used)==3 && used) {
+				snprintf(size->folder, sizeof(size->folder), "%s", line+used);
+				cached += 1;
+			}
+		}
+		fclose(file);
 	}
+
+	FolderSize* now = calloc(MAX_FOLDERS, sizeof(FolderSize));
+	int folders = 0, count = 0;
+	Game* all = calloc(MAX_GAMES, sizeof(Game));
+	DIR* roms = opendir(ROMS_PATH);
+	struct dirent* sys;
+	while (roms && (sys = readdir(roms)) && folders<MAX_FOLDERS) {
+		if (sys->d_name[0]=='.' || sys->d_type!=DT_DIR) continue;
+		FolderSize* size = &now[folders];
+		snprintf(size->folder, sizeof(size->folder), "%s/%s", ROMS_PATH, sys->d_name);
+		char res_dir[MAX_PATH+8];
+		snprintf(res_dir, sizeof(res_dir), "%s/.res", size->folder);
+		struct stat res_st, roms_st;
+		if (stat(res_dir, &res_st)!=0 || stat(size->folder, &roms_st)!=0) continue; // no art at all
+		size->res_time = res_st.st_mtime;
+		size->roms_time = roms_st.st_mtime;
+		size->count = -1;
+		for (int i=0; i<cached; i++) {
+			if (sizes[i].res_time==size->res_time && sizes[i].roms_time==size->roms_time && !strcmp(sizes[i].folder, size->folder)) size->count = sizes[i].count;
+		}
+		folders += 1;
+		if (size->count==0 || (size->count>0 && !games)) { count += size->count; continue; }
+		int total = collectFolder(size->folder, all, 0, 0);
+		size->count = 0;
+		for (int i=0; i<total; i++) {
+			char art_path[MAX_PATH*2+16];
+			snprintf(art_path, sizeof(art_path), "%s/.res/%s.png", all[i].folder, all[i].file);
+			if (!needsResize(art_path)) continue;
+			if (games && count<MAX_GAMES) games[count] = all[i];
+			count += 1;
+			size->count += 1;
+		}
+	}
+	if (roms) closedir(roms);
 	free(all);
-	return count;
+
+	mkdir(LIST_DIR, 0755);
+	file = fopen(SIZES_PATH, "w");
+	if (file) {
+		for (int i=0; i<folders; i++) fprintf(file, "%ld\t%ld\t%d\t%s\n", now[i].res_time, now[i].roms_time, now[i].count, now[i].folder);
+		fclose(file);
+	}
+	free(now);
+	free(sizes);
+	return games ? MIN(count, MAX_GAMES) : count;
 }
-static void resizeAll(void) {
+// returns how many are left to resize
+static int resizeAll(void) {
 	PWR_setCPUSpeed(CPU_SPEED_NORMAL);
 	PWR_disableAutosleep();
 	Game* games = calloc(MAX_GAMES, sizeof(Game));
@@ -835,7 +1050,7 @@ static void resizeAll(void) {
 	int resized = 0, failed = 0, stopped = 0;
 	for (int i=0; i<count; i++) {
 		Game* game = &games[i];
-		showProgress("Resizing box art", i, count, game->name);
+		showProgress("Resizing box art", i, count, game->name, i==0);
 		if (cancelled()) { stopped = 1; break; }
 		char art_path[MAX_PATH];
 		sprintf(art_path, "%s/.res/%s.png", game->folder, game->file);
@@ -853,6 +1068,7 @@ static void resizeAll(void) {
 	int n = snprintf(summary, sizeof(summary), "%s\n%i resized to %i pixels wide", stopped ? "Stopped" : count ? "Resizing done" : "All box art is already the right size", resized, ART_WIDTH);
 	if (failed) snprintf(summary+n, sizeof(summary)-n, "\n%i couldn't be read", failed);
 	showMessage(summary, 1);
+	return count - resized;
 }
 
 ///////////////////////////////
@@ -869,9 +1085,10 @@ void BoxArt_open(SDL_Surface* main_screen, char* game) {
 	int dirty = 1;
 	int show_setting = 0;
 	Game* scratch = calloc(MAX_GAMES, sizeof(Game));
-	showMessage("Checking box art...", 0); // reading every game's art takes a moment on a big card
-	int missing = collectGames(scratch, 1);
-	int resizable = collectResizable(scratch);
+	showMessage("Checking box art...", 0); // (only folders that changed since last time are read again)
+	int known = 0;
+	int missing = collectMissing(scratch, &known);
+	int resizable = collectResizable(NULL);
 
 	while (1) {
 		GFX_startFrame();
@@ -884,13 +1101,12 @@ void BoxArt_open(SDL_Surface* main_screen, char* game) {
 		}
 		else if (PAD_justPressed(BTN_A)) {
 			if (selected==ROW_MISSING) {
-				int replace = ask("Replace existing box art?\n\nGames with no matches will not be changed", "REPLACE", "MISSING ONLY");
+				int replace = ask("Replace existing box art?\n\nGames with no matches will not be changed\nMISSING ONLY skips games with no match last time", "REPLACE", "MISSING ONLY");
 				findMissing(replace);
+				missing = collectMissing(scratch, &known); // (a quick look: no art is opened)
+				if (replace) resizable = collectResizable(NULL); // new art never needs resizing, but replaced art might have
 			}
-			else resizeAll();
-			showMessage("Checking box art...", 0);
-			missing = collectGames(scratch, 1);
-			resizable = collectResizable(scratch);
+			else resizable = resizeAll();
 			PAD_reset();
 			dirty = 1;
 		}
@@ -906,6 +1122,7 @@ void BoxArt_open(SDL_Surface* main_screen, char* game) {
 				if (i==ROW_MISSING) {
 					strcpy(name, "Find box art");
 					if (missing) sprintf(value, "%i missing", missing);
+					else if (known) sprintf(value, "%i with no match", known);
 					else strcpy(value, "None missing");
 				}
 				else {

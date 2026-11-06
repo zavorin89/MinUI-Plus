@@ -107,6 +107,23 @@ caecd505c79ebb56701906e64bc9f487d9fcb03c06cb8b113a9165e2ca7c016d
 If another copy is used, MinUI+ warns once and still tries to run it. Saves and save states stay in the DraStic folder, so keep that folder when updating.
 
 ----------------------------------------
+PICO-8
+
+"Pico-8 (P8)" plays carts with fake-08, an open-source emulator that is included. If you have bought PICO-8 from Lexaloffle, you can also play with the official PICO-8, including Splore, its cart browser. PICO-8 is not part of MinUI+ and is not included in this zip: its license is for you alone.
+
+1. Download the Raspberry Pi version from your Lexaloffle account (https://www.lexaloffle.com/games.php?page=updates)
+2. Unzip it into "Emus/my282/PICO8.pak" on your SD card, so that you have "Emus/my282/PICO8.pak/pico-8/pico8_dyn" and "pico8.dat" beside it
+3. Put carts (.p8 or .p8.png) in "Roms/Pico-8 Native (PICO8)". Its "Splore" entry opens Splore, which needs Wi-Fi to browse and download carts
+
+To play one cart from "Pico-8 (P8)" with the official PICO-8 instead, press MENU + Y on it and pick PICO-8 (official).
+
+MENU opens the in-game menu (Continue, Options, Quit, and your play time). Options has Screen Scaling, Screen Effect, Screen Border and Button Layout; the same settings are in MENU + Y on any of its carts or on Splore, and they apply to every cart. START opens PICO-8's own pause menu. A and X are PICO-8's O, B and Y are its X.
+
+Hold MENU for the Game Switcher. PICO-8 has no save states, so the switcher keeps a picture of where you were, and picking it starts the cart (or Splore) over. For save states, play the cart with fake-08.
+
+Saves and PICO-8's own settings are in "Saves/PICO8".
+
+----------------------------------------
 Bios
 
 Some systems need a BIOS file, and MinUI+ doesn't include any. Most go in the "Bios" folder, in a folder named after the tag in the system's "Roms" folder (eg. "/Bios/PS/" for "Sony PlayStation (PS)"). File names are case-sensitive.

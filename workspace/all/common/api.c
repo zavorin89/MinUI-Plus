@@ -1057,14 +1057,105 @@ void GFX_setTimeZone(int zone) {
 }
 // the settings and tools name each screen on the top row, left of the time and battery, in the grey of the settings'
 // names, so no row has to share that line
-void GFX_blitHeader(SDL_Surface* dst, char* title, int ow) {
-	if (!title || !title[0]) return;
-	char shown[256];
-	GFX_truncateText(font.large, title, shown, dst->w - SCALE1(PADDING*3 + BUTTON_PADDING) - ow, 0);
-	SDL_Surface* text = TTF_RenderUTF8_Blended(font.large, shown, COLOR_DARK_TEXT);
-	if (!text) return;
-	SDL_BlitSurface(text, NULL, dst, &(SDL_Rect){ SCALE1(PADDING + BUTTON_PADDING), SCALE1(PADDING) + (SCALE1(PILL_SIZE) - text->h) / 2 });
-	SDL_FreeSurface(text);
+// a header too long for the room left of the hardware group (with a gap before its pill) scrolls there and back
+#define HEADER_PAUSE_MS 1200 // still at each end
+#define HEADER_SPEED 30 // unscaled pixels a second
+int GFX_blitHeaderText(SDL_Surface* dst, TTF_Font* f, SDL_Color color, const char* title, int ow) {
+	static SDL_Surface* text;
+	static char drawn[256];
+	static TTF_Font* drawn_font;
+	static SDL_Color drawn_color;
+	static uint32_t started;
+	if (!title || !title[0]) return 0;
+	if (!text || f!=drawn_font || memcmp(&color, &drawn_color, sizeof(color)) || strcmp(drawn, title)) {
+		if (text) SDL_FreeSurface(text);
+		text = TTF_RenderUTF8_Blended(f, title, color);
+		snprintf(drawn, sizeof(drawn), "%s", title);
+		drawn_font = f;
+		drawn_color = color;
+		started = SDL_GetTicks();
+	}
+	if (!text) return 0;
+	int x = SCALE1(PADDING + BUTTON_PADDING);
+	int room = dst->w - SCALE1(PADDING) - ow - SCALE1(PADDING) - x;
+	if (room<=0) return 0;
+	int overflow = text->w - room;
+	int offset = 0;
+	if (overflow>0) {
+		int scroll_ms = MAX(1, overflow * 1000 / SCALE1(HEADER_SPEED));
+		int t = (SDL_GetTicks() - started) % (HEADER_PAUSE_MS*2 + scroll_ms*2);
+		if (t<HEADER_PAUSE_MS) offset = 0;
+		else if (t<HEADER_PAUSE_MS+scroll_ms) offset = (t - HEADER_PAUSE_MS) * overflow / scroll_ms;
+		else if (t<HEADER_PAUSE_MS*2+scroll_ms) offset = overflow;
+		else offset = overflow - (t - HEADER_PAUSE_MS*2 - scroll_ms) * overflow / scroll_ms;
+	}
+	SDL_BlitSurface(text, &(SDL_Rect){ offset, 0, MIN(room, text->w), text->h }, dst, &(SDL_Rect){ x, SCALE1(PADDING) + (SCALE1(PILL_SIZE) - text->h) / 2 });
+	return overflow>0;
+}
+// a list to read through, eg. the games a tool couldn't do something for: each name, with a short note on its right.
+// Up and down move (wrapping), left and right a page; A or B closes it
+#define LIST_SHOWN 5
+void GFX_showList(SDL_Surface* dst, const char* title, char** names, char** notes, int count) {
+	int selected = 0, start = 0, dirty = 1, show_setting = 0;
+	PAD_reset();
+	while (1) {
+		GFX_startFrame();
+		PAD_poll();
+		if (PAD_justPressed(BTN_A) || PAD_justPressed(BTN_B)) break;
+		int next = selected;
+		if (PAD_justRepeated(BTN_UP)) next = (selected + count - 1) % MAX(1, count);
+		else if (PAD_justRepeated(BTN_DOWN)) next = (selected + 1) % MAX(1, count);
+		else if (PAD_justRepeated(BTN_LEFT)) next = MAX(0, selected - LIST_SHOWN);
+		else if (PAD_justRepeated(BTN_RIGHT)) next = MIN(count - 1, selected + LIST_SHOWN);
+		if (next!=selected && next>=0) {
+			selected = next;
+			dirty = 1;
+		}
+		if (selected<start) start = selected;
+		if (selected>=start+LIST_SHOWN) start = selected - LIST_SHOWN + 1;
+		PWR_update(&dirty, &show_setting, NULL, NULL);
+		if (dirty) {
+			GFX_clear(dst);
+			int scrolls = GFX_blitHeader(dst, (char*)title, GFX_blitHardwareGroup(dst, show_setting));
+			int x = SCALE1(PADDING), w = dst->w - SCALE1(PADDING*2);
+			for (int i=start, j=0; i<count && j<LIST_SHOWN; i++, j++) {
+				int y = SCALE1(PADDING + (j+1)*PILL_SIZE);
+				int is_selected = i==selected;
+				if (is_selected) GFX_blitPill(ASSET_WHITE_PILL, dst, &(SDL_Rect){ x, y, w, SCALE1(PILL_SIZE) });
+				SDL_Surface* note = notes && notes[i] && notes[i][0] ? TTF_RenderUTF8_Blended(font.tiny, notes[i], is_selected ? COLOR_BLACK : COLOR_LIGHT_TEXT) : NULL;
+				int note_w = note ? note->w + SCALE1(BUTTON_PADDING) : 0;
+				char shown[256];
+				GFX_truncateText(font.large, names[i], shown, w - SCALE1(BUTTON_PADDING*2) - note_w, 0);
+				SDL_Surface* text = TTF_RenderUTF8_Blended(font.large, shown, is_selected ? COLOR_BLACK : COLOR_WHITE);
+				if (text) {
+					SDL_BlitSurface(text, NULL, dst, &(SDL_Rect){ x + SCALE1(BUTTON_PADDING), y + (SCALE1(PILL_SIZE) - text->h) / 2 });
+					SDL_FreeSurface(text);
+				}
+				if (note) {
+					SDL_BlitSurface(note, NULL, dst, &(SDL_Rect){ x + w - SCALE1(BUTTON_PADDING) - note->w, y + (SCALE1(PILL_SIZE) - note->h) / 2 });
+					SDL_FreeSurface(note);
+				}
+			}
+			if (show_setting && !GetHDMI()) GFX_blitHardwareHints(dst, show_setting);
+			else if (count>LIST_SHOWN) {
+				char where[32];
+				snprintf(where, sizeof(where), "%i of %i", selected+1, count);
+				SDL_Surface* text = TTF_RenderUTF8_Blended(font.small, where, COLOR_LIGHT_TEXT);
+				if (text) {
+					SDL_BlitSurface(text, NULL, dst, &(SDL_Rect){ SCALE1(PADDING + BUTTON_PADDING), dst->h - SCALE1(PADDING) - (SCALE1(PILL_SIZE) + text->h) / 2 });
+					SDL_FreeSurface(text);
+				}
+			}
+			GFX_blitButtonGroup((char*[]){ "B","BACK", NULL }, 0, dst, 1);
+			GFX_flip(dst);
+			dirty = scrolls; // (a long title keeps scrolling)
+		}
+		else GFX_sync();
+	}
+	PAD_reset();
+}
+int GFX_blitHeader(SDL_Surface* dst, char* title, int ow) {
+	return GFX_blitHeaderText(dst, font.large, COLOR_DARK_TEXT, title, ow);
 }
 int GFX_blitHardwareGroup(SDL_Surface* dst, int show_setting) {
 	if (show_setting) setting_fade_until = 0;

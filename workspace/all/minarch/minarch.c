@@ -32,6 +32,9 @@ static int simple_mode = 0;
 static int thread_video = 0;
 static int was_threaded = 0;
 static int should_run_core = 1; // used by threaded video
+static int frame_ready = 0; // threaded video: the core thread has a new frame in backbuffer (under core_mx)
+static volatile int switcher_requested = 0; // threaded video: held MENU, for the main thread to save and leave
+static int core_idle = 0; // threaded video: the core thread has seen should_run_core go to 0 and is between frames (under core_mx)
 
 static pthread_t		core_pt;
 static pthread_mutex_t	core_mx;
@@ -2065,7 +2068,13 @@ static void input_poll_callback(void) {
 	// held, then let go: off to the game switcher
 	if (!ignore_menu && PAD_justReleased(BTN_MENU) && SDL_GetTicks()-menu_down_at>=SWITCHER_HOLD_MS) {
 		ignore_menu = 1;
-		Switcher_saveAndQuit();
+		if (thread_video) { // this is the core's thread: pause it, and the main thread saves (as the menu does)
+			pthread_mutex_lock(&core_mx);
+			should_run_core = 0;
+			pthread_mutex_unlock(&core_mx);
+			switcher_requested = 1;
+		}
+		else Switcher_saveAndQuit();
 	}
 	
 	if (!ignore_menu && PAD_justReleased(BTN_MENU)) {
@@ -3337,6 +3346,7 @@ static void video_refresh_callback(const void *data, unsigned width, unsigned he
 		}
 		
 		memcpy(backbuffer->pixels, data, backbuffer->h*backbuffer->pitch);
+		frame_ready = 1;
 		
 		pthread_cond_signal(&core_rq);
 		pthread_mutex_unlock(&core_mx);
@@ -3552,6 +3562,8 @@ static struct {
 		[ITEM_QUIT] = "Quit",
 	}
 };
+static char preview_path[MAX_PATH] = ""; // the save picture already in Menu_loop's preview, so a redraw doesn't read it from the card again
+
 
 void Menu_init(void) {
 	menu.overlay = SDL_CreateRGBSurface(SDL_SWSURFACE,DEVICE_WIDTH,DEVICE_HEIGHT,FIXED_DEPTH,RGBA_MASK_AUTO);
@@ -4376,7 +4388,7 @@ static int Menu_options(MenuList* list) {
 		
 		if (dirty) {
 			GFX_clear(screen);
-			GFX_blitHeader(screen, list->title, GFX_blitHardwareGroup(screen, show_settings));
+			int header_scrolls = GFX_blitHeader(screen, list->title, GFX_blitHardwareGroup(screen, show_settings));
 			
 			char* desc = NULL;
 			SDL_Surface* text;
@@ -4604,7 +4616,7 @@ static int Menu_options(MenuList* list) {
 			}
 			
 			GFX_flip(screen);
-			dirty = 0;
+			dirty = header_scrolls; // (a long title keeps scrolling)
 		}
 		else GFX_sync();
 		hdmimon();
@@ -4853,6 +4865,7 @@ static void Switcher_save(void) {
 	SDL_Surface* bitmap = pending_shot; // as it looks, or the game's own frame
 	if (!bitmap) bitmap = SDL_CreateRGBSurfaceFrom(renderer.src, renderer.true_w, renderer.true_h, FIXED_DEPTH, renderer.src_p, RGBA_MASK_565);
 	saveShot(bitmap, bmp_path);
+	preview_path[0] = '\0';
 	SDL_FreeSurface(bitmap);
 	pending_shot = NULL;
 	LOG_info("switcher save: state %ums, picture %ums\n", saved-started, SDL_GetTicks()-saved);
@@ -4883,6 +4896,7 @@ static void Menu_saveState(void) {
 	SDL_Surface* bitmap = menu.bitmap ? (menu.shot ? menu.shot : menu.bitmap) : pending_shot; // (captured by Menu_saveStateNow)
 	if (!bitmap) bitmap = SDL_CreateRGBSurfaceFrom(renderer.src, renderer.true_w, renderer.true_h, FIXED_DEPTH, renderer.src_p, RGBA_MASK_565);
 	saveShot(bitmap, menu.bmp_path);
+	preview_path[0] = '\0'; // the slot's picture changed
 	uint32_t pictured = SDL_GetTicks();
 	
 	// LOG_info("%s %ix%i\n", menu.bmp_path, bitmap->w,bitmap->h);
@@ -5158,7 +5172,8 @@ static void Menu_loop(void) {
 	int ignore_menu = 0;
 	int menu_start = 0;
 	
-	SDL_Surface* preview = SDL_CreateRGBSurface(SDL_SWSURFACE,DEVICE_WIDTH/2,DEVICE_HEIGHT/2,FIXED_DEPTH,RGBA_MASK_565); // TODO: retain until changed?
+	SDL_Surface* preview = SDL_CreateRGBSurface(SDL_SWSURFACE,DEVICE_WIDTH/2,DEVICE_HEIGHT/2,FIXED_DEPTH,RGBA_MASK_565);
+	preview_path[0] = '\0';
 	
 	while (show_menu) {
 		GFX_startFrame();
@@ -5411,19 +5426,20 @@ static void Menu_loop(void) {
 				oy += SCALE1(WINDOW_RADIUS);
 				
 				if (menu.preview_exists) { // has save, has preview
-					// lotta memory churn here
-					SDL_Surface* bmp = IMG_Load(menu.bmp_path);
-					SDL_Surface* raw_preview = SDL_ConvertSurface(bmp, screen->format, SDL_SWSURFACE);
-					
-					// LOG_info("raw_preview %ix%i\n", raw_preview->w,raw_preview->h);
-					
-					SDL_FillRect(preview, NULL, 0);
-					if (raw_preview->w==preview->w && raw_preview->h==preview->h) SDL_BlitSurface(raw_preview, NULL, preview, NULL); // the whole screen as it looked, already preview sized
-					else if (raw_preview->w==DEVICE_WIDTH && raw_preview->h==DEVICE_HEIGHT) SDL_BlitScaled(raw_preview, NULL, preview, NULL);
-					else Menu_scale(raw_preview, preview);
+					if (strcmp(preview_path, menu.bmp_path)) { // read once per slot, not on every redraw
+						SDL_FillRect(preview, NULL, 0);
+						SDL_Surface* bmp = IMG_Load(menu.bmp_path);
+						SDL_Surface* raw_preview = bmp ? SDL_ConvertSurface(bmp, screen->format, SDL_SWSURFACE) : NULL;
+						if (raw_preview) {
+							if (raw_preview->w==preview->w && raw_preview->h==preview->h) SDL_BlitSurface(raw_preview, NULL, preview, NULL); // the whole screen as it looked, already preview sized
+							else if (raw_preview->w==DEVICE_WIDTH && raw_preview->h==DEVICE_HEIGHT) SDL_BlitScaled(raw_preview, NULL, preview, NULL);
+							else Menu_scale(raw_preview, preview);
+							SDL_FreeSurface(raw_preview);
+						}
+						if (bmp) SDL_FreeSurface(bmp);
+						snprintf(preview_path, sizeof(preview_path), "%s", menu.bmp_path);
+					}
 					SDL_BlitSurface(preview, NULL, screen, &(SDL_Rect){ox,oy});
-					SDL_FreeSurface(raw_preview);
-					SDL_FreeSurface(bmp);
 				}
 				else {
 					SDL_Rect preview_rect = {ox,oy,hw,hh};
@@ -5637,16 +5653,24 @@ static void limitFF(void) {
 	last_time = now;
 }
 
+static void waitCoreIdle(void) { // threaded video, once should_run_core is 0: until the core thread finishes its frame
+	for (int waited=0; waited<1000; waited++) { // (a second at most: a core stuck mid-frame shouldn't hang the menu too)
+		pthread_mutex_lock(&core_mx);
+		int idle = core_idle;
+		pthread_mutex_unlock(&core_mx);
+		if (idle) return;
+		SDL_Delay(1);
+	}
+	LOG_warn("core thread didn't pause\n");
+}
 static void* coreThread(void *arg) {
-	// force a vsync immediately before loop
-	// for better frame pacing?
-	GFX_clearAll();
-	GFX_flip(screen);
-	
+	// (no drawing here: GL belongs to the main thread, which draws every frame. A flip from this thread took the
+	// context with it, and the main thread's next flips failed: "The specified window has not been made current")
 	while (!quit) {
 		int run = 0;
 		pthread_mutex_lock(&core_mx);
 		run = should_run_core;
+		core_idle = !run;
 		pthread_mutex_unlock(&core_mx);
 		
 		if (run) {
@@ -5654,6 +5678,7 @@ static void* coreThread(void *arg) {
 			limitFF();
 			trackFPS();
 		}
+		else SDL_Delay(1); // paused for the menu or a save: not spinning a core at full speed
 	}
 	pthread_exit(NULL);
 }
@@ -5764,13 +5789,23 @@ int main(int argc , char* argv[]) {
 
 		if (thread_video && !quit) {
 			pthread_mutex_lock(&core_mx);
-			pthread_cond_wait(&core_rq,&core_mx);
-			
-			if (backbuffer) {
+			// a frame, or a reason to stop waiting: a wake-up sent before this waits is otherwise lost, and once the
+			// core thread has paused (menu, game switcher) or stopped no other one comes (it froze here before)
+			while (!frame_ready && !quit && should_run_core && !switcher_requested) {
+				struct timespec until;
+				clock_gettime(CLOCK_REALTIME, &until);
+				until.tv_nsec += 100 * 1000000;
+				if (until.tv_nsec>=1000000000) {
+					until.tv_sec += 1;
+					until.tv_nsec -= 1000000000;
+				}
+				pthread_cond_timedwait(&core_rq, &core_mx, &until);
+			}
+			if (frame_ready && backbuffer) {
 				video_refresh_callback_main(backbuffer->pixels,backbuffer->w,backbuffer->h,backbuffer->pitch);
 				GFX_flip(screen);
 			}
-			core_rq = (pthread_cond_t)PTHREAD_COND_INITIALIZER;
+			frame_ready = 0;
 			pthread_mutex_unlock(&core_mx);
 		}
 
@@ -5778,7 +5813,12 @@ int main(int argc , char* argv[]) {
 		RA_doFrame();
 		RA_update();
 		State_updateDeferredResume();
+		if (thread_video && (show_menu || switcher_requested)) waitCoreIdle(); // nothing saves or draws under a running core
 		if (show_menu) Menu_loop();
+		if (switcher_requested) { // (the core thread asked, and is paused)
+			switcher_requested = 0;
+			Switcher_saveAndQuit();
+		}
 		
 		if (toggle_thread && HW_active()) toggle_thread = 0; // a GPU core stays on this thread
 		if (toggle_thread) {
@@ -5813,6 +5853,7 @@ int main(int argc , char* argv[]) {
 		hdmimon();
 	}
 
+	if (thread_video) pthread_join(core_pt, NULL); // it stops at quit: done with the core before the core is unloaded
 	Play_save();
 	quit_at = SDL_GetTicks();
 	RA_quit();

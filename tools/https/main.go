@@ -72,7 +72,9 @@ func normalizeRelease(body io.Reader) (string, error) {
 func main() {
 	timeout := flag.Duration("t", 30*time.Second, "total request timeout")
 	release := flag.Bool("release", false, "normalize a GitLab release for the updater")
-	flag.Usage = func() { fmt.Fprintln(os.Stderr, "usage: https.elf [-t 30s] [-release] URL [OUTPUT]") }
+	post := flag.String("post", "", "POST this file's contents (form encoded, as wget --post-file does)")
+	agent := flag.String("ua", "MinUIPlus-Updater/1", "User-Agent")
+	flag.Usage = func() { fmt.Fprintln(os.Stderr, "usage: https.elf [-t 30s] [-release] [-post FILE] [-ua AGENT] URL [OUTPUT]") }
 	flag.Parse()
 	if flag.NArg() < 1 || flag.NArg() > 2 {
 		flag.Usage()
@@ -112,11 +114,22 @@ func main() {
 			return nil
 		},
 	}
-	req, err := http.NewRequest(http.MethodGet, url, nil)
+	method, body := http.MethodGet, io.Reader(nil)
+	if *post != "" {
+		data, err := os.ReadFile(*post)
+		if err != nil {
+			fail("read post file: %v", err)
+		}
+		method, body = http.MethodPost, strings.NewReader(string(data))
+	}
+	req, err := http.NewRequest(method, url, body)
 	if err != nil {
 		fail("request: %v", err)
 	}
-	req.Header.Set("User-Agent", "MinUIPlus-Updater/1")
+	if *post != "" {
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	}
+	req.Header.Set("User-Agent", *agent)
 	resp, err := client.Do(req)
 	if err != nil {
 		fail("request failed: %v", err)

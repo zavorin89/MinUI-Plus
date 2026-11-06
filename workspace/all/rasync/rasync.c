@@ -60,7 +60,13 @@ static int last_connected = 1; // whether the last request reached the server at
 static int last_status = 0; // HTTP status of the last request
 
 // title, game, a bar that fills as games are done, and a count
-static void showProgress(int done, int count, char* name, char* stage) {
+#define PROGRESS_MS 100
+static void showProgress(int done, int count, char* name, char* stage, int force) {
+	// drawn at most every PROGRESS_MS: a frame per game (waiting on vsync) was most of the time for games it skips
+	static uint32_t drawn_at = 0;
+	uint32_t now = SDL_GetTicks();
+	if (!force && drawn_at && now-drawn_at<PROGRESS_MS) return;
+	drawn_at = now;
 	int show_setting = 0;
 	int dirty = 1;
 	GFX_startFrame();
@@ -144,23 +150,54 @@ typedef struct KnownHash {
 	long long size;
 	long long mtime;
 	char* path;
+	int line; // later lines (rehashed after a change) win
 } KnownHash;
 static KnownHash* known_hashes = NULL;
 static int known_count = 0;
+static int byPathThenLine(const void* a, const void* b) {
+	const KnownHash* x = a;
+	const KnownHash* y = b;
+	int order = strcmp(x->path, y->path);
+	return order ? order : x->line - y->line;
+}
+// read whole (it's appended to, so it can outgrow the game count), sorted by path keeping only each path's
+// newest line, and written back compacted when that dropped any
 static void loadHashes(void) {
-	known_hashes = calloc(MAX_GAMES, sizeof(KnownHash));
+	int capacity = 1024;
+	known_hashes = calloc(capacity, sizeof(KnownHash));
 	FILE* file = fopen(HASHES_PATH, "r");
 	if (!file) return;
 	char line[MAX_PATH+128];
-	while (known_count<MAX_GAMES && fgets(line, sizeof(line), file)) { // <hash> <size> <mtime> <path>
+	int lines = 0;
+	while (fgets(line, sizeof(line), file)) { // <hash> <size> <mtime> <path>
 		trimTrailingNewlines(line);
+		lines += 1;
+		if (known_count==capacity) known_hashes = realloc(known_hashes, (capacity *= 2) * sizeof(KnownHash));
 		KnownHash* known = &known_hashes[known_count];
 		int at = 0;
 		if (sscanf(line, "%32s %lld %lld %n", known->hash, &known->size, &known->mtime, &at)!=3 || !at || !line[at]) continue;
 		known->path = strdup(line + at);
+		known->line = lines;
 		known_count += 1;
 	}
 	fclose(file);
+	qsort(known_hashes, known_count, sizeof(KnownHash), byPathThenLine);
+	int kept = 0;
+	for (int i=0; i<known_count; i++) {
+		if (i+1<known_count && !strcmp(known_hashes[i].path, known_hashes[i+1].path)) { free(known_hashes[i].path); continue; }
+		known_hashes[kept++] = known_hashes[i];
+	}
+	known_count = kept;
+	if (lines==kept) return;
+	char tmp_path[MAX_PATH];
+	snprintf(tmp_path, sizeof(tmp_path), "%s.tmp", HASHES_PATH);
+	file = fopen(tmp_path, "w");
+	if (!file) return;
+	for (int i=0; i<known_count; i++) fprintf(file, "%s %lld %lld %s\n", known_hashes[i].hash, known_hashes[i].size, known_hashes[i].mtime, known_hashes[i].path);
+	int ok = !ferror(file);
+	fclose(file);
+	if (ok) rename(tmp_path, HASHES_PATH);
+	else unlink(tmp_path);
 }
 static void freeHashes(void) {
 	for (int i=0; i<known_count; i++) free(known_hashes[i].path);
@@ -169,14 +206,17 @@ static void freeHashes(void) {
 	known_count = 0;
 }
 static int knownHash(const char* path, struct stat* st, char hash[33]) {
-	for (int i=known_count-1; i>=0; i--) { // the newest entry for a path wins
-		KnownHash* known = &known_hashes[i];
-		if (!exactMatch(known->path, (char*)path)) continue;
-		if (known->size!=(long long)st->st_size || known->mtime!=(long long)st->st_mtime) return 0;
-		strcpy(hash, known->hash);
-		return 1;
+	int lo = 0, hi = known_count; // sorted by path, one line each
+	while (lo<hi) {
+		int mid = (lo+hi)/2;
+		if (strcmp(known_hashes[mid].path, path)<0) lo = mid+1;
+		else hi = mid;
 	}
-	return 0;
+	if (lo>=known_count || strcmp(known_hashes[lo].path, path)) return 0;
+	KnownHash* known = &known_hashes[lo];
+	if (known->size!=(long long)st->st_size || known->mtime!=(long long)st->st_mtime) return 0;
+	strcpy(hash, known->hash);
+	return 1;
 }
 static void rememberHash(const char* path, struct stat* st, const char* hash) {
 	FILE* file = fopen(HASHES_PATH, "a");
@@ -312,6 +352,65 @@ static int hasWifi(void) {
 	return address[0]!='\0';
 }
 
+// the games a sync found no achievements for, shown after it: "Name" and "TAG, why"
+typedef struct Missed { char** names; char** notes; int count; } Missed;
+static void addMissed(Missed* missed, const char* path, const char* why) {
+	char name[256];
+	getDisplayName(path, name);
+	char folder[MAX_PATH];
+	snprintf(folder, sizeof(folder), "%s", path);
+	char* slash = strrchr(folder, '/');
+	if (slash) *slash = '\0';
+	char tag[64] = "";
+	char* open = strrchr(folder, '(');
+	char* close = open ? strchr(open, ')') : NULL;
+	if (open && close && close-open-1<(int)sizeof(tag)) snprintf(tag, sizeof(tag), "%.*s, ", (int)(close-open-1), open+1);
+	char note[128];
+	snprintf(note, sizeof(note), "%s%s", tag, why);
+	missed->names[missed->count] = strdup(name);
+	missed->notes[missed->count] = strdup(note);
+	missed->count += 1;
+}
+// whether a game's saved reply from an earlier sync has a set (a local read, no network)
+static int cachedHasAchievements(const char* key) {
+	size_t length = 0;
+	char* body = RACache_read(key, &length);
+	if (!body) return 1; // can't tell, so don't list it
+	int has = 1;
+	rc_api_fetch_game_sets_response_t sets;
+	rc_api_server_response_t server = { body, length, 200 };
+	if (rc_api_process_fetch_game_sets_server_response(&sets, &server)==RC_OK) has = sets.id!=0;
+	rc_api_destroy_fetch_game_sets_response(&sets);
+	free(body);
+	return has;
+}
+// the summary, with a way to see that list when there is one: 1 for A
+static int askSummary(char* msg, int has_list) {
+	if (!has_list) {
+		showMessage(msg, 1);
+		return 0;
+	}
+	int dirty = 1;
+	int show_setting = 0;
+	PAD_reset();
+	while (1) {
+		GFX_startFrame();
+		PAD_poll();
+		if (PAD_justPressed(BTN_A)) return 1;
+		if (PAD_justPressed(BTN_B)) return 0;
+		PWR_update(&dirty, &show_setting, NULL, NULL);
+		if (dirty) {
+			GFX_clear(screen);
+			GFX_blitHardwareGroup(screen, show_setting);
+			GFX_blitMessage(font.large, msg, screen, &(SDL_Rect){ 0, 0, screen->w, screen->h - SCALE1(PILL_SIZE+PADDING) });
+			GFX_blitButtonGroup((char*[]){ "B","DONE", "A","SEE LIST", NULL }, 1, screen, 1);
+			GFX_flip(screen);
+			dirty = 0;
+		}
+		else GFX_sync();
+	}
+}
+
 static void runSync(void) {
 	PWR_setCPUSpeed(CPU_SPEED_NORMAL); // hashing waits on the card more than the CPU, and minutes flat out at the top speed is asking for trouble
 	PWR_disableAutosleep(); // a full sync takes a while with no buttons pressed
@@ -329,6 +428,7 @@ static void runSync(void) {
 
 			Game* games = calloc(MAX_GAMES, sizeof(Game));
 			int count = collectGames(games);
+			Missed missed = { calloc(MAX(1, count), sizeof(char*)), calloc(MAX(1, count), sizeof(char*)), 0 };
 			int synced = 0, skipped = 0, with_achievements = 0, failed = 0, cancelled = 0;
 			int offline_streak = 0, lost = 0, done = 0; // three games in a row without reaching the server means the connection dropped
 			int rejected = 0; // the server refused the saved login
@@ -347,12 +447,13 @@ static void runSync(void) {
 				char name[256];
 				getDisplayName(games[i].path, name);
 				done = i;
-				showProgress(i, count, name, "Identifying");
+				showProgress(i, count, name, "Identifying", i==0);
 
 				char hash[33];
 				if (!hashGame(games[i].path, games[i].console, hash)) {
 					SYNC_LOG("%s: couldn't identify\n", games[i].path);
 					failed += 1;
+					addMissed(&missed, games[i].path, "couldn't identify");
 					continue;
 				}
 
@@ -366,6 +467,8 @@ static void runSync(void) {
 				if (RACache_key(req.post_data, key, sizeof(key)) && (RACache_has(key) || RACache_isKnownUnknown(key))) { // synced before
 					SYNC_LOG("%s: already synced\n", games[i].path);
 					skipped += 1;
+					if (!RACache_has(key)) addMissed(&missed, games[i].path, "not in RetroAchievements"); // (a 404 kept from before)
+					else if (!cachedHasAchievements(key)) addMissed(&missed, games[i].path, "no achievements yet");
 					rc_api_destroy_request(&req);
 					continue;
 				}
@@ -381,7 +484,7 @@ static void runSync(void) {
 						ids[1] = sets.session_game_id!=sets.id ? sets.session_game_id : 0;
 						int game_badges = 0;
 						if (ids[0]) {
-							showProgress(i, count, name, "Downloading badges");
+							showProgress(i, count, name, "Downloading badges", 1);
 							int total = 0;
 							for (uint32_t k=0; k<sets.num_sets; k++) total += sets.sets[k].num_achievements;
 							RA_BadgeName* badge_names = calloc(total ? total : 1, sizeof(RA_BadgeName));
@@ -403,8 +506,12 @@ static void runSync(void) {
 				else if (last_status==404) {
 					unknown += 1;
 					SYNC_LOG("%s: not in RetroAchievements\n", games[i].path);
+					addMissed(&missed, games[i].path, "not in RetroAchievements");
 				}
-				else failed += 1;
+				else if (last_status!=401) {
+					failed += 1;
+					if (last_connected) addMissed(&missed, games[i].path, "couldn't check"); // (offline ones are tried again next time)
+				}
 				HTTP_freeResponse(&response);
 				rc_api_destroy_request(&req);
 				
@@ -420,6 +527,7 @@ static void runSync(void) {
 
 				// your unlocks, so offline play doesn't re-award achievements you already have
 				if (ids[0]) with_achievements += 1;
+				else if (last_status==200) addMissed(&missed, games[i].path, "no achievements yet");
 				for (int j=0; j<2; j++) {
 					if (!ids[j]) continue;
 					rc_api_fetch_user_unlocks_request_t unlock_params = {0};
@@ -449,7 +557,17 @@ static void runSync(void) {
 			SYNC_LOG("unknown to RetroAchievements: %i\n", unknown);
 			SYNC_LOG("done: %s, %i synced, %i skipped, %i with achievements, %i failed, %i badges\n", rejected ? "login rejected" : lost ? "lost connection" : cancelled ? "cancelled" : "complete", synced, skipped, with_achievements, failed, badges);
 			PWR_enableAutosleep(); // the summary waits for a button, sleeping is fine again
-			showMessage(summary, 1);
+			if (askSummary(summary, missed.count && !rejected)) {
+				char title[64];
+				snprintf(title, sizeof(title), "No achievements: %i game%s", missed.count, missed.count==1 ? "" : "s");
+				GFX_showList(screen, title, missed.names, missed.notes, missed.count);
+			}
+			for (int i=0; i<missed.count; i++) {
+				free(missed.names[i]);
+				free(missed.notes[i]);
+			}
+			free(missed.names);
+			free(missed.notes);
 		}
 	}
 
