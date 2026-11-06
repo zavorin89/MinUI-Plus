@@ -1294,6 +1294,7 @@ enum { ITEM_CONT, ITEM_SAVE, ITEM_LOAD, ITEM_ACHIEVEMENTS, ITEM_OPTS, ITEM_QUIT,
 static char* menu_items[MENU_ITEM_COUNT] = {"Continue","Save","Load","Achievements","Options","Quit"};
 
 static void runMenu(void) {
+	GFX_clearSettingOverGame(); // the menu draws its own
 	char* menu_message = NULL;
 	uint32_t menu_message_until = 0;
 	int in_switcher = -1;
@@ -2153,7 +2154,9 @@ static int h_SDL_PollEvent(SDL_Event* event) {
 	last_poll = nowUs();
 	PAD_poll();
 	testPad();
-	PWR_update(NULL, NULL, beforeSleep, afterSleep);
+	static int show_setting = 0; // the volume or brightness bar over the game, which also clicks each step
+	PWR_update(NULL, &show_setting, beforeSleep, afterSleep);
+	GFX_settingOverGame(show_setting);
 	if (profile_on) {
 		profile_poll += nowUs()-started;
 		profile_polls += 1;

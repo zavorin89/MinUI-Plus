@@ -189,7 +189,6 @@ static struct VID_Context {
 	int frame_pitch;
 	int frame_w, frame_h;
 	SDL_Rect frame_src_pixels; // frame_src in frame_pixels
-	SDL_Texture* notification;
 
 	SDL_Surface* buffer;
 	SDL_Surface* screen;
@@ -330,6 +329,7 @@ static void clearVideo(void) {
 }
 
 static void freeMenuTextures(void);
+static void freeOverlays(void);
 void PLAT_quitVideo(void) {
 	// clearVideo();
 	freeMenuTextures();
@@ -343,7 +343,7 @@ void PLAT_quitVideo(void) {
 	if (vid.border_shown) SDL_FreeSurface(vid.border_shown);
 	if (vid.border_native) SDL_FreeSurface(vid.border_native);
 	if (vid.effect_image) SDL_FreeSurface(vid.effect_image);
-	if (vid.notification) SDL_DestroyTexture(vid.notification);
+	freeOverlays();
 	SDL_DestroyTexture(vid.texture);
 	SDL_DestroyRenderer(vid.renderer);
 	SDL_DestroyWindow(vid.window);
@@ -729,6 +729,56 @@ SDL_Surface* PLAT_captureScreen(void) {
 	return out;
 }
 
+// the notification (eg. an achievement) and then the volume or brightness bar, over everything else. A game can set
+// them from its own thread (minarch's Prevent Tearing runs the core on one), and the renderer only works on the one
+// that draws: so setting one only keeps a copy of the picture, made into a texture here, when it's next drawn
+typedef struct Overlay {
+	SDL_Texture* texture;
+	SDL_Surface* pending; // the picture to show next (NULL with changed set: hide it)
+	int changed;
+	volatile int alpha;
+} Overlay;
+static Overlay overlays[2] = { {.alpha = 255}, {.alpha = 255} }; // 0 the notification, 1 the bar
+static pthread_mutex_t overlay_lock = PTHREAD_MUTEX_INITIALIZER;
+static void setOverlay(Overlay* o, SDL_Surface* picture) {
+	SDL_Surface* copy = picture ? SDL_ConvertSurfaceFormat(picture, SDL_PIXELFORMAT_ARGB8888, 0) : NULL;
+	pthread_mutex_lock(&overlay_lock);
+	if (o->pending) SDL_FreeSurface(o->pending);
+	o->pending = copy;
+	o->changed = 1;
+	pthread_mutex_unlock(&overlay_lock);
+}
+static void freeOverlays(void) {
+	for (int i=0; i<2; i++) {
+		if (overlays[i].texture) SDL_DestroyTexture(overlays[i].texture);
+		if (overlays[i].pending) SDL_FreeSurface(overlays[i].pending);
+		overlays[i].texture = NULL;
+		overlays[i].pending = NULL;
+		overlays[i].changed = 0;
+	}
+}
+static int overlaysShown(void) {
+	return overlays[0].texture || overlays[1].texture || overlays[0].changed || overlays[1].changed;
+}
+static void drawOverlays(int ox, int oy) {
+	for (int i=0; i<2; i++) {
+		Overlay* o = &overlays[i];
+		if (o->changed) {
+			pthread_mutex_lock(&overlay_lock);
+			if (o->texture) SDL_DestroyTexture(o->texture);
+			o->texture = o->pending ? SDL_CreateTextureFromSurface(vid.renderer, o->pending) : NULL;
+			if (o->texture) SDL_SetTextureBlendMode(o->texture, SDL_BLENDMODE_BLEND);
+			if (o->pending) SDL_FreeSurface(o->pending);
+			o->pending = NULL;
+			o->changed = 0;
+			pthread_mutex_unlock(&overlay_lock);
+		}
+		if (!o->texture) continue;
+		SDL_SetTextureAlphaMod(o->texture, o->alpha);
+		if (rotate) SDL_RenderCopyEx(vid.renderer,o->texture,NULL,&(SDL_Rect){ox,oy,device_width,device_height},rotate*90,NULL,SDL_FLIP_NONE);
+		else SDL_RenderCopy(vid.renderer, o->texture, NULL, NULL);
+	}
+}
 // the last game frame again, with the notification over it: shows something (eg. that it's saving) while the game is held
 void PLAT_presentLastFrame(void) {
 	if (!vid.has_frame || !vid.frame_texture) return;
@@ -747,28 +797,14 @@ void PLAT_presentLastFrame(void) {
 		if (rotate) SDL_RenderCopyEx(vid.renderer,vid.effect,&vid.frame_effect_src,&(SDL_Rect){ox+d->x,oy+d->y,d->w,d->h},rotate*90,NULL,SDL_FLIP_NONE);
 		else SDL_RenderCopy(vid.renderer, vid.effect, &vid.frame_effect_src, d);
 	}
-	if (vid.notification) {
-		if (rotate) SDL_RenderCopyEx(vid.renderer,vid.notification,NULL,&(SDL_Rect){ox,oy,device_width,device_height},rotate*90,NULL,SDL_FLIP_NONE);
-		else SDL_RenderCopy(vid.renderer, vid.notification, NULL, NULL);
-	}
+	drawOverlays(ox, oy);
 	SDL_RenderPresent(vid.renderer);
 }
 
-static int notification_alpha = 255;
-void PLAT_setNotification(SDL_Surface* overlay) {
-	if (vid.notification) SDL_DestroyTexture(vid.notification);
-	vid.notification = NULL;
-	if (!overlay) return;
-	vid.notification = SDL_CreateTextureFromSurface(vid.renderer, overlay);
-	if (vid.notification) {
-		SDL_SetTextureBlendMode(vid.notification, SDL_BLENDMODE_BLEND);
-		SDL_SetTextureAlphaMod(vid.notification, notification_alpha);
-	}
-}
-void PLAT_setNotificationAlpha(int alpha) {
-	notification_alpha = alpha;
-	if (vid.notification) SDL_SetTextureAlphaMod(vid.notification, alpha);
-}
+void PLAT_setNotification(SDL_Surface* overlay) { setOverlay(&overlays[0], overlay); }
+void PLAT_setNotificationAlpha(int alpha) { overlays[0].alpha = alpha; }
+void PLAT_setSettingOverlay(SDL_Surface* overlay) { setOverlay(&overlays[1], overlay); }
+void PLAT_setSettingAlpha(int alpha) { overlays[1].alpha = alpha; }
 
 ///////////////////////////////
 
@@ -942,10 +978,7 @@ void PLAT_flip(SDL_Surface* IGNORED, int ignored) {
 	}
 	
 	// notifications (eg. achievements) go over everything, positioned like the border
-	if (vid.notification) {
-		if (rotate) SDL_RenderCopyEx(vid.renderer,vid.notification,NULL,&(SDL_Rect){ox,oy,device_width,device_height},rotate*90,NULL,SDL_FLIP_NONE);
-		else SDL_RenderCopy(vid.renderer, vid.notification, NULL, NULL);
-	}
+	drawOverlays(ox, oy);
 	
 	// uint32_t then = SDL_GetTicks();
 	SDL_RenderPresent(vid.renderer);
@@ -965,7 +998,7 @@ SDL_Texture* PLAT_gpuTexture(int width, int height) {
 // as PLAT_flip, for a whole 2x picture with no border or notification over it.
 // Anything else goes the long way, through PLAT_flip.
 int PLAT_flipGpuFrame(SDL_Texture* texture, int width, int height, double aspect, int bottom_up) {
-	if (vid.border || vid.notification) return 0;
+	if (vid.border || overlaysShown()) return 0;
 	// a 2x frame fills this screen exactly, so Native (-1) and Fullscreen (0) are the same picture
 	int w = aspect>0 ? (int)(device_height * aspect + 0.5) : width*2;
 	if (w!=device_width || w!=width*2 || device_height!=height*2) return 0;
@@ -995,12 +1028,10 @@ int PLAT_flipGpuFrame(SDL_Texture* texture, int width, int height, double aspect
 
 // for all/ndslayer, which draws DraStic's screens itself
 int PLAT_getRotate(void) { return rotate; }
-void PLAT_drawNotification(void) { // for a layer that draws the frame itself
-	if (!vid.notification) return;
+void PLAT_drawNotification(void) { // for a layer that draws the frame itself (the volume or brightness bar too)
+	if (!overlaysShown()) return;
 	int oy = (device_width-device_height)/2;
-	int ox = -oy;
-	if (rotate) SDL_RenderCopyEx(vid.renderer,vid.notification,NULL,&(SDL_Rect){ox,oy,device_width,device_height},rotate*90,NULL,SDL_FLIP_NONE);
-	else SDL_RenderCopy(vid.renderer, vid.notification, NULL, NULL);
+	drawOverlays(-oy, oy);
 }
 SDL_Texture* PLAT_getEffectTexture(int scale) { // the screen effect, NULL when it's off
 	effect.next_scale = scale;

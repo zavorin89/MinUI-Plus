@@ -1973,8 +1973,9 @@ static void input_poll_callback(void) {
 	if (quit) return; // (a core may run a little more as it's unloaded, with the settings and sound already gone)
 	PAD_poll();
 
-	int show_setting = 0;
+	static int show_setting = 0; // kept between polls, so the bar stays up while the buttons are held and its steps click
 	PWR_update(NULL, &show_setting, Menu_beforeSleep, Menu_afterSleep);
+	GFX_settingOverGame(show_setting);
 
 	// I _think_ this can stay as is...
 	static uint32_t menu_down_at = 0;
@@ -3760,12 +3761,14 @@ static int Menu_message(char* message, char** pairs) {
 			break;
 		}
 		
-		PWR_update(&dirty, NULL, Menu_beforeSleep, Menu_afterSleep);
+		static int show_setting = 0;
+		PWR_update(&dirty, &show_setting, Menu_beforeSleep, Menu_afterSleep);
 		
 		if (dirty) {
 			GFX_clear(screen);
 			GFX_blitMessage(font.medium, message, screen, &(SDL_Rect){0,SCALE1(PADDING),screen->w,screen->h-SCALE1(PILL_SIZE+PADDING)});
 			GFX_blitButtonGroup(pairs, 0, screen, 1);
+			GFX_blitSettingOnly(screen, show_setting); // (the volume or brightness bar, while it's changed)
 			GFX_flip(screen);
 			dirty = 0;
 		}
@@ -3790,7 +3793,8 @@ static int Menu_detail(char* text) {
 			break;
 		}
 		
-		PWR_update(&dirty, NULL, Menu_beforeSleep, Menu_afterSleep);
+		static int show_setting = 0;
+		PWR_update(&dirty, &show_setting, Menu_beforeSleep, Menu_afterSleep);
 		
 		if (dirty) {
 			GFX_clear(screen);
@@ -3802,6 +3806,7 @@ static int Menu_detail(char* text) {
 				0, SCALE1(PADDING) + (area - h) / 2, screen->w, h
 			});
 			GFX_blitButtonGroup((char*[]){ "B","BACK", NULL }, 0, screen, 1);
+			GFX_blitSettingOnly(screen, show_setting); // (the volume or brightness bar, while it's changed)
 			GFX_flip(screen);
 			dirty = 0;
 		}
@@ -5103,6 +5108,7 @@ static void Menu_blitPill(uint32_t color, SDL_Surface* dst, SDL_Rect* rect) {
 
 #define MENU_MESSAGE_FADE_MS 150
 static void Menu_loop(void) {
+	GFX_clearSettingOverGame(); // the menu draws its own
 	HW_syncFrame(); // (it opens on the game's picture)
 	char* menu_message = NULL; // a short confirmation over the menu, eg. after pinning to the game switcher
 	uint32_t menu_message_until = 0;

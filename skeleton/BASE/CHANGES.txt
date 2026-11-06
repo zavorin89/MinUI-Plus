@@ -41,6 +41,12 @@ This is a consolidated comparison with v1.0.0, rather than a list of every inter
 - Syncing is faster, especially later runs: games already identified aren't read again.
 - After a sync, SEE LIST shows the games without achievements and why (not in RetroAchievements, no achievements yet, couldn't identify, couldn't check).
 
+### Volume and brightness
+
+- Changing the volume or brightness during a game now shows the bar over it, on every system (PICO-8 and Splore, fake-08 and the DS too), and each step clicks, as in the menus.
+- The bar also shows in the confirmations and pickers that didn't have it (deleting a game, choosing a core, the game menu, Set time, messages in the in-game menu).
+- PICO-8's in-game menu now clicks when you move, choose and go back, like every other system's.
+
 ### Menus
 
 - A title too long for the top of a menu (Options, the on-screen keyboard) scrolls instead of being cut off.

@@ -364,6 +364,8 @@ FALLBACK_IMPLEMENTATION int PLAT_supportsBorder(void) { return 0; }
 FALLBACK_IMPLEMENTATION void PLAT_setBorder(const char* path) { }
 FALLBACK_IMPLEMENTATION void PLAT_setNotification(SDL_Surface* overlay) { }
 FALLBACK_IMPLEMENTATION void PLAT_setNotificationAlpha(int alpha) { }
+FALLBACK_IMPLEMENTATION void PLAT_setSettingOverlay(SDL_Surface* overlay) { }
+FALLBACK_IMPLEMENTATION void PLAT_setSettingAlpha(int alpha) { }
 FALLBACK_IMPLEMENTATION SDL_Surface* PLAT_captureScreen(void) { return NULL; }
 FALLBACK_IMPLEMENTATION void PLAT_presentLastFrame(void) { }
 FALLBACK_IMPLEMENTATION void PLAT_powerSave(int state) { }
@@ -1185,6 +1187,83 @@ void GFX_showList(SDL_Surface* dst, const char* title, char** names, char** note
 int GFX_blitHeader(SDL_Surface* dst, char* title, int ow) {
 	return GFX_blitHeaderText(dst, font.large, COLOR_DARK_TEXT, title, ow);
 }
+// the volume or brightness bar over a game, which draws no hardware group of its own. The bar is drawn like the
+// menus' (in the screen's format, on black), then given the see-through edges of a white pill of the same shape.
+// It's only drawn again when the value changes; hiding it fades it out
+static SDL_Surface* over_game = NULL; // ARGB, the screen's size
+static SDL_Surface* over_game_bar = NULL; // the screen's format: the bar, then the pill's mask
+static int over_game_setting = 0, over_game_value = -1;
+static uint32_t over_game_hidden_at = 0;
+void GFX_clearSettingOverGame(void) {
+	if (over_game_setting) PLAT_setSettingOverlay(NULL);
+	over_game_setting = 0;
+	over_game_value = -1;
+	over_game_hidden_at = 0;
+}
+void GFX_settingOverGame(int show_setting) {
+	if (show_setting && !GetHDMI()) {
+		int value = show_setting==1 ? GetBrightness() : GetVolume();
+		if (show_setting!=over_game_setting || value!=over_game_value) {
+			// (the device's size and format: a game resizes the screen surface to its own)
+			if (!over_game) over_game = SDL_CreateRGBSurfaceWithFormat(0, FIXED_WIDTH, FIXED_HEIGHT, 32, SDL_PIXELFORMAT_ARGB8888);
+			if (!over_game_bar) over_game_bar = SDL_CreateRGBSurface(0, FIXED_WIDTH, FIXED_HEIGHT, FIXED_DEPTH, RGBA_MASK_565);
+			if (!over_game || !over_game_bar) return;
+			int ow = SCALE1(PILL_SIZE + SETTINGS_WIDTH + 10 + 4); // (as GFX_blitHardwareGroupNow lays it out)
+			SDL_Rect r = { FIXED_WIDTH - SCALE1(PADDING) - ow, SCALE1(PADDING), ow, SCALE1(PILL_SIZE) };
+			SDL_FillRect(over_game, NULL, 0);
+			SDL_FillRect(over_game_bar, &r, 0);
+			GFX_blitHardwareGroupNow(over_game_bar, show_setting);
+			SDL_LockSurface(over_game);
+			uint32_t* out = over_game->pixels;
+			int pitch = over_game->pitch / 4;
+			SDL_PixelFormat* f = over_game_bar->format;
+			int bpp = f->BytesPerPixel;
+			uint8_t* bar = malloc(r.w * r.h * 3); // the bar's colors, before the mask is drawn over them
+			if (bar) {
+				for (int y=0; y<r.h; y++) for (int x=0; x<r.w; x++) {
+					uint8_t* p = (uint8_t*)over_game_bar->pixels + (r.y+y) * over_game_bar->pitch + (r.x+x) * bpp;
+					uint32_t px = bpp==2 ? *(uint16_t*)p : *(uint32_t*)p;
+					uint8_t* c = bar + (y*r.w+x)*3;
+					SDL_GetRGB(px, f, &c[0], &c[1], &c[2]);
+				}
+				SDL_FillRect(over_game_bar, &r, 0);
+				GFX_blitPill(ASSET_WHITE_PILL, over_game_bar, &r);
+				#define MASK_AT(X, Y) ({ \
+					uint8_t* p = (uint8_t*)over_game_bar->pixels + (r.y+(Y)) * over_game_bar->pitch + (r.x+(X)) * bpp; \
+					uint8_t mr, mg, mb; SDL_GetRGB(bpp==2 ? *(uint16_t*)p : *(uint32_t*)p, f, &mr, &mg, &mb); \
+					MAX(mr, MAX(mg, mb)); })
+				int full = MAX(1, MASK_AT(r.w/2, r.h/2)); // the theme's "white" isn't always 255: its middle is fully covered
+				for (int y=0; y<r.h; y++) for (int x=0; x<r.w; x++) {
+					int a = MIN(255, MASK_AT(x, y) * 255 / full); // the pill on black: how much of it covers this pixel
+					if (!a) continue;
+					uint8_t* c = bar + (y*r.w+x)*3;
+					int cr = MIN(255, c[0] * 255 / a), cg = MIN(255, c[1] * 255 / a), cb = MIN(255, c[2] * 255 / a);
+					out[(r.y+y) * pitch + r.x+x] = (uint32_t)a<<24 | cr<<16 | cg<<8 | cb;
+				}
+				#undef MASK_AT
+				free(bar);
+			}
+			SDL_UnlockSurface(over_game);
+			PLAT_setSettingOverlay(over_game);
+			over_game_setting = show_setting;
+			over_game_value = value;
+		}
+		if (over_game_hidden_at) PLAT_setSettingAlpha(255);
+		over_game_hidden_at = 0;
+	}
+	else if (over_game_setting) {
+		uint32_t now = SDL_GetTicks();
+		if (!over_game_hidden_at) over_game_hidden_at = now;
+		int left = SETTING_FADE_MS - (int)(now - over_game_hidden_at);
+		if (left>0) PLAT_setSettingAlpha(255 * left / SETTING_FADE_MS);
+		else GFX_clearSettingOverGame();
+	}
+}
+// for a screen with no hardware group of its own (a confirmation, a picker): the volume or brightness bar while it's
+// being changed, fading out after
+void GFX_blitSettingOnly(SDL_Surface* dst, int show_setting) {
+	if (show_setting || GFX_settingFading()) GFX_blitHardwareGroup(dst, show_setting);
+}
 int GFX_blitHardwareGroup(SDL_Surface* dst, int show_setting) {
 	if (show_setting) setting_fade_until = 0;
 	int ow = GFX_blitHardwareGroupNow(dst, show_setting);
@@ -1816,8 +1895,10 @@ static void SFX_make(int sound, int rate) {
 	sfx.lengths[sound] = length;
 	free(out);
 }
+static int sfx_channels = 2; // of the device the sounds mix into
 static void SFX_mix(int16_t* stream, int frames) {
 	if (!sfx.rate) return;
+	int channels = sfx_channels;
 	for (int v=0; v<SFX_VOICES; v++) {
 		int sound = sfx.voices[v].sound;
 		if (sound<0) continue;
@@ -1826,10 +1907,10 @@ static void SFX_mix(int16_t* stream, int frames) {
 		int count = MIN(frames, sfx.lengths[sound] - position);
 		for (int i=0; i<count; i++) {
 			int s = samples[position + i];
-			int l = stream[i*2] + s;
-			int r = stream[i*2+1] + s;
-			stream[i*2] = l>32767 ? 32767 : (l<-32768 ? -32768 : l);
-			stream[i*2+1] = r>32767 ? 32767 : (r<-32768 ? -32768 : r);
+			for (int c=0; c<channels; c++) {
+				int v = stream[i*channels+c] + s;
+				stream[i*channels+c] = v>32767 ? 32767 : (v<-32768 ? -32768 : v);
+			}
 		}
 		sfx.voices[v].position += count;
 		if (sfx.voices[v].position>=sfx.lengths[sound]) sfx.voices[v].sound = -1;
@@ -1847,9 +1928,22 @@ static void SFX_prepare(void) {
 	SFX_prepareLocked();
 	pthread_mutex_unlock(&sfx_lock);
 }
+static int sfx_external_rate = 0; // a device a game opened itself (PICO-8), which the sounds mix into
+void SFX_useDevice(int rate, int channels) {
+	pthread_mutex_lock(&sfx_lock);
+	sfx_external_rate = rate;
+	sfx_channels = channels>0 ? channels : 2;
+	SFX_prepareLocked();
+	pthread_mutex_unlock(&sfx_lock);
+}
+void SFX_mixInto(int16_t* stream, int frames) { // from that device's callback, with its lock held
+	SFX_mix(stream, frames);
+}
+int SFX_deviceChannels(void) { return sfx_channels; }
 static void SFX_prepareLocked(void) {
 	int rate;
 	if (snd.initialized) rate = snd.sample_rate_out;
+	else if (sfx_external_rate) rate = sfx_external_rate;
 	else {
 		if (!sfx.own_device) {
 			SDL_InitSubSystem(SDL_INIT_AUDIO);

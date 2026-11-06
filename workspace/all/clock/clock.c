@@ -237,7 +237,7 @@ int main(int argc , char* argv[]) {
 			}
 		}
 		
-		PWR_update(&dirty, NULL, NULL,NULL);
+		PWR_update(&dirty, &show_setting, NULL,NULL);
 		
 		int is_online = PLAT_isOnline();
 		if (was_online!=is_online) dirty = 1;

@@ -178,6 +178,9 @@ void GFX_flip(SDL_Surface* screen);
 #define GFX_setBorder PLAT_setBorder // (const char* path) NULL clears it
 #define GFX_setNotification PLAT_setNotification // (SDL_Surface* full screen with transparency) NULL hides it
 #define GFX_setNotificationAlpha PLAT_setNotificationAlpha // (int 0-255) fades the notification, kept for the next one
+void GFX_settingOverGame(int show_setting); // after PWR_update in a game: shows, redraws and fades the volume or brightness bar
+void GFX_clearSettingOverGame(void); // at once, eg. when a menu opens over the game
+void GFX_blitSettingOnly(SDL_Surface* dst, int show_setting); // the bar alone, on a screen without the hardware group
 #define GFX_captureScreen PLAT_captureScreen // () the game as it looks on screen, or NULL
 #define GFX_presentLastFrame PLAT_presentLastFrame // ()
 void GFX_sync(void); // call this to maintain 60fps when not calling GFX_flip() this frame
@@ -267,6 +270,9 @@ int SFX_menuSoundsEnabled(void);
 void SFX_setMenuSounds(int enabled); // also saves the choice
 void SFX_quit(void); // lets a sound that's playing finish (briefly), then closes its device
 typedef void (*SFX_Music)(int16_t* stream, int frames); // adds stereo frames into stream, on the audio thread
+void SFX_useDevice(int rate, int channels); // a game opened the sound itself (16-bit): the sounds mix in through SFX_mixInto
+void SFX_mixInto(int16_t* stream, int frames); // from that device's callback
+int SFX_deviceChannels(void);
 int SFX_open(void); // opens the menu sounds' device (or uses a game's), returns its sample rate or 0
 void SFX_setMusic(SFX_Music music); // NULL stops calling it
 
@@ -413,6 +419,8 @@ int PLAT_supportsBorder(void);
 void PLAT_setBorder(const char* path); // image drawn behind the game, filling the screen
 void PLAT_setNotification(SDL_Surface* overlay); // drawn over the game until cleared, copied so the caller keeps ownership
 void PLAT_setNotificationAlpha(int alpha);
+void PLAT_setSettingOverlay(SDL_Surface* overlay); // the volume or brightness bar over a game, copied; NULL hides it
+void PLAT_setSettingAlpha(int alpha);
 SDL_Surface* PLAT_captureScreen(void); // the last game frame as shown (border, effect), device sized RGB565, NULL when it can't; caller frees
 void PLAT_presentLastFrame(void); // shows the last game frame again, with the notification over it
 enum { POWER_AWAKE, POWER_ASLEEP, POWER_ASLEEP_LONG };

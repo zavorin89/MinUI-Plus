@@ -103,6 +103,14 @@ Everything that changed from v1.1. On v1.1 the built-in updater offers it; on v1
 - Syncing is faster, especially again later: games it has already identified aren't read again
 - When a sync is done, SEE LIST shows the games without achievements and why
 
+**Volume and brightness**
+
+- Changing the volume or brightness during a game now shows the bar over it on every system, PICO-8, fake-08 and the
+  DS included, and each step clicks as it does in the menus
+- The bar also shows in the screens that didn't have it: deleting a game, choosing a core, the game menu, Set time
+  and messages in the in-game menu
+- PICO-8's in-game menu clicks when you move, choose and go back, like every other system's
+
 **Menus**
 
 - A title too long for the top of a menu (Options, the on-screen keyboard) scrolls instead of being cut off

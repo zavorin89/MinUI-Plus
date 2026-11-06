@@ -158,24 +158,52 @@ static void Play_tick(void) {
 }
 
 ///////////////////////////////
-// sound: PICO-8 keeps its own, through SDL. Paused for the menu and sleep, and kept at the launcher's volume
+// sound: PICO-8 keeps its own, through SDL, kept at the launcher's volume. Its callback is wrapped so the menu sounds
+// and the volume clicks mix in; the device keeps running in the menu (silent but for them) and stops for sleep
 
 static int audio_open;
 static int audio_running; // what PICO-8 last asked for
-static void pauseSound(int paused) {
-	if (audio_open) SDL_PauseAudio(paused ? 1 : !audio_running);
+static int audio_asleep;
+static SDL_AudioCallback game_callback;
+static void* game_userdata;
+static void soundCallback(void* userdata, Uint8* stream, int len) {
+	if (in_menu || !audio_running || !game_callback) memset(stream, 0, len);
+	else game_callback(game_userdata, stream, len);
+	SFX_mixInto((int16_t*)stream, len / (int)sizeof(int16_t) / MAX(1, SFX_deviceChannels()));
+#ifdef P8LAYER_TEST
+	if (in_menu) { // a menu sound made it into PICO-8's output
+		int16_t* samples = (int16_t*)stream;
+		for (int i=0; i<len/2; i++) if (samples[i]) { fprintf(stderr, "p8layer: menu sound in the output\n"); break; }
+	}
+#endif
+}
+static void pauseSound(int paused) { // for sleep
+	audio_asleep = paused;
+	if (audio_open) SDL_PauseAudio(paused);
 }
 static int h_SDL_OpenAudio(SDL_AudioSpec* desired, SDL_AudioSpec* obtained) {
+	game_callback = desired->callback;
+	game_userdata = desired->userdata;
+	if (game_callback) {
+		desired->callback = soundCallback;
+		desired->userdata = NULL;
+	}
 	int result = SDL_OpenAudio(desired, obtained);
+	if (game_callback) {
+		desired->callback = game_callback;
+		desired->userdata = game_userdata;
+	}
 	if (result==0) {
 		audio_open = 1;
+		SDL_AudioSpec* spec = obtained ? obtained : desired; // (without obtained, SDL converts to what was asked for)
+		if (game_callback && spec->format==AUDIO_S16SYS) SFX_useDevice(spec->freq, spec->channels);
 		applyVolume();
 	}
 	return result;
 }
 static void h_SDL_PauseAudio(int paused) {
 	audio_running = !paused;
-	SDL_PauseAudio(in_menu ? 1 : paused);
+	if (audio_open && !audio_asleep) SDL_PauseAudio(0); // (silent while PICO-8 has it paused, see soundCallback)
 }
 
 static Uint8 key_state[SDL_NUM_SCANCODES]; // what PICO-8 reads as the keyboard (see the buttons, below)
@@ -539,7 +567,7 @@ static void beforeSleep(void) {
 }
 static void afterSleep(void) {
 	applyVolume();
-	if (!in_menu) pauseSound(0);
+	pauseSound(0);
 	play.last_tick = SDL_GetTicks();
 }
 
@@ -790,8 +818,9 @@ enum { ITEM_CONTINUE, ITEM_OPTIONS, ITEM_QUIT, ITEM_COUNT }; // (no Save or Load
 static char* menu_items[ITEM_COUNT] = {"Continue", "Options", "Quit"};
 
 static void runMenu(void) {
-	in_menu = 1;
-	pauseSound(1);
+	GFX_clearSettingOverGame(); // the menu draws its own
+	in_menu = 1; // (the game goes quiet, see soundCallback)
+	SFX_forInput(1); // the menu clicks when moving, choosing and going back, as every other system's does
 	Play_save();
 
 	SDL_Surface* backing = SDL_CreateRGBSurface(SDL_SWSURFACE, FIXED_WIDTH, FIXED_HEIGHT, FIXED_DEPTH, RGBA_MASK_565);
@@ -948,9 +977,9 @@ static void runMenu(void) {
 	GFX_setVsync(VSYNC_OFF);
 	SDL_GL_SetSwapInterval(1); // PICO-8 keeps its own time, and runs at 30 or 60: whole frames, without tearing
 	PWR_disableAutosleep();
+	SFX_forInput(0); // (not in the game: PICO-8's own buttons don't click)
 	in_menu = 0;
 	play.last_tick = SDL_GetTicks();
-	pauseSound(0);
 }
 
 ///////////////////////////////
@@ -1204,7 +1233,9 @@ static int h_SDL_PollEvent(SDL_Event* event) {
 #endif
 	SDL_PumpEvents(); // SDL's own copies of them, and the rest, only pile up: PICO-8 gets what's queued here instead
 	SDL_FlushEvents(SDL_FIRSTEVENT, SDL_LASTEVENT);
-	PWR_update(NULL, NULL, beforeSleep, afterSleep);
+	static int show_setting = 0; // the volume or brightness bar over the game, which also clicks each step
+	PWR_update(NULL, &show_setting, beforeSleep, afterSleep);
+	GFX_settingOverGame(show_setting);
 	Play_tick();
 
 	static int shown;

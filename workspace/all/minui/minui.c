@@ -3831,7 +3831,8 @@ static int askDelete(SDL_Surface* screen, char* title, char* detail, char* yes, 
 		PAD_poll();
 		if (PAD_justPressed(BTN_A)) result = 1;
 		else if (PAD_justPressed(BTN_B)) result = 0;
-		PWR_update(&dirty, NULL, NULL, NULL);
+		static int show_setting = 0;
+		PWR_update(&dirty, &show_setting, NULL, NULL);
 		if (dirty) {
 			GFX_clear(screen);
 			char shown[256];
@@ -3845,6 +3846,7 @@ static int askDelete(SDL_Surface* screen, char* title, char* detail, char* yes, 
 			SDL_FreeSurface(big);
 			if (small) SDL_FreeSurface(small);
 			GFX_blitButtonGroup((char*[]){ "B",no, "A",yes, NULL }, 1, screen, 1);
+			GFX_blitSettingOnly(screen, show_setting); // (the volume or brightness bar, while it's changed)
 			GFX_flip(screen);
 			dirty = 0;
 		}
@@ -4457,7 +4459,8 @@ static void pickCore(SDL_Surface* screen) {
 		else if (PAD_justPressed(BTN_A)) result = 1;
 		else if (PAD_justRepeated(BTN_UP)) { selected = (selected + count - 1) % count; SFX_play(SFX_TICK); dirty = 1; }
 		else if (PAD_justRepeated(BTN_DOWN)) { selected = (selected + 1) % count; SFX_play(SFX_TICK); dirty = 1; }
-		PWR_update(&dirty, NULL, NULL, NULL);
+		static int show_setting = 0;
+		PWR_update(&dirty, &show_setting, NULL, NULL);
 		if (dirty) {
 			GFX_clear(screen);
 			char title[256];
@@ -4491,6 +4494,7 @@ static void pickCore(SDL_Surface* screen) {
 				GFX_blitText(font.small, (char*)cores[selected].about, SCALE1(16), COLOR_LIGHT_TEXT, screen, &(SDL_Rect){ 0, y + SCALE1(PADDING), screen->w, h });
 			}
 			GFX_blitButtonGroup((char*[]){ "B","CANCEL", "A","USE", NULL }, 1, screen, 1);
+			GFX_blitSettingOnly(screen, show_setting); // (the volume or brightness bar, while it's changed)
 			GFX_flip(screen);
 			dirty = 0;
 		}
@@ -4747,7 +4751,8 @@ static void gameMenu(SDL_Surface* screen) {
 		else if (PAD_justPressed(BTN_A)) result = 1;
 		else if (PAD_justRepeated(BTN_UP)) { selected = (selected + count - 1) % count; SFX_play(SFX_TICK); dirty = 1; }
 		else if (PAD_justRepeated(BTN_DOWN)) { selected = (selected + 1) % count; SFX_play(SFX_TICK); dirty = 1; }
-		PWR_update(&dirty, NULL, NULL, NULL);
+		static int show_setting = 0;
+		PWR_update(&dirty, &show_setting, NULL, NULL);
 		if (dirty) {
 			GFX_clear(screen);
 			char shown[256];
@@ -4801,6 +4806,7 @@ static void gameMenu(SDL_Surface* screen) {
 				SDL_FreeSurface(hint_txt);
 			}
 			GFX_blitButtonGroup((char*[]){ "B","BACK", "A",rows[selected]==ROW_CPU || rows[selected]==ROW_RUMBLE || rows[selected]==ROW_STICK || rows[selected]>=ROW_P8 ? "CHANGE" : "SELECT", NULL }, 1, screen, 1);
+			GFX_blitSettingOnly(screen, show_setting); // (the volume or brightness bar, while it's changed)
 			GFX_flip(screen);
 			dirty = 0;
 		}
