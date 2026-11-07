@@ -270,7 +270,8 @@ static void loadCallback(int result, const char* error_message, rc_client_t* c, 
 			if (!hash_retry) hash_retry = 1; // (it can collide with the core reading the same disc as it starts)
 			return;
 		}
-		notify("RetroAchievements", error_message ? error_message : "Couldn't load achievements");
+		if (result==RC_NO_RESPONSE) notify("RetroAchievements", "Offline: go online once for this game"); // nothing cached yet
+		else notify("RetroAchievements", error_message ? error_message : "Couldn't load achievements");
 		return;
 	}
 	const rc_client_game_t* game = rc_client_get_game_info(c);

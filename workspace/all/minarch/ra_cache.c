@@ -131,9 +131,32 @@ void RACache_write(const char* key, const char* body, size_t length) {
 	rename(tmp_path, path);
 }
 
+// true when body is one whole JSON object or array: strings closed and brackets balanced, so a cut-off reply is never kept or replayed
+static int wholeJSON(const char* body, size_t length) {
+	if (!body) return 0;
+	int depth = 0, in_string = 0, started = 0;
+	for (size_t i=0; i<length; i++) {
+		char c = body[i];
+		if (in_string) {
+			if (c=='\\') i += 1;
+			else if (c=='"') in_string = 0;
+		}
+		else if (c=='"') in_string = 1;
+		else if (c=='{' || c=='[') {
+			depth += 1;
+			started = 1;
+		}
+		else if (c=='}' || c==']') {
+			if (--depth<0) return 0;
+		}
+	}
+	return started && depth==0 && !in_string;
+}
+
 void RACache_store(const char* post_data, int status, const char* body, size_t length) {
 	char key[128];
 	if (!RACache_key(post_data, key, sizeof(key))) return;
+	if (!wholeJSON(body, length)) return; // keep whatever was cached before
 	if (status==200) RACache_write(key, body, length);
 	else if (status==404) {
 		strncat(key, "_unknown", sizeof(key)-strlen(key)-1);
@@ -272,7 +295,12 @@ char* RACache_offlineResponse(const char* post_data, size_t* length, int* status
 		sprintf(out, "]}");
 	}
 	else if (RACache_key(post_data, key, sizeof(key))) {
-		body = RACache_read(key, NULL); // sign in and game data only work offline once cached
+		size_t got = 0;
+		body = RACache_read(key, &got); // sign in and game data only work offline once cached
+		if (body && !wholeJSON(body, got)) { // a broken file from an older build: treat it as not cached
+			free(body);
+			body = NULL;
+		}
 		if (!body && RACache_isKnownUnknown(key)) { // not in RetroAchievements, answer the same way the server did
 			strncat(key, "_unknown", sizeof(key)-strlen(key)-1);
 			body = RACache_read(key, NULL);

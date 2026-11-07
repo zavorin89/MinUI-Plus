@@ -1196,6 +1196,7 @@ static int over_game_setting = 0, over_game_value = -1;
 static uint32_t over_game_hidden_at = 0;
 void GFX_clearSettingOverGame(void) {
 	if (over_game_setting) PLAT_setSettingOverlay(NULL);
+	PLAT_setSettingAlpha(255);
 	over_game_setting = 0;
 	over_game_value = -1;
 	over_game_hidden_at = 0;
@@ -1248,7 +1249,7 @@ void GFX_settingOverGame(int show_setting) {
 			over_game_setting = show_setting;
 			over_game_value = value;
 		}
-		if (over_game_hidden_at) PLAT_setSettingAlpha(255);
+		PLAT_setSettingAlpha(255); // (every time: a fade that ran out leaves it nearly see-through for the next one)
 		over_game_hidden_at = 0;
 	}
 	else if (over_game_setting) {

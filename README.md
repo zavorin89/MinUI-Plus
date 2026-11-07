@@ -68,6 +68,9 @@ were taken by the A30 itself, border and LCD grid included.
 
 ## What's new in v1.2
 
+**v1.2.1 hotfix:** the volume and brightness bar no longer shows up faint after fading out, and RetroAchievements no
+longer says "Invalid JSON" offline after a dropped connection saved half of a game's achievement list.
+
 Everything that changed from v1.1. On v1.1 the built-in updater offers it; on v1.07 or older,
 [install it by hand](#updating) once.
 

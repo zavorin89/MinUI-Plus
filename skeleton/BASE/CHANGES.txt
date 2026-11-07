@@ -1,4 +1,4 @@
-# MinUI+ v1.2 — changes since launch
+# MinUI+ v1.2.1 — changes since launch
 
 For the Miyoo A30. This ZIP is a complete release, suitable for manual download from a mirror.
 
@@ -9,7 +9,15 @@ or borders from your backup. The updater's Shut Down prompt requires you to turn
 
 From v1.1 the built-in updater checks GitLab. Devices on v1.07 or older still look for updates on GitHub, so they need this one manual install to start receiving them.
 
-This is a consolidated comparison with v1.0.0, rather than a list of every intermediate hotfix. This v1.2 package includes all changes below. The newest changes come first, then v1.0.1–v1.0.5, then v1.06.
+This is a consolidated comparison with v1.0.0, rather than a list of every intermediate hotfix. This v1.2.1 package includes all changes below. The newest changes come first, then v1.0.1–v1.0.5, then v1.06.
+
+## New in v1.2.1
+
+A hotfix for v1.2.
+
+- The volume and brightness bar no longer comes up faint after it has faded out once.
+- RetroAchievements: a game no longer says "Invalid JSON" offline. A dropped connection could save half of a game's achievement list, which then failed to load whenever the A30 was offline. Cut-off replies are now thrown away, and a broken saved list is ignored and refreshed the next time you're online.
+- Offline, a game whose achievements were never downloaded now says so, instead of "No response".
 
 ## New in v1.2
 

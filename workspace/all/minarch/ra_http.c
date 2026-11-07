@@ -106,16 +106,27 @@ static int openSocket(const char* host, int port) {
 }
 
 // decodes a chunked body in place, returns the new length
-static size_t dechunk(char* body, size_t len) {
+// complete is set only when the closing zero-size chunk arrived, so a dropped connection isn't mistaken for the whole reply
+static size_t dechunk(char* body, size_t len, int* complete) {
 	char* in = body;
 	char* out = body;
 	char* end = body + len;
+	*complete = 0;
 	while (in<end) {
 		size_t size = strtoul(in, NULL, 16);
 		char* data = strstr(in, "\r\n");
-		if (!data || size==0) break;
+		if (!data) break;
+		if (size==0) {
+			*complete = 1;
+			break;
+		}
 		data += 2;
-		if (data+size>end) size = end - data;
+		if (data+size>end) {
+			size = end - data;
+			memmove(out, data, size);
+			out += size;
+			break; // cut off mid-chunk
+		}
 		memmove(out, data, size);
 		out += size;
 		in = data + size + 2;
@@ -191,9 +202,17 @@ int HTTP_request(const char* url, const char* post_data, const char* content_typ
 	if (!body || sscanf(raw, "HTTP/%*s %d", &response->status)!=1) goto done;
 	*body = '\0';
 	int chunked = strcasestr(raw, "transfer-encoding: chunked")!=NULL;
+	char* length_header = strcasestr(raw, "\r\ncontent-length:");
 	body += 4;
 	size_t body_len = len - (body - raw);
-	if (chunked) body_len = dechunk(body, body_len);
+	int complete = 1;
+	if (chunked) body_len = dechunk(body, body_len, &complete);
+	else if (length_header) complete = body_len >= strtoul(length_header+17, NULL, 10);
+	if (!complete) {
+		// the connection dropped partway (a Wi-Fi blip): half a reply would fail to parse and, cached, break offline play
+		fprintf(stderr, "RetroAchievements: the reply from %s was cut off\n", host);
+		goto done;
+	}
 
 	response->body = malloc(body_len+1);
 	memcpy(response->body, body, body_len);
