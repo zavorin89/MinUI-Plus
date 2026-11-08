@@ -1120,13 +1120,13 @@ void BoxArt_open(SDL_Surface* main_screen, char* game) {
 			for (int i=0; i<ROW_COUNT; i++) {
 				char name[64], value[64];
 				if (i==ROW_MISSING) {
-					strcpy(name, "Find box art");
+					strcpy(name, "Find Box Art");
 					if (missing) sprintf(value, "%i missing", missing);
 					else if (known) sprintf(value, "%i with no match", known);
 					else strcpy(value, "None missing");
 				}
 				else {
-					sprintf(name, "Resize to %ipx wide", ART_WIDTH);
+					sprintf(name, "Resize to %ipx Wide", ART_WIDTH);
 					if (resizable) sprintf(value, "%i to resize", resizable);
 					else strcpy(value, "All sized");
 				}

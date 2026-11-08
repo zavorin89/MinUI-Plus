@@ -606,7 +606,7 @@ void PLAT_setBorder(const char* path) {
 
 	SDL_Surface* image = loadBorderImage(path);
 	if (!image) {
-		LOG_warn("couldn't load border: %s\n", path);
+		LOG_warn("couldn't load bezel: %s\n", path);
 		return;
 	}
 	char native_path[MAX_PATH];

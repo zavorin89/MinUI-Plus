@@ -417,7 +417,7 @@ static Array* getDiscs(char* path);
 static Array* getEntries(char* path);
 
 static Directory* Directory_new(char* path, int selected) {
-	char display_name[256];
+	char display_name[MAX_PATH];
 	getDisplayName(path, display_name);
 	
 	Directory* self = malloc(sizeof(Directory));
@@ -565,7 +565,7 @@ static int quit = 0;
 static int can_resume = 0;
 static int should_resume = 0; // set to 1 on BTN_RESUME but only if can_resume==1
 static int simple_mode = 0;
-static char slot_path[256];
+static char slot_path[MAX_PATH];
 static int resume_slot = -1; // overrides the slot in slot_path when resuming, -1 to use it
 
 static int restore_depth = -1;
@@ -1142,7 +1142,7 @@ static Array* getSwitcher(void) {
 		char sd_path[MAX_PATH];
 		sprintf(sd_path, "%s%s", SDCARD_PATH, paths[i]);
 		if (!exists(sd_path)) continue;
-		char emu_name[256];
+		char emu_name[MAX_PATH];
 		getEmuName(sd_path, emu_name);
 		if (!hasEmu(emu_name)) continue;
 		Entry* entry = Entry_new(sd_path, ENTRY_ROM);
@@ -1189,7 +1189,7 @@ static Array* getRoot(void) {
 	if (dh!=NULL) {
 		struct dirent *dp;
 		char* tmp;
-		char full_path[256];
+		char full_path[MAX_PATH];
 		sprintf(full_path, "%s/", ROMS_PATH);
 		tmp = full_path + strlen(full_path);
 		Array* emus = Array_new();
@@ -1219,14 +1219,14 @@ static Array* getRoot(void) {
 	
 	// copied/modded from Directory_index
 	// we don't support hidden remaps here
-	char map_path[256];
+	char map_path[MAX_PATH];
 	sprintf(map_path, "%s/map.txt", ROMS_PATH);
 	if (entries->count>0 && exists(map_path)) {
 		FILE* file = fopen(map_path, "r");
 		if (file) {
 			Hash* map = Hash_new();
-			char line[256];
-			while (fgets(line,256,file)!=NULL) {
+			char line[MAX_PATH];
+			while (fgets(line,sizeof(line),file)!=NULL) {
 				normalizeNewline(line);
 				trimTrailingNewlines(line);
 				if (strlen(line)==0) continue; // skip empty lines
@@ -1264,7 +1264,7 @@ static Array* getRoot(void) {
 			if (dh!=NULL) {
 				struct dirent *dp;
 				char* tmp;
-				char full_path[256];
+				char full_path[MAX_PATH];
 				sprintf(full_path, "%s/", COLLECTIONS_PATH);
 				tmp = full_path + strlen(full_path);
 				Array* collections = Array_new();
@@ -1299,7 +1299,7 @@ static Array* getRecents(void) {
 		Recent* recent = recents->items[i];
 		if (!recent->available) continue;
 		
-		char sd_path[256];
+		char sd_path[MAX_PATH];
 		sprintf(sd_path, "%s%s", SDCARD_PATH, recent->path);
 		int type = suffixMatch(".pak", sd_path) ? ENTRY_PAK : ENTRY_ROM; // ???
 		Entry* entry = Entry_new(sd_path, type);
@@ -1315,19 +1315,19 @@ static Array* getCollection(char* path) {
 	Array* entries = Array_new();
 	FILE* file = fopen(path, "r");
 	if (file) {
-		char line[256];
-		while (fgets(line,256,file)!=NULL) {
+		char line[MAX_PATH];
+		while (fgets(line,sizeof(line),file)!=NULL) {
 			normalizeNewline(line);
 			trimTrailingNewlines(line);
 			if (strlen(line)==0) continue; // skip empty lines
 			
-			char sd_path[256];
+			char sd_path[MAX_PATH];
 			sprintf(sd_path, "%s%s", SDCARD_PATH, line);
 			if (exists(sd_path)) {
 				int type = suffixMatch(".pak", sd_path) ? ENTRY_PAK : ENTRY_ROM; // ???
 				Array_push(entries, Entry_new(sd_path, type));
 				
-				// char emu_name[256];
+				// char emu_name[MAX_PATH];
 				// getEmuName(sd_path, emu_name);
 				// if (hasEmu(emu_name)) {
 					// Array_push(entries, Entry_new(sd_path, ENTRY_ROM));
@@ -1344,7 +1344,7 @@ static Array* getDiscs(char* path){
 	
 	Array* entries = Array_new();
 	
-	char base_path[256];
+	char base_path[MAX_PATH];
 	strcpy(base_path, path);
 	char* tmp = strrchr(base_path, '/') + 1;
 	tmp[0] = '\0';
@@ -1352,14 +1352,14 @@ static Array* getDiscs(char* path){
 	// TODO: limit number of discs supported (to 9?)
 	FILE* file = fopen(path, "r");
 	if (file) {
-		char line[256];
+		char line[MAX_PATH];
 		int disc = 0;
-		while (fgets(line,256,file)!=NULL) {
+		while (fgets(line,sizeof(line),file)!=NULL) {
 			normalizeNewline(line);
 			trimTrailingNewlines(line);
 			if (strlen(line)==0) continue; // skip empty lines
 			
-			char disc_path[256];
+			char disc_path[MAX_PATH];
 			sprintf(disc_path, "%s%s", base_path, line);
 						
 			if (exists(disc_path)) {
@@ -1379,15 +1379,15 @@ static Array* getDiscs(char* path){
 static int getFirstDisc(char* m3u_path, char* disc_path) { // based on getDiscs() natch
 	int found = 0;
 
-	char base_path[256];
+	char base_path[MAX_PATH];
 	strcpy(base_path, m3u_path);
 	char* tmp = strrchr(base_path, '/') + 1;
 	tmp[0] = '\0';
 	
 	FILE* file = fopen(m3u_path, "r");
 	if (file) {
-		char line[256];
-		while (fgets(line,256,file)!=NULL) {
+		char line[MAX_PATH];
+		while (fgets(line,sizeof(line),file)!=NULL) {
 			normalizeNewline(line);
 			trimTrailingNewlines(line);
 			if (strlen(line)==0) continue; // skip empty lines
@@ -1407,7 +1407,7 @@ static void addEntries(Array* entries, char* path) {
 	if (dh!=NULL) {
 		struct dirent *dp;
 		char* tmp;
-		char full_path[256];
+		char full_path[MAX_PATH];
 		sprintf(full_path, "%s/", path);
 		tmp = full_path + strlen(full_path);
 		while((dp = readdir(dh)) != NULL) {
@@ -1440,7 +1440,7 @@ static void addEntries(Array* entries, char* path) {
 
 static int isConsoleDir(char* path) {
 	char* tmp;
-	char parent_dir[256];
+	char parent_dir[MAX_PATH];
 	strcpy(parent_dir, path);
 	tmp = strrchr(parent_dir, '/');
 	tmp[0] = '\0';
@@ -1452,7 +1452,7 @@ static Array* getEntries(char* path){
 	Array* entries = Array_new();
 
 	if (isConsoleDir(path)) { // top-level console folder, might collate
-		char collated_path[256];
+		char collated_path[MAX_PATH];
 		strcpy(collated_path, path);
 		char* tmp = strrchr(collated_path, '(');
 		// 1 because we want to keep the opening parenthesis to avoid collating "Game Boy Color" and "Game Boy Advance" into "Game Boy"
@@ -1462,7 +1462,7 @@ static Array* getEntries(char* path){
 		DIR *dh = opendir(ROMS_PATH);
 		if (dh!=NULL) {
 			struct dirent *dp;
-			char full_path[256];
+			char full_path[MAX_PATH];
 			sprintf(full_path, "%s/", ROMS_PATH);
 			tmp = full_path + strlen(full_path);
 			// while loop so we can collate paths, see above
@@ -1543,12 +1543,12 @@ static char* escapeSingleQuotes(char* str) {
 static int getSlotPath(char* rom_path, int type, char* slot_path) {
 	char* tmp;
 	slot_path[0] = '\0';
-	char path[256];
+	char path[MAX_PATH];
 	strcpy(path, rom_path);
 	
 	if (!prefixMatch(ROMS_PATH, path)) return 0;
 	
-	char auto_path[256];
+	char auto_path[MAX_PATH];
 	if (type==ENTRY_DIR) {
 		if (!hasCue(path, auto_path)) { // no cue?
 			tmp = strrchr(auto_path, '.') + 1; // extension
@@ -1559,21 +1559,21 @@ static int getSlotPath(char* rom_path, int type, char* slot_path) {
 	}
 	
 	if (!suffixMatch(".m3u", path)) {
-		char m3u_path[256];
+		char m3u_path[MAX_PATH];
 		if (hasM3u(path, m3u_path)) {
 			// change path to m3u path
 			strcpy(path, m3u_path);
 		}
 	}
 	
-	char emu_name[256];
+	char emu_name[MAX_PATH];
 	getEmuName(path, emu_name);
 	
-	char rom_file[256];
+	char rom_file[MAX_PATH];
 	tmp = strrchr(path, '/') + 1;
 	strcpy(rom_file, tmp);
 	
-	sprintf(slot_path, "%s/.minui/%s/%s.txt", SHARED_USERDATA_PATH, emu_name, rom_file); // /.userdata/.minui/<EMU>/<romname>.ext.txt
+	snprintf(slot_path, MAX_PATH, "%s/.minui/%s/%s.txt", SHARED_USERDATA_PATH, emu_name, rom_file); // /.userdata/.minui/<EMU>/<romname>.ext.txt
 	
 	return exists(slot_path);
 }
@@ -1584,7 +1584,7 @@ static int getGameCore(char* sd_path, char* tag);
 static int resume_pick = -1; // that save's slot
 static void readyResume(Entry* entry) {
 	int has_manual = getSlotPath(entry->path, entry->type, slot_path);
-	char preview[256];
+	char preview[MAX_PATH];
 	int slot;
 	if (lookUpSwitcherSave(entry, preview, &slot)) {
 		can_resume = 1;
@@ -1610,21 +1610,21 @@ static int autoResume(void) {
 
 	if (!exists(AUTO_RESUME_PATH)) return 0;
 	
-	char path[256];
-	getFile(AUTO_RESUME_PATH, path, 256);
+	char path[MAX_PATH];
+	getFile(AUTO_RESUME_PATH, path, sizeof(path));
 	unlink(AUTO_RESUME_PATH);
 	sync();
 	
 	// make sure rom still exists
-	char sd_path[256];
-	sprintf(sd_path, "%s%s", SDCARD_PATH, path);
+	char sd_path[MAX_PATH];
+	snprintf(sd_path, sizeof(sd_path), "%s%s", SDCARD_PATH, path);
 	if (!exists(sd_path)) return 0;
 	
 	// make sure emu still exists
-	char emu_name[256];
+	char emu_name[MAX_PATH];
 	getEmuName(sd_path, emu_name);
 	
-	char emu_path[256];
+	char emu_path[MAX_PATH];
 	char core_tag[64];
 	getEmuPath(getGameCore(sd_path, core_tag) ? core_tag : emu_name, emu_path);
 	
@@ -1632,8 +1632,8 @@ static int autoResume(void) {
 	
 	// putFile(LAST_PATH, FAUX_RECENT_PATH); // saveLast() will crash here because top is NULL
 	
-	char cmd[256];
-	sprintf(cmd, "'%s' '%s'", escapeSingleQuotes(emu_path), escapeSingleQuotes(sd_path));
+	char cmd[MAX_PATH*4];
+	snprintf(cmd, sizeof(cmd), "'%s' '%s'", escapeSingleQuotes(emu_path), escapeSingleQuotes(sd_path));
 	putInt(RESUME_SLOT_PATH, AUTO_RESUME_SLOT);
 	queueNext(cmd);
 	return 1;
@@ -1760,8 +1760,8 @@ static void openPak(char* path) {
 	}
 	saveLast(path);
 	
-	char cmd[256];
-	sprintf(cmd, "'%s/launch.sh'", escapeSingleQuotes(path));
+	char cmd[MAX_PATH*4];
+	snprintf(cmd, sizeof(cmd), "'%s/launch.sh'", escapeSingleQuotes(path));
 	queueNext(cmd);
 }
 // per-game cores: a pak with an alternate.txt naming a system's tag (eg. SFC10.pak/alternate.txt: "SFC") can run
@@ -1941,20 +1941,20 @@ static int getCores(char* system_tag, Core* cores) {
 static void openRom(char* path, char* last) {
 	LOG_info("openRom(%s,%s)\n", path, last);
 	
-	char sd_path[256];
+	char sd_path[MAX_PATH];
 	strcpy(sd_path, path);
 	
-	char m3u_path[256];
+	char m3u_path[MAX_PATH];
 	int has_m3u = hasM3u(sd_path, m3u_path);
 	
-	char recent_path[256];
+	char recent_path[MAX_PATH];
 	strcpy(recent_path, has_m3u ? m3u_path : sd_path);
 	
 	if (has_m3u && suffixMatch(".m3u", sd_path)) {
 		getFirstDisc(m3u_path, sd_path);
 	}
 
-	char emu_name[256];
+	char emu_name[MAX_PATH];
 	getEmuName(sd_path, emu_name);
 
 	if (should_resume) {
@@ -1966,17 +1966,17 @@ static void openRom(char* path, char* last) {
 		should_resume = 0;
 
 		if (has_m3u) {
-			char rom_file[256];
+			char rom_file[MAX_PATH];
 			strcpy(rom_file, strrchr(m3u_path, '/') + 1);
 			
 			// get disc for state
-			char disc_path_path[256];
-			sprintf(disc_path_path, "%s/.minui/%s/%s.%s.txt", SHARED_USERDATA_PATH, emu_name, rom_file, slot); // /.userdata/arm-480/.minui/<EMU>/<romname>.ext.0.txt
+			char disc_path_path[MAX_PATH];
+			snprintf(disc_path_path, sizeof(disc_path_path), "%s/.minui/%s/%s.%s.txt", SHARED_USERDATA_PATH, emu_name, rom_file, slot); // /.userdata/arm-480/.minui/<EMU>/<romname>.ext.0.txt
 
 			if (exists(disc_path_path)) {
 				// switch to disc path
-				char disc_path[256];
-				getFile(disc_path_path, disc_path, 256);
+				char disc_path[MAX_PATH];
+				getFile(disc_path_path, disc_path, sizeof(disc_path));
 				if (disc_path[0]=='/') strcpy(sd_path, disc_path); // absolute
 				else { // relative
 					strcpy(sd_path, m3u_path);
@@ -1988,7 +1988,7 @@ static void openRom(char* path, char* last) {
 	}
 	else putInt(RESUME_SLOT_PATH,8); // resume hidden default state
 	
-	char emu_path[256];
+	char emu_path[MAX_PATH];
 	char core_tag[64];
 	getEmuPath(getGameCore(sd_path, core_tag) ? core_tag : emu_name, emu_path); // the game's own choice of core, if it has one
 	
@@ -1997,18 +1997,18 @@ static void openRom(char* path, char* last) {
 	addRecent(recent_path, recent_alias); // yiiikes
 	saveLast(last==NULL ? sd_path : last);
 	
-	char cmd[256];
-	sprintf(cmd, "'%s' '%s'", escapeSingleQuotes(emu_path), escapeSingleQuotes(sd_path));
+	char cmd[MAX_PATH*4];
+	snprintf(cmd, sizeof(cmd), "'%s' '%s'", escapeSingleQuotes(emu_path), escapeSingleQuotes(sd_path));
 	queueNext(cmd);
 }
 static void openDirectory(char* path, int auto_launch) {
-	char auto_path[256];
+	char auto_path[MAX_PATH];
 	if (hasCue(path, auto_path) && auto_launch) {
 		openRom(auto_path, path);
 		return;
 	}
 
-	char m3u_path[256];
+	char m3u_path[MAX_PATH];
 	strcpy(m3u_path, auto_path);
 	char* tmp = strrchr(m3u_path, '.') + 1; // extension
 	strcpy(tmp, "m3u"); // replace with m3u
@@ -2093,13 +2093,13 @@ static void Entry_open(Entry* self, SDL_Surface* screen) {
 		char *last = NULL;
 		if (prefixMatch(COLLECTIONS_PATH, top->path) || exactMatch(FAUX_FAVORITES_PATH, top->path) || exactMatch(FAUX_MOSTPLAYED_PATH, top->path)) {
 			char* tmp;
-			char filename[256];
+			char filename[MAX_PATH];
 			
 			tmp = strrchr(self->path, '/');
 			if (tmp) strcpy(filename, tmp+1);
 			
-			char last_path[256];
-			sprintf(last_path, "%s/%s", top->path, filename);
+			char last_path[MAX_PATH];
+			snprintf(last_path, sizeof(last_path), "%s/%s", top->path, filename);
 			last = last_path;
 		}
 		openRom(self->path, last);
@@ -2143,8 +2143,8 @@ static void loadLast(void) { // call after loading root directory
 		return;
 	}
 
-	char last_path[256];
-	getFile(from, last_path, 256);
+	char last_path[MAX_PATH];
+	getFile(from, last_path, sizeof(last_path));
 	LOG_info("last place: %s%s\n", last_path, from==LAST_BACKUP_PATH ? " (from the card copy: /tmp had lost it)" : "");
 	
 	if (prefixMatch(FAUX_MOSTPLAYED_PATH "/", last_path)) { // in Tools (as Play Time), so through there
@@ -2171,11 +2171,11 @@ static void loadLast(void) { // call after loading root directory
 		return;
 	}
 	
-	char full_path[256];
+	char full_path[MAX_PATH];
 	strcpy(full_path, last_path);
 	
 	char* tmp;
-	char filename[256];
+	char filename[MAX_PATH];
 	tmp = strrchr(last_path, '/');
 	if (tmp) strcpy(filename, tmp);
 	
@@ -2190,7 +2190,7 @@ static void loadLast(void) { // call after loading root directory
 	while (last->count>0) {
 		char* path = Array_pop(last);
 		if (!exactMatch(path, ROMS_PATH)) { // romsDir is effectively root as far as restoring state after a game
-			char collated_path[256];
+			char collated_path[MAX_PATH];
 			collated_path[0] = '\0';
 			if (suffixMatch(")", path) && isConsoleDir(path)) {
 				strcpy(collated_path, path);
@@ -2825,7 +2825,7 @@ static int getSlotPath(char* rom_path, int type, char* slot_path);
 // the newer of the switcher's quick save and the game's last manual save: its screenshot and slot
 // returns 0 when there's neither. Remembered per game while the switcher is open, it's asked every frame
 #define SWITCHER_SAVE_CACHE (SWITCHER_MAX+2)
-static struct { char path[MAX_PATH]; char preview[256]; int slot; int found; } switcher_saves[SWITCHER_SAVE_CACHE];
+static struct { char path[MAX_PATH]; char preview[MAX_PATH]; int slot; int found; } switcher_saves[SWITCHER_SAVE_CACHE];
 static int switcher_save_count = 0;
 static char note_path[MAX_PATH];
 static void forgetSwitcherSaves(void) {
@@ -2854,23 +2854,23 @@ static int getSwitcherSave(Entry* entry, char* preview_path, int* slot) {
 	return found;
 }
 static int lookUpSwitcherSave(Entry* entry, char* preview_path, int* slot) {
-	char slot_txt[256];
+	char slot_txt[MAX_PATH];
 	int has_manual = getSlotPath(entry->path, entry->type, slot_txt);
 	if (!slot_txt[0]) return 0;
-	char base[256]; // .../<rom>.ext without the .txt
+	char base[MAX_PATH]; // .../<rom>.ext without the .txt
 	strcpy(base, slot_txt);
 	base[strlen(base) - strlen(".txt")] = '\0';
 
-	char quick_path[256];
-	sprintf(quick_path, "%s.%d.bmp", base, AUTO_RESUME_SLOT);
+	char quick_path[MAX_PATH];
+	snprintf(quick_path, sizeof(quick_path), "%s.%d.bmp", base, AUTO_RESUME_SLOT);
 	struct stat quick_stat;
 	int has_quick = stat(quick_path, &quick_stat)==0;
 
-	char manual_path[256] = "";
+	char manual_path[MAX_PATH] = "";
 	struct stat manual_stat;
 	int manual_slot = has_manual ? getInt(slot_txt) : -1;
 	if (has_manual) {
-		sprintf(manual_path, "%s.%d.bmp", base, manual_slot);
+		snprintf(manual_path, sizeof(manual_path), "%s.%d.bmp", base, manual_slot);
 		if (stat(manual_path, &manual_stat)!=0) has_manual = 0;
 	}
 
@@ -4134,9 +4134,10 @@ static void deleteSelected(SDL_Surface* screen) {
 	char art_path[MAX_PATH];
 	getResPath(entry, art_path);
 	char border_path[MAX_PATH];
-	snprintf(border_path, sizeof(border_path), "%s/%s/%s.png", BORDERS_PATH, tag, names[0]);
+	snprintf(border_path, sizeof(border_path), "%s/%s/%s.png", BEZELS_PATH, tag, names[0]);
 	int drop_art = 0;
-	if (exists(art_path) || exists(border_path)) drop_art = askDelete(screen, "Also delete its box art?", NULL, "DELETE", "KEEP");
+	int has_art = exists(art_path), has_bezel = exists(border_path); // name what's there: a game can have its own bezel
+	if (has_art || has_bezel) drop_art = askDelete(screen, has_art && has_bezel ? "Also delete its box art and bezel?" : has_art ? "Also delete its box art?" : "Also delete its bezel?", NULL, "DELETE", "KEEP");
 
 	// the game itself
 	if (entry->type==ENTRY_DIR) removeTree(entry->path);
@@ -4186,7 +4187,7 @@ static void deleteSelected(SDL_Surface* screen) {
 }
 
 // renaming a game (MENU + Y): the file (or a multi-disc folder and its m3u or cue), and everything named after it,
-// its box art, saves, states, settings and border, and every list that points at it
+// its box art, saves, states, settings and bezel, and every list that points at it
 
 // a list file of paths relative to SDCARD_PATH (anything after a tab is kept): old_rel becomes new_rel, and when
 // old_dir is set, files inside it (each disc of a multi-disc game) move to new_dir
@@ -4339,7 +4340,7 @@ static void renameSelected(SDL_Surface* screen) {
 	snprintf(save_dir, sizeof(save_dir), "%s/.minui/%s", SHARED_USERDATA_PATH, tag);
 	findSaves(save_dir, names, 1, 0);
 	findCoreSaves(USERDATA_PATH, tag, names, 1, 1);
-	snprintf(save_dir, sizeof(save_dir), "%s/%s", BORDERS_PATH, tag);
+	snprintf(save_dir, sizeof(save_dir), "%s/%s", BEZELS_PATH, tag);
 	findSaves(save_dir, names, 1, 0);
 	int nds_from = delete_save_count; // from here on they go by the name without its extension
 	char old_stem[MAX_PATH], new_stem[MAX_PATH];
@@ -4629,10 +4630,10 @@ static void setGameOption(GameConfig* cfg, char* key, char* label) {
 #define P8_SETTINGS_PATH SDCARD_PATH "/Saves/PICO8/minuiplus.txt"
 #define P8_SETTING_COUNT 4
 static struct { char* key; char* name; char* hint; char* labels[3]; int count; int fallback; } p8_settings[P8_SETTING_COUNT] = {
-	{ "p8_scaling", "Screen scaling", "Integer keeps every pixel the same size", { "Integer", "Fullscreen" }, 2, 1 },
-	{ "p8_effect", "Screen effect", "An LCD's pixel grid, or scanlines", { "None", "Line", "Grid" }, 3, 2 },
-	{ "p8_border", "Screen border", "The frame from Borders: P8.png, or the cart's own", { "Off", "On" }, 2, 1 },
-	{ "p8_buttons", "Button layout", "Which of A and B is PICO-8's O button", { "A is O, B is X", "A is X, B is O" }, 2, 0 },
+	{ "p8_scaling", "Screen Scaling", "Integer keeps every pixel the same size", { "Integer", "Fullscreen" }, 2, 1 },
+	{ "p8_effect", "Screen Effect", "An LCD's pixel grid, or scanlines", { "None", "Line", "Grid" }, 3, 2 },
+	{ "p8_border", "Screen Bezel", "The bezel from Bezels: P8.png, or the cart's own", { "Off", "On" }, 2, 1 },
+	{ "p8_buttons", "Button Layout", "Which of A and B is PICO-8's O button", { "A is O, B is X", "A is X, B is O" }, 2, 0 },
 };
 static int isPico8Native(char* sd_path, char* system_tag) {
 	if (exactMatch(system_tag, "PICO8")) return 1;
@@ -4775,13 +4776,13 @@ static void gameMenu(SDL_Surface* screen) {
 				int is_selected = i==selected;
 				char* name = "";
 				char* value = "";
-				if (rows[i]==ROW_CORE) { name = "Change core"; value = core_name; if (is_selected) hint = "Pick which emulator runs this game"; }
-				else if (rows[i]==ROW_CPU) { name = "CPU speed"; value = game_speed_labels[speed]; if (is_selected) hint = speed==GAME_SPEED_PERFORMANCE ? "Faster, but can freeze some games" : "Saved for this game, as in its own options"; }
-				else if (rows[i]==ROW_RUMBLE) { name = "Rumble strength"; value = rumble_labels[rumble]; if (is_selected) hint = "Saved for this game; buzzes to show the strength"; }
+				if (rows[i]==ROW_CORE) { name = "Change Core"; value = core_name; if (is_selected) hint = "Pick which emulator runs this game"; }
+				else if (rows[i]==ROW_CPU) { name = "CPU Speed"; value = game_speed_labels[speed]; if (is_selected) hint = speed==GAME_SPEED_PERFORMANCE ? "Faster, but can freeze some games" : "Saved for this game, as in its own options"; }
+				else if (rows[i]==ROW_RUMBLE) { name = "Rumble Strength"; value = rumble_labels[rumble]; if (is_selected) hint = "Saved for this game; buzzes to show the strength"; }
 				else if (rows[i]==ROW_STICK) { name = "Thumbstick"; value = nds_stick_labels[stick]; if (is_selected) hint = "Moves the stylus, or works as a second d-pad"; }
-				else if (rows[i]==ROW_ART) { name = has_art ? "Replace box art" : "Get box art"; if (is_selected) hint = has_art ? "Compare the library's covers with yours, keep one" : "Downloads it from the libretro library (needs Wi-Fi)"; }
+				else if (rows[i]==ROW_ART) { name = has_art ? "Replace Box Art" : "Get Box Art"; if (is_selected) hint = has_art ? "Compare the library's covers with yours, keep one" : "Downloads it from the libretro library (needs Wi-Fi)"; }
 				else if (rows[i]==ROW_RENAME) { name = "Rename"; if (is_selected) hint = "Its box art and saves keep up with the new name"; }
-				else if (rows[i]==ROW_DELETE) { name = "Delete game"; if (is_selected) hint = "Asks first, then about its saves and box art"; }
+				else if (rows[i]==ROW_DELETE) { name = "Delete Game"; if (is_selected) hint = "Asks first, then about its saves and box art"; }
 				else if (rows[i]>=ROW_P8) {
 					int s = rows[i] - ROW_P8;
 					name = p8_settings[s].name;
@@ -4854,6 +4855,30 @@ static int randomAnywhere(void) {
 		}
 		closeDirectory(); // (nothing in it after all)
 	}
+	return 1;
+}
+
+// in a system's game list, the previous or next system (wrapping), opened at its first game.
+// Returns 0 when the list isn't a system's own (a folder in one, Recents, a collection...)
+static int switchSystem(int step) {
+	if (stack->count!=2 || !prefixMatch(ROMS_PATH "/", top->path)) return 0;
+	Directory* root = stack->items[0];
+	int count = root->entries->count;
+	int at = root->selected;
+	for (int tries=0; tries<count; tries++) {
+		at = (at + step + count) % count;
+		Entry* entry = root->entries->items[at];
+		if (prefixMatch(ROMS_PATH "/", entry->path)) break;
+	}
+	if (at==root->selected) return 1; // the only system
+	closeDirectory();
+	root->selected = at;
+	centerRows(root, at);
+	openDirectory(((Entry*)root->entries->items[at])->path, 0);
+	random_everywhere = 0; // picked by hand
+	carousel_slide_from = 0;
+	showFlash(((Entry*)root->entries->items[at])->name, 0);
+	SFX_play(SFX_TICK);
 	return 1;
 }
 
@@ -4966,6 +4991,7 @@ int main (int argc, char *argv[]) {
 	int dirty = 1;
 	int scrolling = 0;
 	int show_version = 0;
+	int hint_scrolls = 0; // the settings' tooltip is too long and scrolling: keep drawing
 	#define INFO_ROW_WIFI 0 // then one row per power timer
 	#define INFO_ROW_SLEEP_LIGHT (1 + PWR_TIMER_COUNT) // under the timers it goes with
 	#define INFO_ROW_THEME (2 + PWR_TIMER_COUNT)
@@ -5095,7 +5121,7 @@ int main (int argc, char *argv[]) {
 				SFX_play(SFX_CONFIRM); // heard when turning them on
 				dirty = 1;
 			}
-			else if (info_row==INFO_ROW_CLOCK && (PAD_justRepeated(BTN_LEFT) || PAD_justRepeated(BTN_RIGHT))) {
+			else if (info_row==INFO_ROW_CLOCK && (PAD_justRepeated(BTN_LEFT) || PAD_justRepeated(BTN_RIGHT) || PAD_justPressed(BTN_A))) {
 				int modes = CLOCK_24H + 1; // wraps: 12 hour, 24 hour, off
 				GFX_setClockMode((GFX_getClockMode() + (PAD_justRepeated(BTN_LEFT) ? modes - 1 : 1)) % modes);
 				SFX_play(SFX_TICK);
@@ -5106,11 +5132,10 @@ int main (int argc, char *argv[]) {
 				openTool(screen, NULL, NULL);
 				dirty = 1;
 			}
-			else if (info_row==INFO_ROW_TIME_ZONE && (PAD_justRepeated(BTN_LEFT) || PAD_justRepeated(BTN_RIGHT))) {
+			else if (info_row==INFO_ROW_TIME_ZONE && (PAD_justRepeated(BTN_LEFT) || PAD_justRepeated(BTN_RIGHT) || PAD_justPressed(BTN_A))) {
 				int zones = GFX_getTimeZoneCount() + 1; // and Automatic, first
-				int at = MAX(GFX_getTimeZone(), -1); // (one that was looked up and isn't listed sits by Automatic)
-				at += 1; // kept separate: the project's MAX macro does not parenthesize its ternary expression
-				at = (at + (PAD_justRepeated(BTN_RIGHT) ? 1 : zones - 1)) % zones;
+				int at = MAX(GFX_getTimeZone(), -1) + 1; // (one that was looked up and isn't listed sits by Automatic)
+				at = (at + (PAD_justRepeated(BTN_LEFT) ? zones - 1 : 1)) % zones;
 				GFX_setTimeZone(at - 1);
 				SFX_play(SFX_TICK);
 				dirty = 1;
@@ -5133,10 +5158,10 @@ int main (int argc, char *argv[]) {
 				getWifiStatus(wifi_status, sizeof(wifi_status)); // another network, or turned off, without going on or offline
 				dirty = 1;
 			}
-			else if (info_row==INFO_ROW_THEME && (PAD_justRepeated(BTN_LEFT) || PAD_justRepeated(BTN_RIGHT))) {
+			else if (info_row==INFO_ROW_THEME && (PAD_justRepeated(BTN_LEFT) || PAD_justRepeated(BTN_RIGHT) || PAD_justPressed(BTN_A))) {
 				// wraps, there's no wrong end to land on
 				int count = GFX_getThemeCount();
-				GFX_setTheme((GFX_getTheme() + (PAD_justRepeated(BTN_RIGHT) ? 1 : -1) + count) % count);
+				GFX_setTheme((GFX_getTheme() + (PAD_justRepeated(BTN_LEFT) ? -1 : 1) + count) % count);
 				SFX_play(SFX_TICK);
 				Carousel_quit(); // its cards' text is in the theme's colors
 				if (version) SDL_FreeSurface(version);
@@ -5154,10 +5179,12 @@ int main (int argc, char *argv[]) {
 				dirty = 1;
 				SFX_play(SFX_TICK);
 			}
-			else if (info_row>INFO_ROW_WIFI && info_row<INFO_ROW_SLEEP_LIGHT && (PAD_justRepeated(BTN_LEFT) || PAD_justRepeated(BTN_RIGHT))) { // power timers
-				// clamped rather than wrapped so holding left/right can't jump to Never by accident
+			else if (info_row>INFO_ROW_WIFI && info_row<INFO_ROW_SLEEP_LIGHT && (PAD_justRepeated(BTN_LEFT) || PAD_justRepeated(BTN_RIGHT) || PAD_justPressed(BTN_A))) { // power timers
+				// clamped rather than wrapped so holding left/right can't jump to Never by accident; A (one press at a
+				// time) steps on and wraps back to the start, as on the other rows
 				int timer = info_row - 1;
-				int index = PWR_getTimer(timer) + (PAD_justRepeated(BTN_RIGHT) ? 1 : -1);
+				int index = PWR_getTimer(timer) + (PAD_justRepeated(BTN_LEFT) ? -1 : 1);
+				if (PAD_justPressed(BTN_A) && index>=PWR_getTimerCount(timer)) index = 0;
 				if (index>=0 && index<PWR_getTimerCount(timer)) {
 					PWR_setTimer(timer, index);
 					dirty = 1;
@@ -5173,8 +5200,15 @@ int main (int argc, char *argv[]) {
 				SFX_play(SFX_CONFIRM);
 				if (!HAS_POWER_BUTTON && !simple_mode) PWR_enableSleep();
 			}
+			else if (canCarousel() && PAD_justRepeated(showsCarousel() ? BTN_UP|BTN_DOWN : BTN_LEFT|BTN_RIGHT)
+					&& switchSystem(PAD_justRepeated(showsCarousel() ? BTN_UP : BTN_LEFT) ? -1 : 1)) {
+				// a system's games: the other way to the scrolling goes to the previous or next system
+				selected = top->selected;
+				total = top->entries->count;
+				dirty = 1;
+			}
 			else if (total>0 && showsCarousel()) {
-				// left/right (and up/down) step one game, wrapping only on a fresh press like the list does
+				// left/right (and up/down outside a system's own list) step one game, wrapping only on a fresh press like the list does
 				int step = 0;
 				if (PAD_justRepeated(BTN_LEFT) || PAD_justRepeated(BTN_UP)) step = -1;
 				else if (PAD_justRepeated(BTN_RIGHT) || PAD_justRepeated(BTN_DOWN)) step = 1;
@@ -5428,7 +5462,7 @@ int main (int argc, char *argv[]) {
 				SFX_play(SFX_CONFIRM);
 				random_everywhere = 0; // opened by hand
 				if (inSwitcher()) { // the switcher picks up from the newer of its quick save and the last manual save
-					char preview[256];
+					char preview[MAX_PATH];
 					int slot;
 					if (getSwitcherSave(top->entries->items[top->selected], preview, &slot) && !noStateNote(top->entries->items[top->selected])) { // (PICO-8 only has the picture)
 						should_resume = 1;
@@ -5500,6 +5534,7 @@ int main (int argc, char *argv[]) {
 			dirty = 1;
 		}
 		if (!dirty && !show_version && Decoder_hasDone()) dirty = 1; // art the thread just finished, to put on screen
+		if (!dirty && show_version && hint_scrolls && now-marquee_drawn_at>=MARQUEE_FRAME_MS) dirty = 1; // a long tooltip moving, at the scrolling names' pace
 		if (marquee_active && now-marquee_drawn_at>=MARQUEE_FRAME_MS && !dirty) dirty = MARQUEE_ONLY;
 		
 		if (dirty==MARQUEE_ONLY && marquee_base && marquee_text && !flash_until) {
@@ -5556,6 +5591,7 @@ int main (int argc, char *argv[]) {
 			if (RA_HARDCORE_AVAILABLE && inSwitcher() && !show_version && exists(RA_HARDCORE_FLAG) && exists(RA_LOGIN_PATH)) blitHardcoreBadge(screen, ow);
 			
 			if (show_version) {
+				hint_scrolls = 0; // set again below while the row's tooltip scrolls
 				if (!version) {
 					version = TTF_RenderUTF8_Blended(font.large, "Settings", COLOR_DARK_TEXT); // (play time is in Tools now)
 				}
@@ -5594,7 +5630,7 @@ int main (int argc, char *argv[]) {
 						strcpy(value, GFX_getThemeName(GFX_getTheme()));
 					}
 					else if (i==INFO_ROW_SOUNDS) {
-						name = "Menu sounds";
+						name = "Menu Sounds";
 						strcpy(value, SFX_menuSoundsEnabled() ? "On" : "Off");
 					}
 					else if (i==INFO_ROW_CLOCK) {
@@ -5603,16 +5639,16 @@ int main (int argc, char *argv[]) {
 						strcpy(value, mode==CLOCK_12H ? "12-hour" : (mode==CLOCK_24H ? "24-hour" : "Off"));
 					}
 					else if (i==INFO_ROW_SLEEP_LIGHT) {
-						name = "Sleep light";
+						name = "Sleep Light";
 						strcpy(value, PWR_getSleepLight()==SLEEP_LIGHT_ON ? "On" : "Off");
 					}
 					else if (i==INFO_ROW_SET_TIME) {
-						name = "Set time";
+						name = "Set Time";
 						time_t now_time = time(NULL);
 						strftime(value, sizeof(value), "%Y/%m/%d", localtime(&now_time));
 					}
 					else if (i==INFO_ROW_TIME_ZONE) {
-						name = "Time zone";
+						name = "Time Zone";
 						strcpy(value, GFX_getTimeZoneName(GFX_getTimeZone()));
 					}
 					else if (i==INFO_ROW_SWAP_AX) {
@@ -5626,16 +5662,17 @@ int main (int argc, char *argv[]) {
 					}
 					else if (i==INFO_ROW_VERSION) {
 						name = "MinUI+";
-						strcpy(value, "v1.1");
+						strcpy(value, MINUI_PLUS_VERSION);
 					}
 					else {
-						char* timer_names[PWR_TIMER_COUNT] = { "Sleep after", "Power off after" };
+						char* timer_names[PWR_TIMER_COUNT] = { "Sleep After", "Power Off After" };
 						name = timer_names[i-1];
 						strcpy(value, PWR_getTimerLabel(i-1, PWR_getTimer(i-1)));
 					}
 					TTF_Font* row_font = i==INFO_ROW_VERSION ? font.small : font.large;
-					SDL_Surface* name_txt = TTF_RenderUTF8_Blended(row_font, name, selected ? COLOR_BLACK : COLOR_DARK_TEXT);
-					SDL_Surface* value_txt = TTF_RenderUTF8_Blended(row_font, value, selected ? COLOR_BLACK : COLOR_WHITE);
+					// the names stand out from the dim "Settings" heading, values a step back, as in the game menu
+					SDL_Surface* name_txt = TTF_RenderUTF8_Blended(row_font, name, selected ? COLOR_BLACK : COLOR_WHITE);
+					SDL_Surface* value_txt = TTF_RenderUTF8_Blended(row_font, value, selected ? COLOR_BLACK : COLOR_LIGHT_TEXT);
 					int ty = y + (SCALE1(PILL_SIZE) - name_txt->h) / 2;
 					SDL_BlitSurface(name_txt, NULL, screen, &(SDL_Rect){block_x, ty});
 					SDL_BlitSurface(value_txt, NULL, screen, &(SDL_Rect){block_x + rows_w - value_txt->w, ty});
@@ -5652,13 +5689,14 @@ int main (int argc, char *argv[]) {
 				if (info_row==INFO_ROW_WIFI) right_w = GFX_blitButtonGroup((char*[]){ "B","BACK", "A","SET UP", NULL }, 1, screen, 1);
 				else if (info_row==INFO_ROW_SET_TIME) right_w = GFX_blitButtonGroup((char*[]){ "B","BACK", "A","SET", NULL }, 1, screen, 1);
 				else if (info_row==INFO_ROW_MUSIC) right_w = GFX_blitButtonGroup((char*[]){ "B","BACK", "A",BGM_isEnabled() ? "OFF" : "ON", NULL }, 1, screen, 1);
-				else right_w = GFX_blitButtonGroup((char*[]){ "B","BACK",  NULL }, 0, screen, 1);
+				else if (info_row==INFO_ROW_VERSION) right_w = GFX_blitButtonGroup((char*[]){ "B","BACK",  NULL }, 0, screen, 1);
+				else right_w = GFX_blitButtonGroup((char*[]){ "B","BACK", "A","CHANGE", NULL }, 1, screen, 1); // every other row is a value A steps through
 
 				if (show_setting && !GetHDMI()) GFX_blitHardwareHints(screen, show_setting);
 				else if (info_row==INFO_ROW_MUSIC || info_row==INFO_ROW_TIME_ZONE || info_row==INFO_ROW_SET_TIME || info_row==INFO_ROW_CLOCK || info_row==INFO_ROW_SLEEP_LIGHT || info_row==INFO_ROW_SWAP_AX) { // a line about the row, in place of the left hints
-					char hint[64], shown[64];
+					char hint[64];
 					if (info_row==INFO_ROW_TIME_ZONE) strcpy(hint, "Automatic, or pick yours");
-					else if (info_row==INFO_ROW_CLOCK) strcpy(hint, "Syncs over Wi-Fi, or use Set time");
+					else if (info_row==INFO_ROW_CLOCK) strcpy(hint, "Syncs over Wi-Fi, or use Set Time");
 					else if (info_row==INFO_ROW_SET_TIME) strcpy(hint, "Without Wi-Fi. Kept while it's off");
 					else if (info_row==INFO_ROW_SLEEP_LIGHT) strcpy(hint, "The light while asleep");
 					else if (info_row==INFO_ROW_SWAP_AX) strcpy(hint, swap_ax ? "A Resume, X Open (after save state)" : "A Open, X Resume (after save state)");
@@ -5667,13 +5705,7 @@ int main (int argc, char *argv[]) {
 						if (songs) snprintf(hint, sizeof(hint), "%i song%s in /BGM", songs, songs==1 ? "" : "s");
 						else strcpy(hint, "Put songs in /BGM");
 					}
-					int pill_w = screen->w - SCALE1(PADDING*3) - right_w;
-					GFX_truncateText(font.small, hint, shown, pill_w - SCALE1(BUTTON_PADDING*2), 0);
-					SDL_Surface* text = TTF_RenderUTF8_Blended(font.small, shown, COLOR_WHITE);
-					int pill_y = screen->h - SCALE1(PADDING + PILL_SIZE);
-					GFX_blitPill(ASSET_DARK_GRAY_PILL, screen, &(SDL_Rect){ SCALE1(PADDING), pill_y, text->w + SCALE1(BUTTON_PADDING*2), SCALE1(PILL_SIZE) });
-					SDL_BlitSurface(text, NULL, screen, &(SDL_Rect){ SCALE1(PADDING + BUTTON_PADDING), pill_y + (SCALE1(PILL_SIZE) - text->h) / 2 });
-					SDL_FreeSurface(text);
+					hint_scrolls = GFX_blitHintPill(screen, hint, right_w); // too long for the room: it scrolls
 				}
 				else GFX_blitButtonGroup((char*[]){ BTN_SLEEP==BTN_POWER?"POWER":"MENU","SLEEP",  NULL }, 0, screen, 0);
 
@@ -5798,7 +5830,7 @@ int main (int argc, char *argv[]) {
 				char fav_path[256];
 				char* fav_button = (total>0 && getFavoritePath(top->entries->items[top->selected], fav_path)) ? "Y" : NULL; // NULL ends the group early
 				if (show_setting && !GetHDMI()) GFX_blitHardwareHints(screen, show_setting);
-				else if (inSwitcher()) GFX_blitButtonGroup((char*[]){ total>0 ? "X" : NULL,"REMOVE", NULL }, 0, screen, 0);
+				else if (inSwitcher()) GFX_blitButtonGroup((char*[]){ total>0 ? "X" : NULL,"UNPIN", NULL }, 0, screen, 0); // the word the in-game menus use
 				else if (total>0 && exactMatch(top->path, FAUX_MOSTPLAYED_PATH)) { // stats matter more than resume/fav hints here
 					Entry* entry = top->entries->items[top->selected];
 					char total_str[32], average_str[32];
@@ -5820,7 +5852,7 @@ int main (int argc, char *argv[]) {
 				}
 				else {
 					if (stack->count>1) {
-						char preview[256];
+						char preview[MAX_PATH];
 						int slot;
 						int resumable = inSwitcher() ? getSwitcherSave(top->entries->items[top->selected], preview, &slot) && !noStateNote(top->entries->items[top->selected]) : swap_ax && can_resume; // (PICO-8 starts over)
 						GFX_blitButtonGroup((char*[]){ "B","BACK", "A",resumable ? "RESUME" : "OPEN", NULL }, 1, screen, 1);

@@ -1072,6 +1072,29 @@ static int scrollOffset(int overflow, uint32_t started) {
 	if (t<HEADER_PAUSE_MS*2+scroll_ms) return overflow;
 	return overflow - (t - HEADER_PAUSE_MS*2 - scroll_ms) * overflow / scroll_ms;
 }
+// a tooltip in a dark pill at the bottom left, beside the button hints that take right_w on the right. Text too long
+// for the room scrolls (like a long title) instead of being cut off: returns 1 while it does, so the caller redraws
+int GFX_blitHintPill(SDL_Surface* dst, const char* text, int right_w) {
+	static SDL_Surface* rendered;
+	static char drawn[256];
+	static uint32_t started;
+	if (!text || !text[0]) return 0;
+	if (!rendered || strcmp(drawn, text)) { // rendered once per text, not every frame it scrolls
+		if (rendered) SDL_FreeSurface(rendered);
+		rendered = TTF_RenderUTF8_Blended(font.small, text, COLOR_WHITE);
+		snprintf(drawn, sizeof(drawn), "%s", text);
+		started = SDL_GetTicks();
+	}
+	if (!rendered) return 0;
+	int room = dst->w - SCALE1(PADDING*3) - right_w - SCALE1(BUTTON_PADDING*2); // for the text inside the pill
+	int shown_w = MIN(rendered->w, room);
+	int pill_y = dst->h - SCALE1(PADDING + PILL_SIZE);
+	GFX_blitPill(ASSET_DARK_GRAY_PILL, dst, &(SDL_Rect){ SCALE1(PADDING), pill_y, shown_w + SCALE1(BUTTON_PADDING*2), SCALE1(PILL_SIZE) });
+	int overflow = rendered->w - room;
+	int offset = scrollOffset(overflow, started);
+	SDL_BlitSurface(rendered, &(SDL_Rect){ offset, 0, shown_w, rendered->h }, dst, &(SDL_Rect){ SCALE1(PADDING + BUTTON_PADDING), pill_y + (SCALE1(PILL_SIZE) - rendered->h) / 2 });
+	return overflow>0;
+}
 int GFX_blitHeaderText(SDL_Surface* dst, TTF_Font* f, SDL_Color color, const char* title, int ow) {
 	static SDL_Surface* text;
 	static char drawn[256];

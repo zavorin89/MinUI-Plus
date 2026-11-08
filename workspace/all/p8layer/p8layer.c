@@ -307,12 +307,12 @@ static void loadBorder(void) {
 	border_texture = NULL;
 	border_flat = NULL;
 	if (!border_on) return;
-	// a cart's own (Borders/P8/<cart>.png) before the system's, as minarch looks for them
+	// a cart's own (Bezels/P8/<cart>.png) before the system's, as minarch looks for them
 	const char* tags[] = {"PICO8", "P8"};
 	char path[800] = "";
 	for (int i=0; i<2 && !path[0]; i++) {
-		snprintf(path, sizeof(path), "%s/%s/%s.png", BORDERS_PATH, tags[i], rom_name);
-		if (!exists(path)) snprintf(path, sizeof(path), "%s/%s.png", BORDERS_PATH, tags[i]);
+		snprintf(path, sizeof(path), "%s/%s/%s.png", BEZELS_PATH, tags[i], rom_name);
+		if (!exists(path)) snprintf(path, sizeof(path), "%s/%s.png", BEZELS_PATH, tags[i]);
 		if (!exists(path)) path[0] = '\0';
 	}
 	if (!path[0]) return;
@@ -776,7 +776,7 @@ static int OptionFrontend_onChange(MenuList* list, int i) {
 static MenuItem frontend_items[] = {
 	{"Screen Scaling", "Integer keeps every pixel the same size (3x).\nFullscreen fills the height, a little uneven.", scaling_labels},
 	{"Screen Effect", "Grid draws an LCD's pixel grid.\nLine simulates CRT scanlines.", effect_labels},
-	{"Screen Border", "The frame from Borders around the screen:\nP8.png, or one named after the cart.", off_on},
+	{"Screen Bezel", "The bezel from Bezels around the screen:\nP8.png, or one named after the cart.", off_on},
 	{NULL},
 };
 static MenuList OptionFrontend_menu = {.type=MENU_VAR, .title="Frontend Options", .desc="Kept for every cart.", .items=frontend_items, .on_change=OptionFrontend_onChange};
@@ -838,22 +838,45 @@ static void runMenu(void) {
 	int selected = 0;
 	int dirty = 1, show_setting = 0, show_menu = 1;
 	int title_scrolls = 0, title_width = 0;
+	// X pins the cart (or Splore) to the game switcher, as on every other system
+	#define P8_MESSAGE_FADE_MS 150
+	char* pin_path = rom_path[0] ? (prefixMatch(SDCARD_PATH, rom_path) ? rom_path + strlen(SDCARD_PATH) : rom_path) : NULL;
+	int pinned = pin_path && Switcher_has(pin_path);
+	char* menu_message = NULL;
+	uint32_t menu_message_until = 0;
 	while (show_menu) {
 		GFX_startFrame();
 		uint32_t now = SDL_GetTicks();
 		PAD_poll();
 		testPad();
+		if (menu_message_until && now>=menu_message_until) {
+			menu_message_until = 0;
+			dirty = 1;
+		}
+		else if (menu_message_until && menu_message_until-now<P8_MESSAGE_FADE_MS) dirty = 1; // fading out
 
-		if (PAD_justRepeated(BTN_UP)) {
+		if (PAD_justPressed(BTN_UP)) { // a press at a time, like minarch's menu
 			selected = (selected + ITEM_COUNT - 1) % ITEM_COUNT;
 			dirty = 1;
 		}
-		else if (PAD_justRepeated(BTN_DOWN)) {
+		else if (PAD_justPressed(BTN_DOWN)) {
 			selected = (selected + 1) % ITEM_COUNT;
 			dirty = 1;
 		}
 
 		if (PAD_justPressed(BTN_B) || PAD_tappedMenu(now)) show_menu = 0;
+		else if (pin_path && PAD_justPressed(BTN_X)) {
+			SFX_play(SFX_CONFIRM);
+			if (pinned) {
+				Switcher_remove(pin_path);
+				menu_message = "Unpinned from game switcher";
+			}
+			else if (Switcher_add(pin_path)==-1) menu_message = "Game switcher is full (10)";
+			else menu_message = "Pinned to game switcher";
+			pinned = Switcher_has(pin_path);
+			menu_message_until = now + 1500;
+			dirty = 1;
+		}
 		else if (PAD_justPressed(BTN_A)) {
 			switch (selected) {
 				case ITEM_CONTINUE:
@@ -861,7 +884,7 @@ static void runMenu(void) {
 					break;
 				case ITEM_OPTIONS:
 					Menu_options(&options_menu);
-					composeBackdrop(backing); // the scaling or border may have changed
+					composeBackdrop(backing); // the scaling or bezel may have changed
 					dirty = 1;
 					break;
 				case ITEM_QUIT:
@@ -886,7 +909,7 @@ static void runMenu(void) {
 			title_width = max_width;
 
 			if (show_setting && !GetHDMI()) GFX_blitHardwareHints(screen, show_setting);
-			else GFX_blitButtonGroup((char*[]){"POWER","SLEEP", NULL}, 0, screen, 0);
+			else GFX_blitButtonGroup((char*[]){"POWER","SLEEP", pin_path ? "X" : NULL, pinned ? "UNPIN" : "PIN", NULL}, 0, screen, 0);
 			GFX_blitButtonGroup((char*[]){"B","BACK", "A","OKAY", NULL}, 1, screen, 1);
 
 			char** items = menu_items;
@@ -953,6 +976,24 @@ static void runMenu(void) {
 						SDL_BlitSurface(text, NULL, screen, &(SDL_Rect){ox + pw - SCALE1(BUTTON_PADDING) - text->w, ty});
 						SDL_FreeSurface(text);
 					}
+				}
+			}
+			if (menu_message_until) { // the pin confirmation, drawn and faded as minarch's is
+				text = TTF_RenderUTF8_Blended(font.large, menu_message, COLOR_WHITE);
+				int pw = text->w + SCALE1(BUTTON_PADDING*4);
+				int ph = text->h + SCALE1(BUTTON_PADDING*2);
+				SDL_Rect box = { (screen->w-pw)/2, (screen->h-ph)/2, pw, ph };
+				int left = (int32_t)(menu_message_until - SDL_GetTicks());
+				SDL_Surface* under = left<P8_MESSAGE_FADE_MS ? SDL_CreateRGBSurfaceWithFormat(0, pw, ph, screen->format->BitsPerPixel, screen->format->format) : NULL;
+				if (under) SDL_BlitSurface(screen, &box, under, NULL);
+				GFX_blitRect(ASSET_DARK_GRAY_PILL, screen, &box);
+				SDL_BlitSurface(text, NULL, screen, &(SDL_Rect){ box.x + (pw-text->w)/2, box.y + (ph-text->h)/2 });
+				SDL_FreeSurface(text);
+				if (under) {
+					SDL_SetSurfaceBlendMode(under, SDL_BLENDMODE_BLEND);
+					SDL_SetSurfaceAlphaMod(under, 255 - 255 * MAX(left, 0) / P8_MESSAGE_FADE_MS);
+					SDL_BlitSurface(under, NULL, screen, &(SDL_Rect){ box.x, box.y });
+					SDL_FreeSurface(under);
 				}
 			}
 			testShot("menu", screen->pixels, screen->w, screen->h, screen->pitch);

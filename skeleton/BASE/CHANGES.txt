@@ -1,15 +1,38 @@
-# MinUI+ v1.2.1 — changes since launch
+# MinUI+ v1.2.2 — changes since launch
 
 For the Miyoo A30. This ZIP is a complete release, suitable for manual download from a mirror.
 
 Manual update: back up your card first. Extract the outer download ZIP and merge its contents into the SD card root,
 replacing bundled application/tool files when asked. Keep MinUI.zip zipped; the A30 installs it on the next power-on.
 Copy the included Tools and Emus folders too so their fixes are installed. Preserve any personally customized artwork
-or borders from your backup. The updater's Shut Down prompt requires you to turn the A30 back on manually.
+or bezels from your backup. The updater's Shut Down prompt requires you to turn the A30 back on manually.
 
 From v1.1 the built-in updater checks GitLab. Devices on v1.07 or older still look for updates on GitHub, so they need this one manual install to start receiving them.
 
-This is a consolidated comparison with v1.0.0, rather than a list of every intermediate hotfix. This v1.2.1 package includes all changes below. The newest changes come first, then v1.0.1–v1.0.5, then v1.06.
+This is a consolidated comparison with v1.0.0, rather than a list of every intermediate hotfix. This v1.2.2 package includes all changes below. The newest changes come first, then v1.0.1–v1.0.5, then v1.06.
+
+## New in v1.2.2
+
+A polish release for v1.2.
+
+### Getting around
+
+- In a system's games, Up / Down in the carousel and Left / Right in the list go to the previous or next system. The system's name pops up as you switch.
+- The Borders folder is now called Bezels, and the menus say "Screen Bezel". The update moves your Borders folder over by itself, keeping any bezels you added or changed.
+
+### Menus
+
+- Settings: the rows are brighter, so they stand out from the heading, and a description too long for the bottom of the screen scrolls instead of being cut off.
+- Settings shows the right MinUI+ version (it said v1.1).
+- In Settings, A now changes Clock, Theme, Time Zone and the power timers too, like the rows that already worked that way.
+- PICO-8's pause menu can pin the game to the game switcher with X, like every other system.
+- Menu names are Title Case everywhere, the RetroAchievements sign in and sign out questions name their button, and deleting a game says exactly what goes with it (box art, bezel or both).
+- In the in-game menu, A on Load with an empty slot no longer closes the menu, and changing discs clicks like changing slots.
+
+### Fixes
+
+- Very long game or folder names could overrun file paths in the launcher and the in-game menu.
+- A multi-disc playlist with more than 9 discs could crash the game when its menu opened. The menu now offers the first 9.
 
 ## New in v1.2.1
 
@@ -24,7 +47,7 @@ A hotfix for v1.2.
 ### PICO-8, the official one (bring your own)
 
 - If you have bought PICO-8, play carts with it, Splore included, in the new "Pico-8 Native (PICO8)" folder. PICO-8 is not included: README.txt says how to add it.
-- It plays like every other system: MENU opens the in-game menu with play time, and Options has Screen Scaling, Screen Effect, Screen Border and Button Layout. START is PICO-8's own pause menu, and the power button sleeps.
+- It plays like every other system: MENU opens the in-game menu with play time, and Options has Screen Scaling, Screen Effect, Screen Bezel and Button Layout. START is PICO-8's own pause menu, and the power button sleeps.
 - The same settings are in MENU + Y on its carts and on Splore. Fullscreen with the LCD grid is the default.
 - Hold MENU for the game switcher. PICO-8 has no save states, so the switcher keeps a picture and starts the cart over, and says so under the picture.
 - One "Pico-8 (P8)" cart can switch to the official PICO-8 in MENU + Y.
@@ -52,7 +75,7 @@ A hotfix for v1.2.
 ### Volume and brightness
 
 - Changing the volume or brightness during a game now shows the bar over it, on every system (PICO-8 and Splore, fake-08 and the DS too), and each step clicks, as in the menus.
-- The bar also shows in the confirmations and pickers that didn't have it (deleting a game, choosing a core, the game menu, Set time, messages in the in-game menu).
+- The bar also shows in the confirmations and pickers that didn't have it (deleting a game, choosing a core, the game menu, Set Time, messages in the in-game menu).
 - PICO-8's in-game menu now clicks when you move, choose and go back, like every other system's.
 
 ### Menus
@@ -65,7 +88,7 @@ A hotfix for v1.2.
 
 ### New systems
 
-- Added **Nintendo DS**, through DraStic with MinUI+'s own in-game menu: save states, screen layouts, borders, Thumbstick and CPU Speed settings, and RetroAchievements (softcore). DraStic isn't included: the README says where to get it.
+- Added **Nintendo DS**, through DraStic with MinUI+'s own in-game menu: save states, screen layouts, bezels, Thumbstick and CPU Speed settings, and RetroAchievements (softcore). DraStic isn't included: the README says where to get it.
 
 ### Nintendo 64
 
@@ -75,7 +98,7 @@ A hotfix for v1.2.
 ### Clock and settings
 
 - The clock now stays right while the A30 is off, and shows only once it's been synced over Wi-Fi or set by hand. It may stay hidden after this update until you do one of those.
-- A new **Set time** in Settings sets the clock without Wi-Fi.
+- A new **Set Time** in Settings sets the clock without Wi-Fi.
 
 ### Menus and saves
 
@@ -91,7 +114,7 @@ A hotfix for v1.2.
 
 ### New systems
 
-- Added Capcom Play System 1, 2 and 3, Final Burn Neo, MAME 2003+, Neo Geo, Sega CD and Sega 32X, each with its own system art. Arcade systems also get vertical-game borders where they apply. BIOS files are not included; README.txt says which each system needs and where it goes (Neo Geo's goes beside the games).
+- Added Capcom Play System 1, 2 and 3, Final Burn Neo, MAME 2003+, Neo Geo, Sega CD and Sega 32X, each with its own system art. Arcade systems also get vertical-game bezels where they apply. BIOS files are not included; README.txt says which each system needs and where it goes (Neo Geo's goes beside the games).
 - Added Nintendo 64 as an **experimental** system. Expect graphics glitches and uneven speed: Banjo-Kazooie and Mario Tennis are known to show visual problems, and many games won't run at full speed.
 
 ### Rumble
@@ -126,7 +149,7 @@ A hotfix for v1.2.
 - Downloads use verified HTTPS, SHA-256 checks and ZIP validation. The updater checks available card space and compares build dates and numbers to avoid offering older builds.
 - A progress bar covers download, verification and unpacking. The completion prompt no longer gets stuck behind the full progress bar.
 - When ready, choose **Shut Down**, then manually turn the A30 back on to finish installation. **Later** lets you return to MinUI+ and finish on a subsequent power-on.
-- Updates preserve games, saves, settings and existing custom system art, borders, music and BIOS files while updating the application and bundled tools.
+- Updates preserve games, saves, settings and existing custom system art, bezels, music and BIOS files while updating the application and bundled tools.
 - A subtle **MinUI+ version** row is available at the bottom of Settings.
 
 ### Automatic clock and connection settings
@@ -141,7 +164,7 @@ A hotfix for v1.2.
 - Reworked A30 rumble to provide gentler, variable-strength feedback instead of effectively continuous full-power vibration.
 - Corrected how strong and weak rumble channels are combined, particularly relevant to PlayStation games. Reduced the default rumble level for Game Boy/Game Boy Color and Pokémon Mini.
 - Holding MENU gives a short, gentle vibration when the game-switcher hold threshold is reached.
-- Added a **Sleep light** On/Off setting, with a preview while selecting it.
+- Added a **Sleep Light** On/Off setting, with a preview while selecting it.
 
 ### More consistent tools, sound and presentation
 
@@ -168,4 +191,4 @@ A hotfix for v1.2.
 - Added a bounded escape from a full audio buffer when the output stops draining, allowing control processing to resume instead of retrying indefinitely. Audio underruns now fill with silence instead of reversed leftover samples.
 - Corrected update-check throttling after a backward clock correction and made failed-unpacking messages acknowledge that some files may already have been copied.
 
-Features already present at launch—such as the box-art carousel, game switcher, per-game core selection, themes, automatic CPU speed, play-time tracking, borders and offline achievements—are deliberately not counted again as new additions.
+Features already present at launch—such as the box-art carousel, game switcher, per-game core selection, themes, automatic CPU speed, play-time tracking, bezels and offline achievements—are deliberately not counted again as new additions.

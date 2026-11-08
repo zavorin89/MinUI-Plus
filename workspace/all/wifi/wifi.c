@@ -452,15 +452,15 @@ void Wifi_open(SDL_Surface* main_screen) {
 				char name[128];
 				char value[64];
 				if (row_types[i]==ROW_TURN_OFF) {
-					snprintf(name, sizeof(name), "Turn Wi-Fi off");
+					snprintf(name, sizeof(name), "Turn Wi-Fi Off");
 					snprintf(value, sizeof(value), "%s", address[0] ? address : "Not connected");
 				}
 				else if (row_types[i]==ROW_AUTOSTART) {
-					snprintf(name, sizeof(name), "Connect at startup");
+					snprintf(name, sizeof(name), "Connect at Startup");
 					snprintf(value, sizeof(value), "%s", exists(AUTOSTART_OFF_PATH) ? "Off" : "On");
 				}
 				else if (row_types[i]==ROW_SAVED) {
-					snprintf(name, sizeof(name), "Saved networks");
+					snprintf(name, sizeof(name), "Saved Networks");
 					snprintf(value, sizeof(value), "%i", saved_count);
 				}
 				else {

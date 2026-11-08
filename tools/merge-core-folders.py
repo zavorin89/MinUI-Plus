@@ -106,7 +106,7 @@ class Merge:
             self.move(os.path.join(alt_dir, ".res", game + ".png"), os.path.join(main_dir, ".res", game + ".png"))
             self.move_matching(os.path.join(self.card, "Saves", alt), os.path.join(self.card, "Saves", main), names)
             self.move_matching(os.path.join(shared, ".minui", alt), os.path.join(shared, ".minui", main), names)
-            self.move_matching(os.path.join(self.card, "Borders", alt), os.path.join(self.card, "Borders", main), names)
+            self.move_matching(os.path.join(self.card, "Bezels", alt), os.path.join(self.card, "Bezels", main), names)
             for core in cores:
                 self.move_matching(os.path.join(shared, f"{alt}-{core}"), os.path.join(shared, f"{main}-{core}"), names)
                 self.move_matching(os.path.join(device, f"{alt}-{core}"), os.path.join(device, f"{main}-{core}"), names,

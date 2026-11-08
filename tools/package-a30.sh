@@ -22,6 +22,7 @@ STOCK="$(cd "$STOCK" && pwd)"
 "$REPO/tools/dev/build-https.sh"
 STAGE="${STAGE:-$(mktemp -d)}/MinUI-src"
 
+echo "== Settings will say MinUI+ $(sed -n 's/^#define MINUI_PLUS_VERSION "\([^"]*\)".*/\1/p' "$REPO/workspace/all/common/defines.h") (workspace/all/common/defines.h): is that this release?"
 echo "== staging in $STAGE"
 mkdir -p "$STAGE"
 rsync -a --delete --exclude build --exclude releases --exclude '._*' --exclude .DS_Store "$REPO/" "$STAGE/"

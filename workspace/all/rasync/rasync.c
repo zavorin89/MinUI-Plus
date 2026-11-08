@@ -578,7 +578,7 @@ static void runSync(void) {
 }
 
 // returns 1 for A, 0 for B
-static int confirm(char* msg) {
+static int confirm(char* msg, char* action) { // the A button names what it does, like every other confirmation
 	int dirty = 1;
 	int show_setting = 0;
 	PAD_reset();
@@ -592,7 +592,7 @@ static int confirm(char* msg) {
 			GFX_clear(screen);
 			GFX_blitHardwareGroup(screen, show_setting);
 			GFX_blitMessage(font.large, msg, screen, &(SDL_Rect){0,0,screen->w,screen->h});
-			GFX_blitButtonGroup((char*[]){ "B","CANCEL", "A","YES", NULL }, 1, screen, 1);
+			GFX_blitButtonGroup((char*[]){ "B","CANCEL", "A",action, NULL }, 1, screen, 1);
 			GFX_flip(screen);
 			dirty = 0;
 		}
@@ -672,7 +672,7 @@ void RetroAchievements_open(SDL_Surface* main_screen) {
 				else {
 					char msg[192];
 					snprintf(msg, sizeof(msg), "Sign out %s?\nCached achievements stay on the card", creds.username);
-					if (confirm(msg)) {
+					if (confirm(msg, "SIGN OUT")) {
 						unlink(RA_CREDS_PATH);
 						unlink(RA_CACHE_DIR "/login.json");
 						sync();
@@ -680,7 +680,7 @@ void RetroAchievements_open(SDL_Surface* main_screen) {
 				}
 			}
 			else if (!signed_in) {
-				if (confirm("Sign in to RetroAchievements first?")) signInFromConsole();
+				if (confirm("Sign in to RetroAchievements first?", "SIGN IN")) signInFromConsole();
 			}
 			else {
 				runSync();
@@ -704,16 +704,16 @@ void RetroAchievements_open(SDL_Surface* main_screen) {
 				if (i==ROW_ACCOUNT) {
 					if (signed_in) {
 						snprintf(name, sizeof(name), "Signed in as %s", creds.username);
-						snprintf(value, sizeof(value), "Sign out");
+						snprintf(value, sizeof(value), "Sign Out");
 					}
-					else snprintf(name, sizeof(name), "Sign in");
+					else snprintf(name, sizeof(name), "Sign In");
 				}
 				else if (i==ROW_SYNC) {
-					snprintf(name, sizeof(name), "Sync all games");
+					snprintf(name, sizeof(name), "Sync All Games");
 					if (synced) snprintf(value, sizeof(value), "%i cached", synced);
 				}
 				else {
-					snprintf(name, sizeof(name), "Hardcore mode");
+					snprintf(name, sizeof(name), "Hardcore Mode");
 					snprintf(value, sizeof(value), exists(RA_HARDCORE_PATH) ? "On" : "Off");
 				}
 				int y = SCALE1(ROWS_TOP + i*PILL_SIZE);

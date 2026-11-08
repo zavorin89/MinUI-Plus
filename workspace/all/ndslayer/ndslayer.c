@@ -1133,7 +1133,7 @@ static int OptionFrontend_onChange(MenuList* list, int i) {
 }
 static MenuItem frontend_items[] = {
 	{"Screen Layout", "Has its own keys under Shortcuts.", layout_labels},
-	{"Screen Border", "The frame around the screens.\nSome layouts don't have one.", border_labels},
+	{"Screen Bezel", "The bezel around the screens.\nSome layouts don't have one.", border_labels},
 	{"Main Screen", "The screen a layout shows biggest.\nHas its own keys under Shortcuts.", screen_labels},
 	{"Screen Effect", "Grid draws the DS's pixel grid, on larger screens.\nLine simulates CRT scanlines.", effect_labels},
 	{"Prevent Tearing", "Waits for the screen before showing a frame.\nTurn off if a game runs slower with it.", off_on},
@@ -1405,6 +1405,9 @@ static void runMenu(void) {
 			menu_message_until = now + 1500;
 			in_switcher = -1;
 			dirty = 1;
+		}
+		else if (PAD_justPressed(BTN_A) && selected==ITEM_LOAD && !save_exists) {
+			// an empty slot: nothing to load, so the menu stays (it says "Empty Slot")
 		}
 		else if (PAD_justPressed(BTN_A)) {
 #ifdef NDSLAYER_TEST

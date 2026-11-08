@@ -1,4 +1,4 @@
-MinUI+ is a fork of MinUI for the Miyoo A30 that brings together the best of MinUI, Onion and spruce: the same simple launcher and in-game menu, plus a box art carousel, RetroAchievements, play time tracking, menu music, borders and screen effects, Wi-Fi, a game switcher, per-game emulator cores, themes, and lots of work on speed and battery life. It comes set up to look its best from the first boot.
+MinUI+ is a fork of MinUI for the Miyoo A30 that brings together the best of MinUI, Onion and spruce: the same simple launcher and in-game menu, plus a box art carousel, RetroAchievements, play time tracking, menu music, bezels and screen effects, Wi-Fi, a game switcher, per-game emulator cores, themes, and lots of work on speed and battery life. It comes set up to look its best from the first boot.
 
 MinUI+:
 https://gitlab.com/zavorin89-group/MinUI-Plus
@@ -13,7 +13,7 @@ Installing
 
 Format a microSD card as FAT32 (MBR).
 
-Copy everything in this zip to the root of the card: the "miyoo" folder, "MinUI.zip" (without unzipping it), and the "Bios", "Roms", "Saves", "BGM", "Emus", "Tools" and "Borders" folders. Put your games in the system folders in "Roms", any bios files in "Bios", and start the A30 with the card in. The first start installs MinUI+.
+Copy everything in this zip to the root of the card: the "miyoo" folder, "MinUI.zip" (without unzipping it), and the "Bios", "Roms", "Saves", "BGM", "Emus", "Tools" and "Bezels" folders. Put your games in the system folders in "Roms", any bios files in "Bios", and start the A30 with the card in. The first start installs MinUI+.
 
 ----------------------------------------
 Updating
@@ -26,6 +26,7 @@ Shortcuts
 In a game list:
 
   L1 / R1: previous / next letter
+  UP / DOWN (carousel) or LEFT / RIGHT (list): previous / next system
   L2 / R2: change the sort order
   SELECT: list or carousel view
   Hold SELECT: pin to the game switcher
@@ -46,7 +47,7 @@ The Controls tool lists these too.
 ----------------------------------------
 Clock
 
-The clock shows beside Wi-Fi and the battery, and Wi-Fi corrects it every time it connects. Change its format (12-hour, 24-hour or off) in the settings' Clock row. The time zone is found automatically the first time, or pick yours in the Time zone row (daylight saving included). The A30 normally keeps time while it's off. If it comes back behind the last time MinUI+ saw (eg. the battery ran out), the clock stays hidden until Wi-Fi syncs it or you set it. No Wi-Fi? Enter the time in the settings' Set time row: the A30 keeps it from there, through power offs.
+The clock shows beside Wi-Fi and the battery, and Wi-Fi corrects it every time it connects. Change its format (12-hour, 24-hour or off) in the settings' Clock row. The time zone is found automatically the first time, or pick yours in the Time zone row (daylight saving included). The A30 normally keeps time while it's off. If it comes back behind the last time MinUI+ saw (eg. the battery ran out), the clock stays hidden until Wi-Fi syncs it or you set it. No Wi-Fi? Enter the time in the settings' Set Time row: the A30 keeps it from there, through power offs.
 
 ----------------------------------------
 Updates
@@ -66,9 +67,9 @@ Music
 Put mp3, ogg, flac or wav files in the "BGM" folder and turn on Music in the settings (tap MENU in the menus). Left and right on that row set its volume. Music plays in the menus and in a game's pause menu, never while you play.
 
 ----------------------------------------
-Borders and looks
+Bezels and looks
 
-Every system starts with the look that suits it: a border, an LCD grid and LCD ghosting on handhelds, scanlines on TV consoles, color correction for GBC and GBA, and the Game Boy Pocket's greys for Game Boy games. Change any of it in a game's Options > Frontend. Borders live in "Borders", as <TAG>.png (aspect scaling) and <TAG>-native.png (native scaling).
+Every system starts with the look that suits it: a bezel, an LCD grid and LCD ghosting on handhelds, scanlines on TV consoles, color correction for GBC and GBA, and the Game Boy Pocket's greys for Game Boy games. Change any of it in a game's Options > Frontend. Bezels live in "Bezels", as <TAG>.png (aspect scaling) and <TAG>-native.png (native scaling).
 
 ----------------------------------------
 RetroAchievements and Wi-Fi
@@ -117,7 +118,7 @@ PICO-8
 
 To play one cart from "Pico-8 (P8)" with the official PICO-8 instead, press MENU + Y on it and pick PICO-8 (official).
 
-MENU opens the in-game menu (Continue, Options, Quit, and your play time). Options has Screen Scaling, Screen Effect, Screen Border and Button Layout; the same settings are in MENU + Y on any of its carts or on Splore, and they apply to every cart. START opens PICO-8's own pause menu. A and X are PICO-8's O, B and Y are its X.
+MENU opens the in-game menu (Continue, Options, Quit, and your play time). Options has Screen Scaling, Screen Effect, Screen Bezel and Button Layout; the same settings are in MENU + Y on any of its carts or on Splore, and they apply to every cart. START opens PICO-8's own pause menu. A and X are PICO-8's O, B and Y are its X.
 
 Hold MENU for the Game Switcher. PICO-8 has no save states, so the switcher keeps a picture of where you were, and picking it starts the cart (or Splore) over. For save states, play the cart with fake-08.
 

@@ -4,10 +4,10 @@
 of MinUI, [Onion](https://github.com/OnionUI/Onion) and [spruce](https://github.com/spruceUI/spruceOS).** It keeps
 what makes MinUI great: one simple launcher, the same quick in-game menu everywhere, instant sleep and resume. Then it
 adds what people love about Onion and spruce: a box art carousel, RetroAchievements, play time tracking, a game
-switcher, menu music, borders and screen effects, Wi-Fi, per-game emulator cores, themes, and a lot of work on speed
+switcher, menu music, bezels and screen effects, Wi-Fi, per-game emulator cores, themes, and a lot of work on speed
 and battery life. All of it rebuilt to feel like MinUI: fast, quiet and out of the way.
 
-It's preconfigured to look its best from the first boot: every system has its border, LCD grid or scanlines,
+It's preconfigured to look its best from the first boot: every system has its bezel, LCD grid or scanlines,
 LCD ghosting and color correction already set up, and the CPU speed adjusts itself to each game.
 
 **Why:** the A30 is an underrated little handheld and a perfect everyday carry. It deserves an OS as polished and
@@ -43,7 +43,7 @@ optimized as Onion, without the clunkiness that comes with running everything th
 ## Screenshots
 
 The launcher screens are MinUI+'s own code drawing at the A30's 640x480, captured on a computer. The in-game ones
-were taken by the A30 itself, border and LCD grid included.
+were taken by the A30 itself, bezel and LCD grid included.
 
 | | |
 | :---: | :---: |
@@ -57,16 +57,20 @@ were taken by the A30 itself, border and LCD grid included.
 | **Box art** downloaded on the device | Every match side by side with yours, to pick from |
 | <img src="github/screenshots/game-menu.png" width="320" alt="Game menu"> | <img src="github/screenshots/settings.png" width="320" alt="Settings"> |
 | **Game menu**: core, box art, rename, delete | **Settings**: Wi-Fi, timers, themes, sounds, music, clock |
-| <img src="github/screenshots/ingame-gbc-native.jpg" width="320" alt="Game Boy Color native border"> | <img src="github/screenshots/ingame-gba-grid.jpg" width="320" alt="Game Boy Advance with LCD grid"> |
-| **Native borders**: the Kiwi lime Game Boy Color | **LCD grid** and border on the GBA |
+| <img src="github/screenshots/ingame-gbc-native.jpg" width="320" alt="Game Boy Color native bezel"> | <img src="github/screenshots/ingame-gba-grid.jpg" width="320" alt="Game Boy Advance with LCD grid"> |
+| **Native bezels**: the Kiwi lime Game Boy Color | **LCD grid** and bezel on the GBA |
 | <img src="github/screenshots/ingame-nds.png" width="320" alt="Final Fantasy Tactics A2 on Nintendo DS"> | <img src="github/screenshots/ingame-n64.png" width="320" alt="Ocarina of Time on Nintendo 64"> |
-| **[Nintendo DS](#nintendo-ds)** with a border and both screens | **[Nintendo 64](#nintendo-64)**, experimental |
+| **[Nintendo DS](#nintendo-ds)** with a bezel and both screens | **[Nintendo 64](#nintendo-64)**, experimental |
 | <img src="github/screenshots/most-played.png" width="320" alt="Play Time"> | <img src="github/screenshots/controls.png" width="320" alt="Controls tool"> |
 | **Play Time**: your games ranked by hours played | **Controls**: the shortcuts you can't see |
 
 <p align="center"><img src="github/screenshots/themes.png" width="640" alt="Color themes"><br><b>Color themes</b> for the whole interface (eleven in all)</p>
 
 ## What's new in v1.2
+
+**v1.2.2:** Up / Down in the carousel and Left / Right in the list switch systems, the Borders folder is now Bezels
+(moved for you on update), brighter Settings with scrolling descriptions, and fixes for very long names and large
+multi-disc playlists. See CHANGES.txt.
 
 **v1.2.1 hotfix:** the volume and brightness bar no longer shows up faint after fading out, and RetroAchievements no
 longer says "Invalid JSON" offline after a dropped connection saved half of a game's achievement list.
@@ -79,7 +83,7 @@ Everything that changed from v1.1. On v1.1 the built-in updater offers it; on v1
 - If you've bought PICO-8, play carts with it, Splore included, in the new `Pico-8 Native (PICO8)` folder. PICO-8
   isn't included
 - It plays like every other system: MENU opens the in-game menu with your play time, and Options has Screen Scaling,
-  Screen Effect, Screen Border and Button Layout. START is PICO-8's own pause menu, and the power button sleeps
+  Screen Effect, Screen Bezel and Button Layout. START is PICO-8's own pause menu, and the power button sleeps
 - The same settings are in MENU + Y on its carts and on Splore. Fullscreen with the LCD grid is the default
 - Hold MENU for the game switcher. PICO-8 has no save states, so the switcher keeps a picture and starts the cart over,
   and says so under the picture
@@ -93,7 +97,7 @@ Everything that changed from v1.1. On v1.1 the built-in updater offers it; on v1
 
 **Box Art**
 
-- Much faster on a big card: opening it no longer reads every piece of art, and Find box art > MISSING ONLY skips games
+- Much faster on a big card: opening it no longer reads every piece of art, and Find Box Art > MISSING ONLY skips games
   the library had no match for in the last 14 days (REPLACE still tries them)
 - Art it saves is smaller, and resizing also shrinks older art that had transparency
 - Fixed the game lists scrolling slowly after using Box Art
@@ -110,7 +114,7 @@ Everything that changed from v1.1. On v1.1 the built-in updater offers it; on v1
 
 - Changing the volume or brightness during a game now shows the bar over it on every system, PICO-8, fake-08 and the
   DS included, and each step clicks as it does in the menus
-- The bar also shows in the screens that didn't have it: deleting a game, choosing a core, the game menu, Set time
+- The bar also shows in the screens that didn't have it: deleting a game, choosing a core, the game menu, Set Time
   and messages in the in-game menu
 - PICO-8's in-game menu clicks when you move, choose and go back, like every other system's
 
@@ -130,7 +134,7 @@ Everything that changed from v1.07. On v1.07 or older? [Install this one by hand
 - New system, through DraStic, which [you download yourself](#nintendo-ds)
 - The same pause menu as every other system, with save states and their pictures, play time, the game switcher and
   resume
-- Screen layouts, borders, Main Screen, Screen Effect, Prevent Tearing, and rebindable controls and shortcuts
+- Screen layouts, bezels, Main Screen, Screen Effect, Prevent Tearing, and rebindable controls and shortcuts
 - RetroAchievements (softcore)
 - CPU Speed and Thumbstick rows in the game menu (MENU + Y)
 - Renaming or deleting a DS game takes its saves, save states and settings along
@@ -145,7 +149,7 @@ Everything that changed from v1.07. On v1.07 or older? [Install this one by hand
 
 **Clock**
 
-- New **Set time** in Settings sets the clock without Wi-Fi
+- New **Set Time** in Settings sets the clock without Wi-Fi
 - The clock now stays right while the A30 is off, and shows only once it's been synced over Wi-Fi or set by hand. It
   may stay hidden after this update until you do one of those
 
@@ -180,11 +184,11 @@ Everything that changed from v1.07. On v1.07 or older? [Install this one by hand
 - **Favorites**: mark any game with Y and it joins one list with every system's favorites, with box art, in the
   list or the carousel, sorted A to Z, by system, or newest first
 - **Background music** in the menus and the pause menu, from your own mp3, ogg, flac or wav files
-- **Borders** for every handheld system, at aspect and at native scaling, in each console's own colors
+- **Bezels** for every handheld system, at aspect and at native scaling, in each console's own colors
 - **Preconfigured looks**: LCD grid and ghosting on handhelds, scanlines on TV consoles, Game Boy Pocket greys,
   color correction for GBC and GBA
 - **Nintendo DS** through DraStic, with the same in-game menu as every other system: save states, screen layouts,
-  borders, CPU speed and RetroAchievements. [DraStic is a separate download](#nintendo-ds)
+  bezels, CPU speed and RetroAchievements. [DraStic is a separate download](#nintendo-ds)
 - **Nintendo 64**, experimental: [your mileage may vary](#nintendo-64)
 - **Arcade and more**: Capcom Play System 1, 2 and 3, Final Burn Neo, MAME 2003+, Neo Geo, Sega CD and Sega 32X
 - **Auto CPU speed**: each game runs at the lowest speed that keeps it smooth, and remembers what it needed.
@@ -201,11 +205,11 @@ Everything that changed from v1.07. On v1.07 or older? [Install this one by hand
 
 ## Installing
 
-MinUI+ is one download with everything in it: every system, the borders and the tools.
+MinUI+ is one download with everything in it: every system, the bezels and the tools.
 
 1. Format a microSD card as **FAT32**.
 2. Unzip `MinUIPlus-<date>.zip` and copy everything in it to the root of the card: the `miyoo` folder,
-   `MinUI.zip` (leave it zipped), and the `Bios`, `Roms`, `Saves`, `BGM`, `Emus`, `Tools` and `Borders` folders.
+   `MinUI.zip` (leave it zipped), and the `Bios`, `Roms`, `Saves`, `BGM`, `Emus`, `Tools` and `Bezels` folders.
 3. Put your games in the fully named system folders in `Roms` (for example, `Game Boy Advance (GBA)`). Do not
    create shorter duplicate folders such as `GBA`. Put any BIOS files your systems need in `Bios`, insert the card
    and turn the A30 on. The first start installs MinUI+.
@@ -221,7 +225,7 @@ From v1.1 on, MinUI+ updates itself over Wi-Fi, from the
 
 **On v1.07 or older, install v1.1 by hand once**, since those versions only know the old address. Copy `MinUI.zip`
 from the release to the root of the card (leave it zipped). To get the new systems too, also copy the zip's `Emus`
-folder, `Tools`, `Roms`, `Bios` and `Borders`, leaving out anything you've changed. Your games, saves and settings are
+folder, `Tools`, `Roms`, `Bios` and `Bezels`, leaving out anything you've changed. Your games, saves and settings are
 kept.
 
 ## The launcher
@@ -237,6 +241,8 @@ kept.
 ### Finding games
 
 - **L1 / R1** jump to the previous or next letter, with a big letter popup showing where you are.
+- In a system's games, **Up / Down** in the carousel or **Left / Right** in the list go to the previous or next
+  system.
 - **L2 / R2** change the sort order: A to Z, Z to A, recently played, or favorites first.
 - **START** picks a random game. In the system list it picks a random system too, and keeps picking from every
   system each time you press it, until you open a system yourself.
@@ -265,17 +271,17 @@ MinUI+ keeps track of how long you play every game, automatically, from the mome
 
 ### The game menu (MENU + Y)
 
-- **Change core**: some systems have more than one emulator. Pick one per game, with a line about what each is good
+- **Change Core**: some systems have more than one emulator. Pick one per game, with a line about what each is good
   at; the system's default stays on top. Saves and states are kept per core, so switching never loses progress.
-- **CPU speed**: this game's [CPU speed](#cpu-speed), without starting it.
+- **CPU Speed**: this game's [CPU speed](#cpu-speed), without starting it.
 - **Rumble Strength**: Off or 1 to 10 for this game, on the systems with rumble.
 - **Thumbstick** (Nintendo DS): whether the stick moves the stylus or acts as a second d-pad.
-- **Get box art** / **Replace box art**: downloads this game's cover from the libretro thumbnail library (turns
+- **Get Box Art** / **Replace Box Art**: downloads this game's cover from the libretro thumbnail library (turns
   Wi-Fi on if you'd like). When there's more than one match (regions, revisions), every one is downloaded and shown
   beside the art you have, to flip through and pick from. Covers are resized to 250 pixels wide so they load fast.
-- **Rename**: edit the game's name on the on-screen keyboard. Its box art, saves, save states, settings, border,
+- **Rename**: edit the game's name on the on-screen keyboard. Its box art, saves, save states, settings, bezel,
   play time, favorite, recents and collections all follow the new name. Multi-disc games too.
-- **Delete game**: asks first, then whether to also delete its saves, and its box art.
+- **Delete Game**: asks first, then whether to also delete its saves, and its box art.
 
 ### Multi-disc games
 
@@ -330,15 +336,15 @@ of where you left it. A picks a game up from that exact moment. In a game, holdi
   **Update Available!** appears above the systems. Open it to read the patch notes and confirm the update; the
   progress bar follows the verified download and installation. When it is ready, choose **Shut Down**, then turn
   the A30 back on to finish, or choose **Later** to return to MinUI+ and shut down when convenient
-- **Sleep after** and **Power off after** timers
+- **Sleep After** and **Power Off After** timers
 - **Theme**: several color themes for the whole interface
-- **Menu sounds**: subtle clicks for moving, opening and going back
+- **Menu Sounds**: subtle clicks for moving, opening and going back
 - **Clock**: shows beside Wi-Fi and the battery, or at the top left in the carousel, once it's been set. It syncs
   every time Wi-Fi connects, and keeps its time while the A30 is off. 12-hour, 24-hour or off
-- **Set time**: sets the clock by hand, no Wi-Fi needed
-- **Time zone**: Automatic (looked up from your connection the first time it syncs) or pick yours, daylight saving
+- **Set Time**: sets the clock by hand, no Wi-Fi needed
+- **Time Zone**: Automatic (looked up from your connection the first time it syncs) or pick yours, daylight saving
   included
-- **Sleep light**: whether the power light stays on while asleep
+- **Sleep Light**: whether the power light stays on while asleep
 - **Swap A and X**: A resumes and X opens in game lists, if you'd rather
 - **Music**: background music on or off, and its volume (Left/Right). Put songs in the `BGM` folder
 - **MinUI+ version**: shown subtly in the final row at the bottom
@@ -364,7 +370,7 @@ decoded a little ahead on a lowest-priority thread, so it never slows the menus:
 
 The MinUI pause menu, quicker to open, with:
 
-- **Save / Load** with a picture of each save state slot as the game looked, border and grid included
+- **Save / Load** with a picture of each save state slot as the game looked, bezel and grid included
 - **Achievements** (with RetroAchievements set up): every achievement with its badge, locked or unlocked, sortable
 - **Options**: emulator options, controls and shortcuts, now with clicks for moving and changing values
 - **A long game name** scrolls instead of being cut off
@@ -375,11 +381,11 @@ Save states are written beside the old one first, so losing power mid-save doesn
 
 ### Screen
 
-- **Borders**: each handheld has a border at aspect scaling, and at native scaling a full console face in its shell
+- **Bezels**: each handheld has a bezel at aspect scaling, and at native scaling a full console face in its shell
   color (silver Game Boy Pocket, Kiwi lime Game Boy Color, indigo Game Boy Advance, black Game Gear, Neo Geo Pocket
   and Color) with a dark screen lens, a glowing power light and the console's logo. Turn them on or off per system
-  in Options > Frontend > Screen Border. Add your own as `Borders/<SYSTEM>.png` (or `<SYSTEM>-native.png`), or for one
-  game as `Borders/<SYSTEM>/<game file>.png`.
+  in Options > Frontend > Screen Bezel. Add your own as `Bezels/<SYSTEM>.png` (or `<SYSTEM>-native.png`), or for one
+  game as `Bezels/<SYSTEM>/<game file>.png`.
 - **Effects**: an LCD grid, or scanlines, at every scaling.
 - **LCD ghosting**: handhelds blend frames like their slow original screens did.
 - **Color correction**: GBC and GBA colors as their dim original screens showed them, instead of oversaturated.
@@ -428,7 +434,7 @@ Sign in with the RetroAchievements tool (on the on-screen keyboard), then just p
 
 Each system starts with the look that suits it:
 
-| | Scaling | Effect | Border | Ghosting | Colors |
+| | Scaling | Effect | Bezel | Ghosting | Colors |
 | --- | --- | --- | --- | --- | --- |
 | Game Boy | Aspect | LCD grid | Game Boy Pocket | LCD ghosting | Pocket greys |
 | Game Boy Color | Aspect | LCD grid | Game Boy Color | LCD ghosting | Color correction |
@@ -519,7 +525,7 @@ MENU opens the same pause menu as every other system: Continue, Save, Load, Achi
 All of these can be changed in Options > Shortcuts and Options > Controls. Options also has:
 
 - **Frontend**: Screen Layout (Side by Side, Side by Side Large, Book, Single, Single Full, Stacked, Stacked Large, Big
-  Over Small, Big Beside Small, Big + Corner, Bigger + Corner, Bigger + Below; it starts on Big + Corner), Screen Border, Main Screen, Screen Effect (None, Line, Grid), Prevent Tearing,
+  Over Small, Big Beside Small, Big + Corner, Bigger + Corner, Bigger + Below; it starts on Big + Corner), Screen Bezel, Main Screen, Screen Effect (None, Line, Grid), Prevent Tearing,
   Thumbstick (Stylus or D-Pad) and CPU Speed.
 - **Emulator**: DraStic's Frameskip, Frames To Skip, Threaded 3D, Fix Main 2D Screen, Disable Edge Marking, Cheats,
   Sound, FPS Counter and Language.
@@ -569,7 +575,7 @@ To play one `Pico-8 (P8)` cart with the official PICO-8 instead, press MENU + Y 
 It plays like the other systems:
 
 - **MENU** opens the in-game menu: Continue, Options and Quit, with your play time. **Options > Frontend** has Screen
-  Scaling (Fullscreen or Integer), Screen Effect (Grid, Line or None) and Screen Border (`Borders/P8.png`, or one named
+  Scaling (Fullscreen or Integer), Screen Effect (Grid, Line or None) and Screen Bezel (`Bezels/P8.png`, or one named
   after the cart); **Options > Controls** has the Button Layout. The same settings are in MENU + Y on any of its carts
   or on Splore, and they apply to every cart.
 - **START** opens PICO-8's own pause menu. A and X are PICO-8's O, B and Y are its X, and the d-pad and stick both move.
@@ -642,6 +648,7 @@ Everything on screen has a button hint. These are the ones you won't see:
 | In a game list | |
 | --- | --- |
 | L1 / R1 | Previous / next letter |
+| Up / Down (carousel), Left / Right (list) | Previous / next system |
 | L2 / R2 | Sort order |
 | SELECT | List or carousel |
 | Hold SELECT | Pin to the game switcher |
@@ -675,7 +682,7 @@ Everything on screen has a button hint. These are the ones you won't see:
 | `Bios/<TAG>` | [BIOS files](#bios-files) |
 | `Saves/<TAG>` | In-game saves |
 | `BGM` | Music for the menus: mp3, ogg, flac or wav |
-| `Borders` | Screen borders, `<TAG>.png` and `<TAG>-native.png` |
+| `Bezels` | Screen bezels, `<TAG>.png` and `<TAG>-native.png` |
 | `Emus/my282/NDS.pak/drastic` | DraStic, with DS saves and save states ([setup](#nintendo-ds)) |
 | `Tools` | Play Time, RetroAchievements, Box Art and Controls (Wi-Fi is in the settings) |
 | `.userdata` | Settings, save states, achievements, play time, logs (`.userdata/my282/logs`) |
@@ -698,7 +705,7 @@ mounted, and builds every core from source, which takes a while.
 Some extra pieces live in `tools/`:
 
 - `tools/set-defaults.py` writes the per-system looks into each system's `default.cfg`
-- `tools/borders/make-native-borders.py` and `make-gba-logo.py` generate the native borders and the GBA logo
+- `tools/borders/make-native-borders.py` and `make-gba-logo.py` generate the native bezels and the GBA logo
 - `tools/merge-core-folders.py` moves games from a core's own system folder (eg. an `SFC10` folder) into the main
   one, keeping each on its core and moving its saves, states and art along
 
@@ -720,8 +727,8 @@ MinUI+ was built with a lot of help from AI (Claude), and tested on a real A30.
   for the systems it doesn't cover (Virtual Boy, Super Game Boy, Pokémon mini, Pico-8) and the Kiwi lime Game Boy
   Color were made for MinUI+ in the same style. The arcade systems' art is credited, with its licenses, in
   `Roms/.res/CREDITS.txt`.
-- **Screen borders** by **drkhrse**, from the [drkhrse Miyoo bezels](https://github.com/drkhrse/drkhrse_miyoo_bezels).
-  The native borders are made for MinUI+ around their logos and power lights.
+- **Screen bezels** by **drkhrse**, from the [drkhrse Miyoo bezels](https://github.com/drkhrse/drkhrse_miyoo_bezels).
+  The native bezels are made for MinUI+ around their logos and power lights.
 - **Emulator cores** from **[libretro](https://github.com/libretro)** and their authors: gambatte, gpSP, mGBA,
   FCEUmm, snes9x 2005 / 2010 / current, Supafaust, PicoDrive, PCSX ReARMed, RACE, Beetle PCE Fast, Beetle VB,
   PokeMini, fake-08, FB Alpha 2012, Final Burn Neo, MAME 2003-Plus and ParaLLEl N64. Each is under its own license;

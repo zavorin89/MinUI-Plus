@@ -6,7 +6,7 @@
 # running Pico-8 (P8) as before.
 #
 # libp8layer.so (workspace/all/p8layer) makes it play like the other systems: MENU opens a game menu (screen effect,
-# scaling, border, buttons, quit), START is PICO-8's pause menu, A/X are O and B/Y are X, the power button sleeps, and
+# scaling, bezel, buttons, quit), START is PICO-8's pause menu, A/X are O and B/Y are X, the power button sleeps, and
 # the volume is the launcher's.
 
 PAK="$(cd "$(dirname "$0")" && pwd)"

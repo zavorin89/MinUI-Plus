@@ -1,15 +1,15 @@
-# Screen borders
+# Screen bezels
 
-minarch's "Screen border" option fills the black bars around a game with `Borders/<TAG>.png` (640x480).
+minarch's "Screen bezel" option fills the black bars around a game with `Bezels/<TAG>.png` (640x480).
 The game is drawn on top at its normal size, so only the area outside it shows.
 
-The release ships drkhrse's Miyoo bezels (github.com/drkhrse/drkhrse_miyoo_bezels) in `skeleton/EXTRAS/Borders/`,
+The release ships drkhrse's Miyoo bezels (github.com/drkhrse/drkhrse_miyoo_bezels) in `skeleton/EXTRAS/Bezels/`,
 credited in its `CREDITS.txt`. The pack has no license file, so they're included with credit and a link.
-The steps below are for making borders for systems the pack doesn't cover, in the same style.
+The steps below are for making bezels for systems the pack doesn't cover, in the same style.
 
 ## Making them with ChatGPT
 
-Attach two of the shipped borders (eg. `GBC.png` and `GG.png`) as references and use:
+Attach two of the shipped bezels (eg. `GBC.png` and `GG.png`) as references and use:
 
 > Create a 640x480 image in exactly the same style as the attached references: dark charcoal device-bezel bands with
 > subtle texture, a small red power light and grey "POWER" label, and the system's name or wordmark in the console's
@@ -41,4 +41,4 @@ bands in or out to meet it when it isn't exactly 3:4.
 
 ## Installing
 
-Copy `generated/<TAG>.png` to `Borders/<TAG>.png` on the card, and to `skeleton/EXTRAS/Borders/` for the release.
+Copy `generated/<TAG>.png` to `Bezels/<TAG>.png` on the card, and to `skeleton/EXTRAS/Bezels/` for the release.

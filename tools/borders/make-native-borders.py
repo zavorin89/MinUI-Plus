@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Makes Borders/<TAG>-native.png: the borders used at native scaling, where the game is smaller than the normal
+"""Makes Bezels/<TAG>-native.png: the borders used at native scaling, where the game is smaller than the normal
 (aspect) borders leave room for. Each is the handheld's face in its shell color around the game: a dark screen lens,
 the logos and power light from drkhrse's borders, and its controls and speaker, drawn small around the edges.
 
-    python3 tools/borders/make-native-borders.py skeleton/EXTRAS/Borders [TAG...]
+    python3 tools/borders/make-native-borders.py skeleton/EXTRAS/Bezels [TAG...]
 writes them next to the normal borders (all of them when no TAG is given). Plain Python, no libraries.
 """
 import colorsys
@@ -374,7 +374,7 @@ class Face:
 
 
 def main():
-	folder = sys.argv[1] if len(sys.argv) > 1 else "skeleton/EXTRAS/Borders"
+	folder = sys.argv[1] if len(sys.argv) > 1 else "skeleton/EXTRAS/Bezels"
 	tags = sys.argv[2:] or list(SYSTEMS) + list(SAME_AS)
 	made = {}
 	for tag in tags:

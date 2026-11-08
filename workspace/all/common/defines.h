@@ -53,7 +53,8 @@
 #define FAUX_SWITCHER_PATH SDCARD_PATH "/Game Switcher" // opened by holding MENU, not listed in the root
 #define FAUX_UPDATE_PATH SDCARD_PATH "/Update Available!" // first in the system list only when GitLab has a newer release
 #define COLLECTIONS_PATH SDCARD_PATH "/Collections"
-#define BORDERS_PATH SDCARD_PATH "/Borders"
+#define BEZELS_PATH SDCARD_PATH "/Bezels"
+#define MINUI_PLUS_VERSION "v1.2.2" // shown in Settings: change it with every release (tools/package-a30.sh prints it)
 
 #define LAST_PATH "/tmp/last.txt" // transient
 #define LAST_BACKUP_PATH SHARED_USERDATA_PATH "/.minui/last.txt" // the same, on the card in case /tmp loses it (cleared at boot by launch.sh)

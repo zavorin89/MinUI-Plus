@@ -207,7 +207,7 @@ install_update() {
 	"$UNZIP" -t "$DOWNLOAD" >/dev/null 2>&1 || fail "The downloaded ZIP is damaged"
 
 	# Merge more than MinUI.zip (patches also update tools, emulator paks and art), in two passes: MinUI+'s own files
-	# are replaced, while the folders people make their own (system art, borders, songs, BIOS, saves) only gain what's
+	# are replaced, while the folders people make their own (system art, bezels, songs, BIOS, saves) only gain what's
 	# new, so a customized one is never overwritten. The first-install miyoo folder isn't needed on an installed card.
 	# (unzip exits 11 when a pattern matches nothing, 1 for warnings: neither is a failure)
 	echo 88 > "$PROGRESS"
@@ -215,7 +215,7 @@ install_update() {
 	"$UNZIP" -o "$DOWNLOAD" MinUI.zip README.txt CHANGES.txt 'Tools/*' 'Emus/*' '.res/*' -d "$SDCARD_PATH" >>"$LOG" 2>&1
 	case $? in 0|1|11) ;; *) fail "The update could not be unpacked" ;; esac
 	echo 94 > "$PROGRESS"
-	"$UNZIP" -n "$DOWNLOAD" 'Roms/*' 'Borders/*' 'BGM/*' 'Bios/*' 'Saves/*' -d "$SDCARD_PATH" >>"$LOG" 2>&1
+	"$UNZIP" -n "$DOWNLOAD" 'Roms/*' 'Bezels/*' 'BGM/*' 'Bios/*' 'Saves/*' -d "$SDCARD_PATH" >>"$LOG" 2>&1
 	case $? in 0|1|11) ;; *) fail "The update could not be unpacked" ;; esac
 	[ -f "$SDCARD_PATH/MinUI.zip" ] || fail "The update did not contain MinUI.zip"
 	rm -f "$DOWNLOAD" "$AVAILABLE" "$NOTES"

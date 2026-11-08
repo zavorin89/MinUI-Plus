@@ -1,11 +1,11 @@
-"""The arcade systems' borders (Borders/<TAG>.png), made for MinUI+ in the style of drkhrse's: dark charcoal bands with
+"""The arcade systems' borders (Bezels/<TAG>.png), made for MinUI+ in the style of drkhrse's: dark charcoal bands with
 a red power light on the left and the system's name up the right, in MinUI's own font (BPreplay Bold).
 
 Arcade games fill the A30's 4:3 screen, so these only show around vertical games: the see-through window is a 3:4
 game at full height (140, 0, 360 x 480), and minarch moves the bands in or out to meet a game of another shape.
 
 Run with the system-art venv (it has Pillow):  work/system-art-venv/bin/python tools/borders/make-arcade-borders.py
-Writes tools/borders/generated/<TAG>.png and copies them to skeleton/EXTRAS/Borders/."""
+Writes tools/borders/generated/<TAG>.png and copies them to skeleton/EXTRAS/Bezels/."""
 import os
 import random
 import shutil
@@ -115,7 +115,7 @@ def make(tag):
 
 def main():
 	out_dir = os.path.join(HERE, "generated")
-	ship_dir = os.path.join(REPO, "skeleton/EXTRAS/Borders")
+	ship_dir = os.path.join(REPO, "skeleton/EXTRAS/Bezels")
 	os.makedirs(out_dir, exist_ok=True)
 	for tag in SYSTEMS:
 		path = os.path.join(out_dir, tag + ".png")

@@ -73,6 +73,17 @@ done
 # system row. As above, an existing folder with games is preserved for manual migration.
 rmdir "$SDCARD_PATH/Roms/Super Nintendo (SUPA)" 2>/dev/null || true
 
+# The Borders folder is called Bezels now. Move it over; where a manual install already added Bezels, the person's
+# Borders copies win, so a bezel they changed or added is kept.
+OLD_BEZELS="$SDCARD_PATH/Borders"
+if [ -d "$OLD_BEZELS" ]; then
+	if [ ! -d "$SDCARD_PATH/Bezels" ]; then
+		mv "$OLD_BEZELS" "$SDCARD_PATH/Bezels"
+	elif cp -R "$OLD_BEZELS/." "$SDCARD_PATH/Bezels/"; then
+		rm -rf "$OLD_BEZELS"
+	fi
+fi
+
 # MinUI+ only exposes its own focused tools. Older packages also installed six stock Extras that were never part of
 # that set. Move them into hidden userdata instead of deleting them, so an existing user can recover one manually.
 # Only the once: a tool someone puts on the card afterwards is theirs to keep.

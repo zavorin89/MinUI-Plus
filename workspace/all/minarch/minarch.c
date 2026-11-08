@@ -526,8 +526,8 @@ static void RTC_write(void) {
 ///////////////////////////////////////
 
 static int state_slot = 0;
-static void State_getPath(char* filename) {
-	sprintf(filename, "%s/%s.st%i", core.states_dir, game.name, state_slot);
+static void State_getPath(char* filename) { // filename is MAX_PATH*2
+	snprintf(filename, MAX_PATH*2, "%s/%s.st%i", core.states_dir, game.name, state_slot);
 }
 static void State_read(void) { // from picoarch
 	size_t state_size = core.serialize_size();
@@ -542,7 +542,7 @@ static void State_read(void) { // from picoarch
 		goto error;
 	}
 
-	char filename[MAX_PATH];
+	char filename[MAX_PATH*2];
 	State_getPath(filename);
 	
 	FILE *state_file = fopen(filename, "r");
@@ -586,7 +586,7 @@ static void State_write(void) { // from picoarch
 		goto error;
 	}
 
-	char filename[MAX_PATH];
+	char filename[MAX_PATH*2];
 	State_getPath(filename);
 	
 	if (!core.serialize(state, state_size)) {
@@ -943,8 +943,8 @@ static struct Config {
 			},
 			[FE_OPT_BORDER] = {
 				.key	= "minarch_screen_border",
-				.name	= "Screen Border",
-				.desc	= "Fills the black bars around the game\nwith an image from /Borders.\nThe game itself is never resized.",
+				.name	= "Screen Bezel",
+				.desc	= "Fills the black bars around the game\nwith an image from /Bezels.\nThe game itself is never resized.",
 				.default_value = 0,
 				.value = 0,
 				.count = 2,
@@ -1253,11 +1253,11 @@ static void setOverclock(int i) {
 	}
 }
 static void setBorder(int enabled) {
-	// a per-game border (Borders/<TAG>/<rom>.png) wins over the system one (Borders/<TAG>.png)
+	// a per-game bezel (Bezels/<TAG>/<rom>.png) wins over the system one (Bezels/<TAG>.png)
 	char path[MAX_PATH] = {0};
 	if (enabled) {
-		sprintf(path, "%s/%s/%s.png", BORDERS_PATH, core.tag, game.name);
-		if (!exists(path)) sprintf(path, "%s/%s.png", BORDERS_PATH, core.tag);
+		sprintf(path, "%s/%s/%s.png", BEZELS_PATH, core.tag, game.name);
+		if (!exists(path)) sprintf(path, "%s/%s.png", BEZELS_PATH, core.tag);
 		if (!exists(path)) path[0] = '\0';
 	}
 	GFX_setBorder(path[0] ? path : NULL);
@@ -3536,11 +3536,11 @@ static struct {
 	SDL_Surface* overlay;
 	char* items[MENU_ITEM_COUNT];
 	char* disc_paths[9]; // up to 9 paths, Arc the Lad Collection is 7 discs
-	char minui_dir[256];
-	char slot_path[256];
-	char base_path[256];
-	char bmp_path[256];
-	char txt_path[256];
+	char minui_dir[MAX_PATH];
+	char slot_path[MAX_PATH*2];
+	char base_path[MAX_PATH];
+	char bmp_path[MAX_PATH*2];
+	char txt_path[MAX_PATH*2];
 	int disc;
 	int total_discs;
 	int slot;
@@ -3573,32 +3573,31 @@ void Menu_init(void) {
 	
 	char emu_name[256];
 	getEmuName(game.path, emu_name);
-	sprintf(menu.minui_dir, SHARED_USERDATA_PATH "/.minui/%s", emu_name);
+	snprintf(menu.minui_dir, sizeof(menu.minui_dir), SHARED_USERDATA_PATH "/.minui/%s", emu_name);
 	mkdir(menu.minui_dir, 0755);
 
-	sprintf(menu.slot_path, "%s/%s.txt", menu.minui_dir, game.name);
+	snprintf(menu.slot_path, sizeof(menu.slot_path), "%s/%s.txt", menu.minui_dir, game.name);
 	
 	if (simple_mode) menu.items[ITEM_OPTS] = "Reset";
 	
 	if (game.m3u_path[0]) {
 		char* tmp;
-		strcpy(menu.base_path, game.m3u_path);
+		snprintf(menu.base_path, sizeof(menu.base_path), "%s", game.m3u_path);
 		tmp = strrchr(menu.base_path, '/') + 1;
 		tmp[0] = '\0';
 		
 		//read m3u file
 		FILE* file = fopen(game.m3u_path, "r");
 		if (file) {
-			char line[256];
-			while (fgets(line,256,file)!=NULL) {
+			char line[MAX_PATH];
+			// (disc_paths holds 9: a longer playlist's other discs can't be picked here)
+			while (menu.total_discs<9 && fgets(line,sizeof(line),file)!=NULL) {
 				normalizeNewline(line);
 				trimTrailingNewlines(line);
 				if (strlen(line)==0) continue; // skip empty lines
 		
-				char disc_path[256];
-				strcpy(disc_path, menu.base_path);
-				tmp = disc_path + strlen(disc_path);
-				strcpy(tmp, line);
+				char disc_path[MAX_PATH*2];
+				snprintf(disc_path, sizeof(disc_path), "%s%s", menu.base_path, line);
 				
 				// found a valid disc path
 				if (exists(disc_path)) {
@@ -4783,13 +4782,13 @@ static void Menu_updateState(void) {
 	int last_slot = state_slot;
 	state_slot = menu.slot;
 
-	char save_path[256];
+	char save_path[MAX_PATH*2];
 	State_getPath(save_path);
 
 	state_slot = last_slot;
 
-	sprintf(menu.bmp_path, "%s/%s.%d.bmp", menu.minui_dir, game.name, menu.slot);
-	sprintf(menu.txt_path, "%s/%s.%d.txt", menu.minui_dir, game.name, menu.slot);
+	snprintf(menu.bmp_path, sizeof(menu.bmp_path), "%s/%s.%d.bmp", menu.minui_dir, game.name, menu.slot);
+	snprintf(menu.txt_path, sizeof(menu.txt_path), "%s/%s.%d.txt", menu.minui_dir, game.name, menu.slot);
 	
 	menu.save_exists = exists(save_path);
 	menu.preview_exists = menu.save_exists && exists(menu.bmp_path);
@@ -5015,12 +5014,12 @@ static void Menu_loadState(void) {
 	
 	if (menu.save_exists) {
 		if (menu.total_discs) {
-			char slot_disc_name[256];
-			getFile(menu.txt_path, slot_disc_name, 256);
+			char slot_disc_name[MAX_PATH];
+			getFile(menu.txt_path, slot_disc_name, sizeof(slot_disc_name));
 		
-			char slot_disc_path[256];
-			if (slot_disc_name[0]=='/') strcpy(slot_disc_path, slot_disc_name);
-			else sprintf(slot_disc_path, "%s%s", menu.base_path, slot_disc_name);
+			char slot_disc_path[MAX_PATH*2];
+			if (slot_disc_name[0]=='/') snprintf(slot_disc_path, sizeof(slot_disc_path), "%s", slot_disc_name);
+			else snprintf(slot_disc_path, sizeof(slot_disc_path), "%s%s", menu.base_path, slot_disc_name);
 		
 			char* disc_path = menu.disc_paths[menu.disc];
 			if (!exactMatch(slot_disc_path, disc_path)) {
@@ -5034,11 +5033,11 @@ static void Menu_loadState(void) {
 	}
 }
 
-static char* getAlias(char* path, char* alias) {
+static void getAlias(char* path, char* alias) { // alias is MAX_PATH
 	// LOG_info("alias path: %s\n", path);
 	char* tmp;
-	char map_path[256];
-	strcpy(map_path, path);
+	char map_path[MAX_PATH];
+	snprintf(map_path, sizeof(map_path), "%s", path);
 	tmp = strrchr(map_path, '/');
 	if (tmp) {
 		tmp += 1;
@@ -5052,8 +5051,8 @@ static char* getAlias(char* path, char* alias) {
 	if (exists(map_path)) {
 		FILE* file = fopen(map_path, "r");
 		if (file) {
-			char line[256];
-			while (fgets(line,256,file)!=NULL) {
+			char line[MAX_PATH];
+			while (fgets(line,sizeof(line),file)!=NULL) {
 				normalizeNewline(line);
 				trimTrailingNewlines(line);
 				if (strlen(line)==0) continue; // skip empty lines
@@ -5064,7 +5063,7 @@ static char* getAlias(char* path, char* alias) {
 					char* key = line;
 					char* value = tmp+1;
 					if (exactMatch(file_name,key)) {
-						strcpy(alias, value);
+						snprintf(alias, MAX_PATH, "%s", value);
 						break;
 					}
 				}
@@ -5155,7 +5154,7 @@ static void Menu_loop(void) {
 	
 	// path and string things
 	char* tmp;
-	char rom_name[256]; // without extension or cruft
+	char rom_name[MAX_PATH]; // without extension or cruft
 	getDisplayName(game.name, rom_name);
 	getAlias(game.path, rom_name);
 	
@@ -5212,6 +5211,7 @@ static void Menu_loop(void) {
 				if (menu.disc<0) menu.disc += menu.total_discs;
 				dirty = 1;
 				sprintf(disc_name, "Disc %i", menu.disc+1);
+				SFX_play(SFX_TICK);
 			}
 			else if (selected==ITEM_SAVE || selected==ITEM_LOAD) {
 				menu.slot -= 1;
@@ -5226,6 +5226,7 @@ static void Menu_loop(void) {
 				if (menu.disc==menu.total_discs) menu.disc -= menu.total_discs;
 				dirty = 1;
 				sprintf(disc_name, "Disc %i", menu.disc+1);
+				SFX_play(SFX_TICK);
 			}
 			else if (selected==ITEM_SAVE || selected==ITEM_LOAD) {
 				menu.slot += 1;
@@ -5257,6 +5258,9 @@ static void Menu_loop(void) {
 			menu_message_until = now + 1500;
 			in_switcher = -1;
 			dirty = 1;
+		}
+		else if (PAD_justPressed(BTN_A) && selected==ITEM_LOAD && !menu.save_exists) {
+			// an empty slot: nothing to load, so the menu stays (it says "Empty Slot")
 		}
 		else if (PAD_justPressed(BTN_A)) {
 			Menu_waitForSaves(); // everything here can run the game or save again
