@@ -210,6 +210,7 @@ SDL_Surface* PLAT_initVideo(void) {
 	
 	SDL_InitSubSystem(SDL_INIT_VIDEO);
 	SDL_ShowCursor(0);
+	BOOT_stamp("    SDL video");
 	
 	// SDL_version compiled;
 	// SDL_version linked;
@@ -255,6 +256,7 @@ SDL_Surface* PLAT_initVideo(void) {
 	int h = FIXED_HEIGHT;
 	int p = FIXED_PITCH;
 	vid.window   = SDL_CreateWindow("", SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, w,h, SDL_WINDOW_SHOWN);
+	BOOT_stamp("    window");
 	LOG_info("window size: %ix%i\n", w,h);
 	
 	SDL_DisplayMode mode;
@@ -262,6 +264,7 @@ SDL_Surface* PLAT_initVideo(void) {
 	LOG_info("Current display mode: %ix%i (%s)\n", mode.w,mode.h, SDL_GetPixelFormatName(mode.format));
 	if (mode.h>mode.w) rotate = 3;
 	vid.renderer = SDL_CreateRenderer(vid.window,-1,SDL_RENDERER_ACCELERATED|SDL_RENDERER_PRESENTVSYNC);
+	BOOT_stamp("    renderer");
 	// SDL_RenderSetLogicalSize(vid.renderer, w,h); // TODO: wrong, but without and with the below it's even wrong-er
 	
 	// int renderer_width,renderer_height;

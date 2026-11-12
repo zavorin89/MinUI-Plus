@@ -66,6 +66,19 @@ were taken by the A30 itself, bezel and LCD grid included.
 
 <p align="center"><img src="github/screenshots/themes.png" width="640" alt="Color themes"><br><b>Color themes</b> for the whole interface (eleven in all)</p>
 
+## What's new in v1.3
+
+- **Rewind**: hold a button to rewind a game. Pick it in the pause menu, Options > Shortcuts > Hold Rewind (any
+  button, or MENU plus one). Off in RetroAchievements hardcore, for the Nintendo 64, and for systems whose save states
+  are too big to rewind smoothly
+- **Boot Tweaks** (optional, in Tools): tweaks the A30's own bootloader for a quicker start, a shorter Power hold to
+  turn on and a vibration when it powers on. Needs Miyoo's firmware 20240713 first, saves the originals and can be
+  undone. See [Boot Tweaks](#boot-tweaks)
+- **Faster startup**: the menu comes up sooner, with Wi-Fi and housekeeping waiting until it's on screen
+- A short vibration when you hold Power to turn off, and "Sleep Light" is now "Sleep LED"
+
+See CHANGES.txt for the details.
+
 ## What's new in v1.2
 
 **v1.2.2:** Up / Down in the carousel and Left / Right in the list switch systems, the Borders folder is now Bezels
@@ -344,7 +357,7 @@ of where you left it. A picks a game up from that exact moment. In a game, holdi
 - **Set Time**: sets the clock by hand, no Wi-Fi needed
 - **Time Zone**: Automatic (looked up from your connection the first time it syncs) or pick yours, daylight saving
   included
-- **Sleep Light**: whether the power light stays on while asleep
+- **Sleep LED**: whether the power LED stays on while asleep
 - **Swap A and X**: A resumes and X opens in game lists, if you'd rather
 - **Music**: background music on or off, and its volume (Left/Right). Put songs in the `BGM` folder
 - **MinUI+ version**: shown subtly in the final row at the bottom
@@ -376,6 +389,7 @@ The MinUI pause menu, quicker to open, with:
 - **A long game name** scrolls instead of being cut off
 - **Music** from the `BGM` folder, if it's on
 - **X** pins the game to the game switcher
+- **Rewind**: map Options > Shortcuts > Hold Rewind to a button, then hold it to go back in the game
 
 Save states are written beside the old one first, so losing power mid-save doesn't destroy the previous state.
 
@@ -596,6 +610,39 @@ only ever runs when PICO-8 asks for something.
 - **Box Art**: downloads covers for every game missing one from the libretro thumbnail library (or replaces the
   ones you have, if you'd like), or resizes the ones you have.
 - **Controls**: a short reference of the shortcuts you can't see on screen.
+- **Boot Tweaks** (optional): tweaks the A30's own bootloader. See [below](#boot-tweaks).
+
+### Boot Tweaks
+
+An optional tool that tweaks the A30's own bootloader, in its internal memory (not on the card):
+
+- Increases boot speed
+- Shortens how long you have to hold Power to turn on the A30
+- Adds a tactile vibration when powering on
+
+The changes stay if you boot a different launcher or card. It only runs when you open it, and asks first.
+
+**1. Update the A30 to Miyoo's firmware 20240713 first.** Boot Tweaks only works on that firmware, and changes
+nothing on any other.
+
+1. Download it from Miyoo's page, [lomiyoo.com/pages/firmware](https://lomiyoo.com/pages/firmware) (scroll down to
+   the A30, "Firmware 20240713"), and follow Miyoo's instructions there.
+2. In short: put `miyoo282_fw.img` from the download on the root of the SD card, plug the A30 into a charger and turn
+   it on. It installs the update by itself. Don't unplug or turn it off until it's done.
+3. Delete `miyoo282_fw.img` from the card afterwards, or it installs again whenever the A30 starts on the charger.
+
+**2. Apply it.** Charge to at least 20% (or plug it in), open **Tools > Boot Tweaks**, press **Continue**, then
+**Write**. It takes a few seconds: don't turn the A30 off while it writes. The original pieces are saved to the card
+first (in `.userdata/my282/boot-tweaks-backup`), then each change is checked after it's written. The changes take
+effect from the next power on.
+
+**Undo:** open **Tools > Boot Tweaks** again and press **Undo**. It puts the saved original pieces back. Keep the
+`boot-tweaks-backup` folder while the tweaks are on, since Undo needs it. Without it, installing Miyoo's firmware
+20240713 again (step 1) also puts the stock bootloader back.
+
+**Removing the tool:** if you don't want it on your card, delete the `Tools/my282/Boot Tweaks.pak` folder from the card
+on a computer. If you applied it and want the stock bootloader back, Undo first. A later manual update puts the tool back
+only if you copy its `Tools` folder too.
 
 ## Speed and battery
 

@@ -2518,7 +2518,7 @@ static void fixDiscFolder(char* system_dir) {
 	}
 	free(groups);
 }
-#define DISC_CHECK_PATH "/tmp/minui_disc_check.txt" // the system folders' modified times at the last check this boot
+#define DISC_CHECK_PATH SHARED_USERDATA_PATH "/.minui/disc-check.txt" // the system folders' modified times at the last check (kept across boots: a fresh boot doesn't scan every folder again)
 static void getDiscStamp(char* stamp, size_t size) { // each system folder's name and modified time
 	stamp[0] = '\0';
 	DIR* dh = opendir(ROMS_PATH);
@@ -2573,6 +2573,11 @@ static void Menu_init(void) {
 
 	openDirectory(SDCARD_PATH, 0);
 	loadLast(); // restore state when available
+}
+static void* Menu_initThread(void* arg) {
+	Menu_init();
+	BOOT_stamp("  systems read (beside the graphics)");
+	return NULL;
 }
 static void Menu_quit(void) {
 	RecentArray_free(recents);
@@ -4942,16 +4947,25 @@ int main (int argc, char *argv[]) {
 	// unsigned long first_draw = 0;
 	
 	uint64_t main_begin = getMicroseconds(); // for the startup timings in minui.txt
+	int booting = !exists("/tmp/minui_booted"); // (fresh_boot, below, before anything else has run)
+	boot_stamps = booting;
+	BOOT_stamp("minui started");
 	if (autoResume()) return 0; // nothing to do
 	
 	simple_mode = exists(SIMPLE_MODE_PATH);
 	srand((unsigned)getMicroseconds());
 
+	// the systems and games are read from the card on a thread of their own while the graphics driver starts
+	// (Menu_init only reads files: nothing in it draws or touches SDL)
+	pthread_t menu_init_thread;
+	int menu_init_threaded = pthread_create(&menu_init_thread, NULL, Menu_initThread, NULL)==0;
+
 	LOG_info("MinUI\n");
 	InitSettings();
+	BOOT_stamp("minui settings read");
 	
 	SDL_Surface* screen = GFX_init(MODE_MAIN);
-	// LOG_info("- graphics init: %lu\n", SDL_GetTicks() - main_begin);
+	BOOT_stamp("minui graphics up");
 	
 	PAD_init();
 	// LOG_info("- input init: %lu\n", SDL_GetTicks() - main_begin);
@@ -4962,7 +4976,10 @@ int main (int argc, char *argv[]) {
 	
 	SDL_Surface* version = NULL;
 	
-	Menu_init();
+	BOOT_stamp("minui input and power up");
+	if (menu_init_threaded) pthread_join(menu_init_thread, NULL);
+	else Menu_init();
+	BOOT_stamp("minui systems listed");
 	if (exists(SWITCHER_OPEN_PATH)) { // left a game by holding MENU
 		unlink(SWITCHER_OPEN_PATH);
 		openSwitcher();
@@ -5639,7 +5656,7 @@ int main (int argc, char *argv[]) {
 						strcpy(value, mode==CLOCK_12H ? "12-hour" : (mode==CLOCK_24H ? "24-hour" : "Off"));
 					}
 					else if (i==INFO_ROW_SLEEP_LIGHT) {
-						name = "Sleep Light";
+						name = "Sleep LED";
 						strcpy(value, PWR_getSleepLight()==SLEEP_LIGHT_ON ? "On" : "Off");
 					}
 					else if (i==INFO_ROW_SET_TIME) {
@@ -5882,6 +5899,9 @@ int main (int argc, char *argv[]) {
 			if (first_frame) {
 				first_frame = 0;
 				LOG_info("first frame: %llums after start%s\n", (unsigned long long)(getMicroseconds()-main_begin)/1000, fresh_boot ? " (fresh boot)" : "");
+				BOOT_stamp("menu on screen");
+				touch("/tmp/minui_menu_up"); // launch.sh starts wifi and the rest of its housekeeping now
+				boot_stamps = 0;
 			}
 		}
 		else {

@@ -694,18 +694,39 @@ static int ram_val[2] = {0};
 static int sch_val[2] = {0};
 static int swap_val[2] = {0};
 
-static int get_core(int index)
+// sysfs is read and written directly: a shell per value (as this did) made each run take a noticeable moment
+static int read_sysfs(const char *path, char *buf, int size)
 {
-    FILE *fd = NULL;
-    char buf[255] = {0};
-
-    sprintf(buf, "cat /sys/devices/system/cpu/cpu%d/online", index % 4);
-    fd = popen(buf, "r");
+    FILE *fd = fopen(path, "r");
+    buf[0] = 0;
     if (fd == NULL) {
         return -1;
     }
-    fgets(buf, sizeof(buf), fd);
-    pclose(fd);
+    if (!fgets(buf, size, fd)) {
+        buf[0] = 0;
+    }
+    fclose(fd);
+    buf[strcspn(buf, "\r\n")] = 0;
+    return 0;
+}
+
+static void write_sysfs(const char *path, const char *value)
+{
+    FILE *fd = fopen(path, "w");
+    if (fd) {
+        fputs(value, fd);
+        fclose(fd);
+    }
+}
+
+static int get_core(int index)
+{
+    char path[64], buf[16];
+
+    sprintf(path, "/sys/devices/system/cpu/cpu%d/online", index % 4);
+    if (read_sysfs(path, buf, sizeof(buf)) < 0) {
+        return -1;
+    }
     return atoi(buf);
 }
 
@@ -861,8 +882,8 @@ static void check_before_set(int num, int v)
     char buf[255] = {0};
 
     if (get_core(num) != v) {
-        sprintf(buf, "echo %d > /sys/devices/system/cpu/cpu%d/online", v ? 1 : 0, num);
-        system(buf);
+        sprintf(buf, "/sys/devices/system/cpu/cpu%d/online", num);
+        write_sysfs(buf, v ? "1" : "0");
     }
 }
 
@@ -963,10 +984,13 @@ static void set_sch(uint32_t v)
 
 static void set_sch_by_name(const char *s)
 {
-    char buf[255] = {0};
+    #define GOVERNOR_PATH "/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor"
+    char buf[64];
 
-    sprintf(buf, "echo %s > /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor", s);
-    system(buf);
+    read_sysfs(GOVERNOR_PATH, buf, sizeof(buf));
+    if (strcmp(buf, s)) {
+        write_sysfs(GOVERNOR_PATH, s);
+    }
     // printf("New Schedule: %s\n", s);
 }
 
@@ -982,9 +1006,8 @@ int main(int argc, char **argv) {
         return -1;
     }
     // printf("pmem %p\n", pmem);
-    read_value();
 
-    if (argc == 7) {
+    if (argc == 7) { // (read_value only feeds the usage path's state: skipped, it ran several shells)
         // printf("User Prefers: %s, %s, %d, %d, %d, %d\n\n", argv[1], argv[2], atoi(argv[3]), atoi(argv[4]), atoi(argv[5]), atoi(argv[6]));
         set_sch_by_name(argv[1]);
         set_core(atoi(argv[2]));
@@ -996,6 +1019,7 @@ int main(int argc, char **argv) {
         set_swap(atoi(argv[6]));
     }
 	else {
+	    read_value();
 	    printf("Usage: \n");
 	    printf("\t%s governor core cpu-freq gpu-freq ddr-freq swap\n\n", argv[0]);
 	    printf("\tgovernor: interactive, conservative, userspace, ondemand, performance\n");

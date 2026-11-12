@@ -8,6 +8,8 @@ SYSTEM_PATH="$SDCARD_PATH/.system"
 
 CPU_PATH=/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor
 echo performance > "$CPU_PATH"
+read UPTIME _ < /proc/uptime; echo "$UPTIME my282.sh" >> /tmp/minui_boot.txt
+
 
 # install/update
 if [ -f "$UPDATE_PATH" ]; then

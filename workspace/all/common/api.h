@@ -158,6 +158,8 @@ enum {
 	MODE_MENU,
 };
 
+extern int boot_stamps;
+void BOOT_stamp(const char* step);
 SDL_Surface* GFX_init(int mode);
 #define GFX_resize PLAT_resizeVideo // (int w, int h, int pitch);
 #define GFX_setScaleClip PLAT_setVideoScaleClip // (int x, int y, int width, int height)

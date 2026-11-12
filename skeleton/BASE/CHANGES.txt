@@ -1,4 +1,4 @@
-# MinUI+ v1.2.2 — changes since launch
+# MinUI+ v1.3 — changes since launch
 
 For the Miyoo A30. This ZIP is a complete release, suitable for manual download from a mirror.
 
@@ -9,7 +9,37 @@ or bezels from your backup. The updater's Shut Down prompt requires you to turn 
 
 From v1.1 the built-in updater checks GitLab. Devices on v1.07 or older still look for updates on GitHub, so they need this one manual install to start receiving them.
 
-This is a consolidated comparison with v1.0.0, rather than a list of every intermediate hotfix. This v1.2.2 package includes all changes below. The newest changes come first, then v1.0.1–v1.0.5, then v1.06.
+This is a consolidated comparison with v1.0.0, rather than a list of every intermediate hotfix. This v1.3 package includes all changes below. The newest changes come first, then v1.0.1–v1.0.5, then v1.06.
+
+## New in v1.3
+
+### Rewind
+
+- Hold a button to rewind a game, frame by frame. Pick the button in the pause menu, Options > Shortcuts > Hold Rewind: any button, or MENU plus a button. It does nothing (and costs nothing) until you pick one.
+- The game goes back silently while you hold it, and plays on from there when you let go. Loading a save state or resetting the game starts the rewind history over.
+- Rewind is off in RetroAchievements hardcore, for the Nintendo 64, and for systems whose save states are too big to rewind smoothly.
+
+### Boot Tweaks (optional)
+
+A new tool in Tools that tweaks the A30's own bootloader, in its internal memory:
+
+- Increases boot speed.
+- Shortens how long you have to hold Power to turn on the A30.
+- Adds a tactile vibration when powering on.
+
+It only runs when you open it, and asks first. Update the A30 to Miyoo's firmware 20240713 first (lomiyoo.com/pages/firmware): Boot Tweaks changes nothing on any other. The README's Boot Tweaks section has the steps, and how to remove the tool if you don't want it. The original pieces are saved to the card first, and Undo in the same tool puts them back. The changes stay if you boot into a different launcher. Don't turn the A30 off while it writes.
+
+### Faster startup
+
+- The menu comes up sooner after power-on. The systems and games are read while the screen starts, and Wi-Fi, the clock check and other housekeeping wait until the menu is on screen.
+- The libraries the menu needs are copied once from your A30's firmware to the card, which reads them faster. The copy is only used while it still matches the firmware.
+- Volume and CPU settings are applied directly instead of through extra programs, and a fresh boot no longer checks every system folder for multi-disc games again.
+- Each boot's timings are saved in logs/boot.txt.
+
+### Other changes
+
+- Holding Power to turn off gives a short vibration, so you can feel it.
+- Settings: "Sleep Light" is now called "Sleep LED".
 
 ## New in v1.2.2
 

@@ -9,6 +9,7 @@
 #include <sys/stat.h>
 #include <dlfcn.h>
 #include <string.h>
+#include <sound/asound.h>
 
 #include "msettings.h"
 
@@ -40,6 +41,7 @@ static char SettingsPath[256];
 static int shm_fd = -1;
 static int is_host = 0;
 static int shm_size = sizeof(Settings);
+static int brightnessRaw(int value);
 
 void InitSettings(void) {	
 	sprintf(SettingsPath, "%s/msettings.bin", getenv("USERDATA_PATH"));
@@ -75,8 +77,9 @@ void InitSettings(void) {
 	
 	printf("brightness: %i \nspeaker: %i\n", settings->brightness, settings->speaker); fflush(stdout);
 	
-	SetVolume(GetVolume());
-	SetBrightness(GetBrightness());
+	// applied as they are, not saved again: every program starts with this, and the save ends in a sync()
+	SetRawVolume(GetVolume() * 5);
+	if (!settings->hdmi) SetRawBrightness(brightnessRaw(GetBrightness()));
 	// system("echo $(< " BRIGHTNESS_PATH ")");
 }
 void QuitSettings(void) {
@@ -95,10 +98,8 @@ static inline void SaveSettings(void) {
 int GetBrightness(void) { // 0-10
 	return settings->brightness;
 }
-void SetBrightness(int value) {
-	if (settings->hdmi) return;
-	
-	int raw;
+static int brightnessRaw(int value) {
+	int raw = 255;
 	switch (value) {
 		case 0:  raw =   3;	break; 	// 0
 		case 1:  raw =   4;	break; 	// 1
@@ -112,7 +113,12 @@ void SetBrightness(int value) {
 		case 9:  raw = 128;	break;	// 80
 		case 10: raw = 255;	break;	// *
 	}
-	SetRawBrightness(raw);
+	return raw;
+}
+void SetBrightness(int value) {
+	if (settings->hdmi) return;
+	
+	SetRawBrightness(brightnessRaw(value));
 	settings->brightness = value;
 	SaveSettings();
 }
@@ -145,6 +151,21 @@ void SetRawBrightness(int val) { // 0 - 255
 }
 void SetRawVolume(int val) { // 0 - 100
 	printf("SetRawVolume(%i)\n", val); fflush(stdout);
+	// straight to the sound driver, as amixer would set it (its percent is rounded onto the control's 0-63), instead
+	// of starting a shell and amixer for every change. amixer is still there if the driver turns it down
+	int fd = open("/dev/snd/controlC0", O_RDWR);
+	if (fd>=0) {
+		struct snd_ctl_elem_value value;
+		memset(&value, 0, sizeof(value));
+		value.id.iface = SNDRV_CTL_ELEM_IFACE_MIXER;
+		strcpy((char*)value.id.name, "headphone volume");
+		int level = (val * 63 + 50) / 100;
+		if (level==0 && val>0) level = 1;
+		value.value.integer.value[0] = level;
+		int ok = ioctl(fd, SNDRV_CTL_IOCTL_ELEM_WRITE, &value)>=0;
+		close(fd);
+		if (ok) return;
+	}
 	char cmd[256];
 	sprintf(cmd, "amixer set 'headphone volume' %i%% > /dev/null 2>&1", val);
 	system(cmd);

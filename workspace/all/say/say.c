@@ -7,9 +7,15 @@
 #include "utils.h"
 
 int main(int argc , char* argv[]) {
-	int confirm = argc>2 && strcmp(argv[1], "--confirm")==0;
+	// say.elf "message": A OKAY. say.elf --confirm "message": B LATER / A SHUT DOWN.
+	// say.elf --ask "B label" "A label" "message": a question with its own buttons (6 lines fit).
+	// Both questions return 0 for A and 1 for B.
+	int ask = argc>4 && strcmp(argv[1], "--ask")==0;
+	int confirm = ask || (argc>2 && strcmp(argv[1], "--confirm")==0);
 	if ((!confirm && argc<2) || (confirm && argc<3)) return EXIT_FAILURE;
-	char* message = argv[confirm ? 2 : 1];
+	char* message = argv[ask ? 4 : confirm ? 2 : 1];
+	char* b_label = ask ? argv[2] : "LATER";
+	char* a_label = ask ? argv[3] : "SHUT DOWN";
 	char msg[1024];
 	snprintf(msg, sizeof(msg), "%s", message);
 	
@@ -37,7 +43,7 @@ int main(int argc , char* argv[]) {
 			GFX_clear(screen);
 			
 			GFX_blitMessage(font.large, msg, screen,&(SDL_Rect){0,0,screen->w,screen->h-SCALE1(PADDING + PILL_SIZE + PADDING)});
-			if (confirm) GFX_blitButtonGroup((char*[]){ "B","LATER", "A","SHUT DOWN", NULL }, 1, screen, 1);
+			if (confirm) GFX_blitButtonGroup((char*[]){ "B",b_label, "A",a_label, NULL }, 1, screen, 1);
 			else GFX_blitButtonGroup((char*[]){ "A","OKAY", NULL }, 1, screen, 1);
 			
 			GFX_flip(screen);

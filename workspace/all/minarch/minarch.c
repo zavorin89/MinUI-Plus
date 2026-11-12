@@ -525,6 +525,7 @@ static void RTC_write(void) {
 
 ///////////////////////////////////////
 
+static void Rewind_reset(void);
 static int state_slot = 0;
 static void State_getPath(char* filename) { // filename is MAX_PATH*2
 	snprintf(filename, MAX_PATH*2, "%s/%s.st%i", core.states_dir, game.name, state_slot);
@@ -565,6 +566,7 @@ static void State_read(void) { // from picoarch
 		goto error;
 	}
 	RA_stateLoaded(); // a hardcore session ends here
+	Rewind_reset(); // its history belongs to the game before the load
 
 error:
 	if (state) free(state);
@@ -753,6 +755,7 @@ enum {
 	SHORTCUT_CYCLE_EFFECT,
 	SHORTCUT_TOGGLE_FF,
 	SHORTCUT_HOLD_FF,
+	SHORTCUT_HOLD_REWIND,
 	SHORTCUT_COUNT,
 };
 
@@ -1050,6 +1053,7 @@ static struct Config {
 		[SHORTCUT_CYCLE_EFFECT]			= {"Cycle Effect",		-1, BTN_ID_NONE, 0},
 		[SHORTCUT_TOGGLE_FF]			= {"Toggle FF",			-1, BTN_ID_NONE, 0},
 		[SHORTCUT_HOLD_FF]				= {"Hold FF",			-1, BTN_ID_NONE, 0},
+		[SHORTCUT_HOLD_REWIND]			= {"Hold Rewind",		-1, BTN_ID_NONE, 0},
 		{NULL}
 	},
 };
@@ -1951,6 +1955,170 @@ static void Menu_saveState(void);
 static void Menu_saveStateNow(void);
 static void Menu_loadState(void);
 
+///////////////////////////////
+// Rewind: while the Hold Rewind shortcut is bound, a state is kept every frame or few (more apart for bigger states)
+// as its difference from the one before, with the runs of unchanged words left out. Holding the shortcut steps back
+// through them, one per frame, without sound. The oldest go first when the buffer is full. It runs where core.run()
+// does (the core thread when there is one), so nothing else touches the core meanwhile. Off for GPU cores, states too
+// big to keep up with, and RetroAchievements hardcore.
+
+#define REWIND_BUFFER_SIZE (32 * 1024 * 1024)
+#define REWIND_MAX_STATE (2 * 1024 * 1024)
+#define REWIND_MAX_ENTRIES 16384
+#define REWIND_STEP_BYTES (256 * 1024) // one state per frame up to this size, then one per (size / this + 1) frames
+#define REWIND_MIN_ZEROS 4 // shorter runs of unchanged words stay in the literal run
+
+static int rewinding = 0; // the shortcut is held (set while polling input)
+static volatile int rewind_reset_pending = 0;
+static struct {
+	int failed; // couldn't be set up for this game: stays off
+	size_t size; // bytes, a whole number of words
+	size_t state_size; // what the core said
+	uint32_t* cur; // the newest kept state, whole
+	uint32_t* tmp;
+	uint32_t* packed; // scratch for one packed difference
+	uint8_t* buffer;
+	struct { uint32_t offset, length; } entries[REWIND_MAX_ENTRIES];
+	int first, count; // oldest entry, how many
+	uint32_t head; // where the next one goes
+	int have_cur;
+	int interval, frame;
+} rw;
+
+static void Rewind_reset(void) { rewind_reset_pending = 1; }
+static void Rewind_free(void) {
+	free(rw.cur); free(rw.tmp); free(rw.packed); free(rw.buffer);
+	rw.cur = rw.tmp = rw.packed = NULL; rw.buffer = NULL;
+	rw.size = 0;
+}
+static int Rewind_wanted(void) {
+	if (rw.failed || HW_active() || RA_isHardcore()) return 0;
+	return config.shortcuts[SHORTCUT_HOLD_REWIND].local!=BTN_ID_NONE;
+}
+static int Rewind_setup(void) {
+	size_t state_size = core.serialize_size();
+	if (!state_size || state_size>REWIND_MAX_STATE) {
+		LOG_info("rewind: off for this game (state is %zu bytes)\n", state_size);
+		rw.failed = 1;
+		return 0;
+	}
+	rw.count = rw.first = 0; rw.head = 0; rw.have_cur = 0; rw.frame = 0; // (a new size starts a new history)
+	if (rw.buffer && state_size<=rw.size) { rw.state_size = state_size; return 1; }
+	Rewind_free();
+	rw.size = (state_size + 3) & ~(size_t)3;
+	rw.state_size = state_size;
+	rw.cur = calloc(1, rw.size);
+	rw.tmp = calloc(1, rw.size);
+	rw.packed = malloc(rw.size * 2 + 16); // worst case: every word, plus a header pair per 4 words
+	rw.buffer = malloc(REWIND_BUFFER_SIZE);
+	if (!rw.cur || !rw.tmp || !rw.packed || !rw.buffer) {
+		LOG_error("rewind: couldn't allocate memory\n");
+		Rewind_free();
+		rw.failed = 1;
+		return 0;
+	}
+	rw.interval = 1 + (int)(state_size / REWIND_STEP_BYTES);
+	rw.count = rw.first = 0; rw.head = 0; rw.have_cur = 0; rw.frame = 0;
+	LOG_info("rewind: %zu byte states, one every %i frame(s)\n", state_size, rw.interval);
+	return 1;
+}
+
+// a ^ b, as (unchanged words, changed words, the changed words ^) runs; returns bytes written
+static uint32_t Rewind_pack(const uint32_t* a, const uint32_t* b, uint32_t* out, size_t words) {
+	uint32_t* o = out;
+	size_t i = 0;
+	while (i<words) {
+		size_t z = i;
+		while (z<words && a[z]==b[z]) z++;
+		if (z>=words) break; // the rest is unchanged
+		size_t k = z, last = z, zeros = 0;
+		while (k<words) { // until a long enough unchanged run
+			if (a[k]!=b[k]) { zeros = 0; last = k + 1; }
+			else if (++zeros>=REWIND_MIN_ZEROS) break;
+			k++;
+		}
+		*o++ = z - i;
+		*o++ = last - z;
+		for (k=z; k<last; k++) *o++ = a[k] ^ b[k];
+		i = last;
+	}
+	return (o - out) * 4;
+}
+// state ^= the packed difference
+static void Rewind_unpack(uint32_t* state, const uint32_t* in, uint32_t length, size_t words) {
+	const uint32_t* end = in + length / 4;
+	size_t i = 0;
+	while (in+2<=end) {
+		i += *in++;
+		uint32_t lit = *in++;
+		if (i+lit>words || in+lit>end) return; // (can't happen: it was packed for this size)
+		while (lit--) state[i++] ^= *in++;
+	}
+}
+
+static void Rewind_drop(void) { rw.first = (rw.first + 1) % REWIND_MAX_ENTRIES; rw.count--; }
+static void Rewind_push(uint32_t length) {
+	if (length>REWIND_BUFFER_SIZE/4) return; // (a state that different every time isn't worth keeping)
+	if (rw.head+length>REWIND_BUFFER_SIZE) { // round to the start: what's past here is the oldest, and goes
+		while (rw.count && rw.entries[rw.first].offset>=rw.head) Rewind_drop();
+		rw.head = 0;
+	}
+	uint32_t from = rw.head, to = rw.head + length;
+	// the oldest go first: any whose bytes this would overwrite, or to free a slot
+	while (rw.count) {
+		uint32_t o = rw.entries[rw.first].offset, l = rw.entries[rw.first].length;
+		if (rw.count==REWIND_MAX_ENTRIES || (o<to && from<o+l)) Rewind_drop();
+		else break;
+	}
+	memcpy(rw.buffer+from, rw.packed, length);
+	int slot = (rw.first + rw.count) % REWIND_MAX_ENTRIES;
+	rw.entries[slot].offset = from;
+	rw.entries[slot].length = length;
+	rw.count++;
+	rw.head = to;
+}
+static void Rewind_capture(void) {
+	if (++rw.frame<rw.interval && rw.have_cur) return;
+	rw.frame = 0;
+	if (core.serialize_size()!=rw.state_size && !Rewind_setup()) return;
+	memset(rw.tmp, 0, rw.size);
+	if (!core.serialize(rw.tmp, rw.state_size)) return;
+	if (rw.have_cur) Rewind_push(Rewind_pack(rw.tmp, rw.cur, rw.packed, rw.size / 4));
+	uint32_t* t = rw.cur; rw.cur = rw.tmp; rw.tmp = t;
+	rw.have_cur = 1;
+}
+static int Rewind_step(void) { // back one kept state; 0 when there's nothing to go back to
+	if (!rw.have_cur) return 0;
+	if (rw.count) {
+		int slot = (rw.first + rw.count - 1) % REWIND_MAX_ENTRIES;
+		Rewind_unpack(rw.cur, (uint32_t*)(rw.buffer + rw.entries[slot].offset), rw.entries[slot].length, rw.size / 4);
+		rw.count--;
+		rw.head = rw.entries[slot].offset; // (its space is free again)
+	}
+	// (with none left this stays on the oldest one)
+	rw.frame = 0;
+	return core.unserialize(rw.cur, rw.state_size);
+}
+static void runFrame(void) { // core.run(), with rewind around it
+	if (rewind_reset_pending) {
+		rewind_reset_pending = 0;
+		rw.count = rw.first = 0; rw.head = 0; rw.have_cur = 0; rw.frame = 0;
+	}
+	if (!Rewind_wanted()) {
+		rewinding = 0;
+		if (rw.buffer) { Rewind_free(); rw.have_cur = 0; rw.count = rw.first = 0; rw.head = 0; }
+		core.run();
+		return;
+	}
+	if (!rw.buffer && !Rewind_setup()) { core.run(); return; }
+	if (rewinding && Rewind_step()) {
+		core.run(); // draws the earlier frame (muted, with no buttons held)
+		return;
+	}
+	core.run();
+	Rewind_capture();
+}
+
 static int setFastForward(int enable) {
 	if (!fast_forward && enable && thread_video) {
 		// LOG_info("entered fast forward with threaded core...\n");
@@ -2005,6 +2173,7 @@ static void input_poll_callback(void) {
 		}
 	}
 	
+	rewinding = 0; // (held again below, while its button is)
 	static int toggled_ff_on = 0; // this logic only works because TOGGLE_FF is before HOLD_FF in the menu...
 	for (int i=0; i<SHORTCUT_COUNT; i++) {
 		ButtonMapping* mapping = &config.shortcuts[i];
@@ -2022,6 +2191,10 @@ static void input_poll_callback(void) {
 					break;
 				}
 			}
+			else if (i==SHORTCUT_HOLD_REWIND) {
+				rewinding = PAD_isPressed(btn);
+				if (rewinding && mapping->mod && PAD_justPressed(btn)) ignore_menu = 1;
+			}
 			else if (i==SHORTCUT_HOLD_FF) {
 				// don't allow turn off fast_forward with a release of the hold button 
 				// if it was initially turned on with the toggle button
@@ -2034,7 +2207,7 @@ static void input_poll_callback(void) {
 				switch (i) {
 					case SHORTCUT_SAVE_STATE: Menu_saveStateNow(); break;
 					case SHORTCUT_LOAD_STATE: Menu_loadState(); break;
-					case SHORTCUT_RESET_GAME: core.reset(); break;
+					case SHORTCUT_RESET_GAME: core.reset(); Rewind_reset(); break;
 					case SHORTCUT_SAVE_QUIT:
 						Menu_saveStateNow();
 						quit = 1;
@@ -2132,6 +2305,7 @@ static void input_poll_callback(void) {
 	// if (buttons) LOG_info("buttons: %i\n", buttons);
 }
 static int16_t input_state_callback(unsigned port, unsigned device, unsigned index, unsigned id) {
+	if (rewinding) return 0; // a frame shown while rewinding isn't played
 	if (port==0 && device==RETRO_DEVICE_JOYPAD && index==0) {
 		if (id == RETRO_DEVICE_ID_JOYPAD_MASK) return buttons;
 		return (buttons >> id) & 1;
@@ -3367,10 +3541,10 @@ static void HW_syncFrame(void) {
 
 // NOTE: sound must be disabled for fast forward to work...
 static void audio_sample_callback(int16_t left, int16_t right) {
-	if (!fast_forward && !quit) SND_batchSamples(&(const SND_Frame){left,right}, 1);
+	if (!fast_forward && !rewinding && !quit) SND_batchSamples(&(const SND_Frame){left,right}, 1);
 }
 static size_t audio_sample_batch_callback(const int16_t *data, size_t frames) { 
-	if (!fast_forward && !quit) return SND_batchSamples((const SND_Frame*)data, frames);
+	if (!fast_forward && !rewinding && !quit) return SND_batchSamples((const SND_Frame*)data, frames);
 	else return frames;
 	// return frames;
 };
@@ -5297,6 +5471,7 @@ static void Menu_loop(void) {
 				case ITEM_OPTS: {
 					if (simple_mode) {
 						core.reset();
+						Rewind_reset();
 						status = STATUS_RESET;
 						show_menu = 0;
 					}
@@ -5684,7 +5859,7 @@ static void* coreThread(void *arg) {
 		pthread_mutex_unlock(&core_mx);
 		
 		if (run) {
-			core.run();
+			runFrame();
 			limitFF();
 			trackFPS();
 		}
@@ -5789,7 +5964,7 @@ int main(int argc , char* argv[]) {
 			uint64_t frame_from = getMicroseconds();
 			HW_makeCurrent(); // (the menu or a message may have drawn since)
 			HW_beforeFrame();
-			core.run();
+			runFrame();
 			uint64_t frame_us = getMicroseconds() - frame_from;
 			HW_afterFrame(frame_us);
 			Auto_frame(frame_us);

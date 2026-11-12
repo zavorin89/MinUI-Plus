@@ -227,6 +227,26 @@ static struct PWR_Context {
 static int _;
 static int refreshClock(void);
 
+// the boot's timings, beside launch.sh's (seconds since power-on) in /tmp/minui_boot.txt: minui turns them on for a
+// fresh boot, until its menu is first up
+int boot_stamps = 0;
+void BOOT_stamp(const char* step) {
+	if (!boot_stamps) return;
+	char uptime[64] = "";
+	FILE* proc = fopen("/proc/uptime", "r"); // (it reports a size of 0, so getFile reads nothing)
+	if (proc) {
+		if (!fgets(uptime, sizeof(uptime), proc)) uptime[0] = '\0';
+		fclose(proc);
+	}
+	char* space = strchr(uptime, ' ');
+	if (space) *space = '\0';
+	FILE* file = fopen("/tmp/minui_boot.txt", "a");
+	if (file) {
+		fprintf(file, "%s %s\n", uptime, step);
+		fclose(file);
+	}
+}
+
 SDL_Surface* GFX_init(int mode) {
 	refreshClock(); // initialize local time before an emulator loads RTC data
 	// TODO: this doesn't really belong here...
@@ -234,6 +254,7 @@ SDL_Surface* GFX_init(int mode) {
 	PLAT_initLid();
 	
 	gfx.screen = PLAT_initVideo();
+	BOOT_stamp("  video up");
 	gfx.vsync = VSYNC_STRICT;
 	gfx.mode = mode;
 	
@@ -267,6 +288,7 @@ SDL_Surface* GFX_init(int mode) {
 	sprintf(asset_path, RES_PATH "/assets@%ix.png", FIXED_SCALE);
 	if (!exists(asset_path)) LOG_info("missing assets, you're about to segfault dummy!\n");
 	gfx.assets_base = IMG_Load(asset_path);
+	BOOT_stamp("  assets loaded");
 	
 	// the saved theme, by name so reordering the list doesn't change anyone's pick
 	gfx.theme = 0;
@@ -293,6 +315,7 @@ SDL_Surface* GFX_init(int mode) {
 	TTF_SetFontStyle(font.medium, TTF_STYLE_BOLD);
 	TTF_SetFontStyle(font.small, TTF_STYLE_BOLD);
 	TTF_SetFontStyle(font.tiny, TTF_STYLE_BOLD);
+	BOOT_stamp("  fonts open");
 	
 	return gfx.screen;
 }
@@ -2726,7 +2749,8 @@ void PWR_disablePowerOff(void) {
 }
 void PWR_powerOff(void) {
 	if (pwr.can_poweroff) {
-		
+		VIB_pulse(32768, 60); // the game switcher's buzz, so a held power button is felt (PLAT_powerOff waits 2 s, long enough for it)
+
 		int w = FIXED_WIDTH;
 		int h = FIXED_HEIGHT;
 		int p = FIXED_PITCH;

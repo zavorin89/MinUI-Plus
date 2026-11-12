@@ -2,6 +2,9 @@
 
 # NOTE: becomes .tmp_update/updater
 
+# boot timing (seconds since power-on, read without starting a process): MinUI.pak/launch.sh saves it in logs/boot.txt
+read UPTIME _ < /proc/uptime; echo "$UPTIME updater" > /tmp/minui_boot.txt
+
 INFO=`cat /proc/cpuinfo 2> /dev/null`
 case $INFO in
 *"sun8i"*)
