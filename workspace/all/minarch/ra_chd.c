@@ -109,6 +109,13 @@ static ChdTrack* openChdTrack(const char* path, uint32_t want) {
 	}
 
 	ChdTrack* track = calloc(1, sizeof(ChdTrack));
+	uint8_t* hunk = malloc(header->hunkbytes);
+	if (!track || !hunk) {
+		free(track);
+		free(hunk);
+		chd_close(chd);
+		return NULL;
+	}
 	track->chd = chd;
 	track->chd_first_frame = tracks[pick].chd_first;
 	track->first_sector = tracks[pick].first_sector;
@@ -116,7 +123,7 @@ static ChdTrack* openChdTrack(const char* path, uint32_t want) {
 	track->frames = tracks[pick].frames;
 	trackLayout(tracks[pick].type, &track->data_offset, &track->data_size);
 	track->frames_per_hunk = header->hunkbytes / CHD_FRAME_SIZE;
-	track->hunk = malloc(header->hunkbytes);
+	track->hunk = hunk;
 	track->hunk_index = -1;
 	return track;
 }
@@ -145,6 +152,7 @@ static size_t readChd(ChdTrack* track, uint32_t sector, uint8_t* buffer, size_t 
 
 static void* RC_CCONV openTrack(const char* path, uint32_t track, const struct rc_hash_iterator* iterator) {
 	Handle* handle = calloc(1, sizeof(Handle));
+	if (!handle) return NULL;
 	if (isChd(path)) {
 		handle->is_chd = 1;
 		handle->inner = openChdTrack(path, track);

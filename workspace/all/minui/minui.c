@@ -237,7 +237,7 @@ static int getIndexChar(char* str) {
 
 static void getUniqueName(Entry* entry, char* out_name) {
 	char* filename = strrchr(entry->path, '/')+1;
-	char emu_tag[256];
+	char emu_tag[MAX_PATH];
 	getEmuName(entry->path, emu_tag);
 	
 	char *tmp;
@@ -296,14 +296,14 @@ static void Directory_index(Directory* self) {
 	int skip_index = exactMatch(FAUX_RECENT_PATH, self->path) || exactMatch(FAUX_MOSTPLAYED_PATH, self->path) || exactMatch(FAUX_SWITCHER_PATH, self->path) || is_collection || is_unsorted_favorites || is_unsorted_folder; // not alphabetized
 	
 	Hash* map = NULL;
-	char map_path[256];
+	char map_path[MAX_PATH];
 	sprintf(map_path, "%s/map.txt", is_collection ? COLLECTIONS_PATH : self->path);
 	if (exists(map_path)) {
 		FILE* file = fopen(map_path, "r");
 		if (file) {
 			map = Hash_new();
-			char line[256];
-			while (fgets(line,256,file)!=NULL) {
+			char line[MAX_PATH];
+			while (fgets(line,sizeof(line),file)!=NULL) {
 				normalizeNewline(line);
 				trimTrailingNewlines(line);
 				if (strlen(line)==0) continue; // skip empty lines
@@ -508,10 +508,10 @@ static int hasEmu(char* emu_name);
 static Recent* Recent_new(char* path, char* alias) {
 	Recent* self = malloc(sizeof(Recent));
 
-	char sd_path[256]; // only need to get emu name
+	char sd_path[MAX_PATH]; // only need to get emu name
 	sprintf(sd_path, "%s%s", SDCARD_PATH, path);
 
-	char emu_name[256];
+	char emu_name[MAX_PATH];
 	getEmuName(sd_path, emu_name);
 	
 	self->path = strdup(path);
@@ -621,7 +621,7 @@ static int hasEmu(char* emu_name) {
 	static int known_count = 0;
 	for (int i=0; i<known_count; i++) if (exactMatch(known[i].name, emu_name)) return known[i].has;
 
-	char pak_path[256];
+	char pak_path[MAX_PATH];
 	sprintf(pak_path, "%s/Emus/%s.pak/launch.sh", PAKS_PATH, emu_name);
 	int has = exists(pak_path);
 	if (!has) {
@@ -647,14 +647,14 @@ static int hasM3u(char* rom_path, char* m3u_path) { // NOTE: rom_path not dir_pa
 	tmp[0] = '\0';
 	
 	// path to parent directory
-	char base_path[256];
+	char base_path[MAX_PATH];
 	strcpy(base_path, m3u_path);
 	
 	tmp = strrchr(m3u_path, '/');
 	tmp[0] = '\0';
 	
 	// get parent directory name
-	char dir_name[256];
+	char dir_name[MAX_PATH];
 	tmp = strrchr(m3u_path, '/');
 	strcpy(dir_name, tmp);
 	
@@ -675,15 +675,15 @@ static int hasRecents(void) {
 	
 	Array* parent_paths = Array_new();
 	if (exists(CHANGE_DISC_PATH)) {
-		char sd_path[256];
-		getFile(CHANGE_DISC_PATH, sd_path, 256);
+		char sd_path[MAX_PATH];
+		getFile(CHANGE_DISC_PATH, sd_path, sizeof(sd_path));
 		if (exists(sd_path)) {
 			char* disc_path = sd_path + strlen(SDCARD_PATH); // makes path platform agnostic
 			Recent* recent = Recent_new(disc_path, NULL);
 			if (recent->available) has += 1;
 			Array_push(recents, recent);
 		
-			char parent_path[256];
+			char parent_path[MAX_PATH];
 			strcpy(parent_path, disc_path);
 			char* tmp = strrchr(parent_path, '/') + 1;
 			tmp[0] = '\0';
@@ -694,8 +694,8 @@ static int hasRecents(void) {
 	
 	FILE* file = fopen(RECENT_PATH, "r"); // newest at top
 	if (file) {
-		char line[256];
-		while (fgets(line,256,file)!=NULL) {
+		char line[MAX_PATH];
+		while (fgets(line,sizeof(line),file)!=NULL) {
 			normalizeNewline(line);
 			trimTrailingNewlines(line);
 			if (strlen(line)==0) continue; // skip empty lines
@@ -710,14 +710,14 @@ static int hasRecents(void) {
 				alias = tmp+1;
 			}
 			
-			char sd_path[256];
+			char sd_path[MAX_PATH];
 			sprintf(sd_path, "%s%s", SDCARD_PATH, path);
 			if (exists(sd_path)) {
 				if (recents->count<MAX_RECENTS) {
 					// this logic replaces an existing disc from a multi-disc game with the last used
-					char m3u_path[256];
+					char m3u_path[MAX_PATH];
 					if (hasM3u(sd_path, m3u_path)) { // TODO: this might tank launch speed
-						char parent_path[256];
+						char parent_path[MAX_PATH];
 						strcpy(parent_path, path);
 						char* tmp = strrchr(parent_path, '/') + 1;
 						tmp[0] = '\0';
@@ -772,7 +772,7 @@ static int hasCollections(void) {
 #define FAVORITE_DOT " \xE2\x80\xA2" // U+2022, the menu font has no star
 
 static void getSystemName(char* path, char* out_name) { // eg. "Game Boy Advance" for anything in "Roms/Game Boy Advance (MGBA)/"
-	char folder[256];
+	char folder[MAX_PATH];
 	strcpy(folder, path + strlen(ROMS_PATH "/"));
 	char* tmp = strchr(folder, '/');
 	if (tmp) tmp[0] = '\0';
@@ -781,8 +781,8 @@ static void getSystemName(char* path, char* out_name) { // eg. "Game Boy Advance
 static int EntryArray_sortBySystem(const void* a, const void* b) {
 	Entry* item1 = *(Entry**)a;
 	Entry* item2 = *(Entry**)b;
-	char system1[256];
-	char system2[256];
+	char system1[MAX_PATH];
+	char system2[MAX_PATH];
 	getSystemName(item1->path, system1);
 	getSystemName(item2->path, system2);
 	int order = strcasecmp(system1, system2);
@@ -792,8 +792,8 @@ static int EntryArray_sortBySystem(const void* a, const void* b) {
 static void loadFavorites(void) {
 	FILE* file = fopen(FAVORITES_PATH, "r");
 	if (file) {
-		char line[256];
-		while (fgets(line,256,file)!=NULL) {
+		char line[MAX_PATH];
+		while (fgets(line,sizeof(line),file)!=NULL) {
 			normalizeNewline(line);
 			trimTrailingNewlines(line);
 			if (strlen(line)==0) continue; // skip empty lines
@@ -820,13 +820,13 @@ static int hasM3uCached(char* rom_path, char* m3u_path) { // hasM3u() only depen
 	// several slots because a collated list (eg. GBA + MGBA) alternates between folders
 	#define M3U_CACHE_SIZE 8
 	static struct {
-		char dir[256];
-		char m3u[256];
+		char dir[MAX_PATH];
+		char m3u[MAX_PATH];
 		int has;
 	} cache[M3U_CACHE_SIZE];
 	static int next_slot = 0;
 
-	char dir_path[256];
+	char dir_path[MAX_PATH];
 	strcpy(dir_path, rom_path);
 	char* tmp = strrchr(dir_path, '/');
 	if (tmp) tmp[0] = '\0';
@@ -850,7 +850,7 @@ static int getFavoritePath(Entry* entry, char* out_path) {
 	// resume states, and thumbnails all line up
 	if (!prefixMatch(ROMS_PATH "/", entry->path)) return 0;
 
-	char path[256];
+	char path[MAX_PATH];
 	if (entry->type==ENTRY_DIR) {
 		// only folders that launch a game directly
 		if (!hasCue(entry->path, path)) {
@@ -862,7 +862,7 @@ static int getFavoritePath(Entry* entry, char* out_path) {
 	else strcpy(path, entry->path);
 
 	if (entry->type!=ENTRY_PAK) {
-		char m3u_path[256];
+		char m3u_path[MAX_PATH];
 		if (hasM3uCached(path, m3u_path)) strcpy(path, m3u_path);
 	}
 
@@ -871,7 +871,7 @@ static int getFavoritePath(Entry* entry, char* out_path) {
 }
 static int isFavoriteAvailable(Recent* favorite) {
 	if (!favorite->available) return 0;
-	char sd_path[256];
+	char sd_path[MAX_PATH];
 	sprintf(sd_path, "%s%s", SDCARD_PATH, favorite->path);
 	return exists(sd_path);
 }
@@ -889,7 +889,7 @@ static Array* getFavorites(void) {
 		Recent* favorite = favorites->items[i];
 		if (!isFavoriteAvailable(favorite)) continue;
 
-		char sd_path[256];
+		char sd_path[MAX_PATH];
 		sprintf(sd_path, "%s%s", SDCARD_PATH, favorite->path);
 		int type = suffixMatch(".pak", sd_path) ? ENTRY_PAK : ENTRY_ROM;
 		Entry* entry = Entry_new(sd_path, type);
@@ -968,7 +968,7 @@ static void Directory_sort(Directory* self) {
 static void Directory_markFavorites(Directory* self) {
 	if (exactMatch(self->path, SDCARD_PATH) || exactMatch(self->path, FAUX_FAVORITES_PATH)) return;
 
-	char path[256];
+	char path[MAX_PATH];
 	for (int i=0; i<self->entries->count; i++) {
 		Entry* entry = self->entries->items[i];
 		entry->favorite = favorites->count && getFavoritePath(entry, path) && RecentArray_indexOf(favorites, path)!=-1;
@@ -1010,7 +1010,7 @@ static int updateRootUpdate(void) { // the background checker can finish while t
 static void toggleFavorite(void) {
 	Entry* entry = top->entries->items[top->selected];
 
-	char path[256];
+	char path[MAX_PATH];
 	if (!getFavoritePath(entry, path)) return;
 
 	int i = RecentArray_indexOf(favorites, path);
@@ -1073,7 +1073,7 @@ static Array* getMostPlayed(void) {
 		char sd_path[MAX_PATH];
 		sprintf(sd_path, "%s%s", SDCARD_PATH, path);
 		if (!exists(sd_path)) continue;
-		char emu_name[256];
+		char emu_name[MAX_PATH];
 		getEmuName(sd_path, emu_name);
 		if (!hasEmu(emu_name)) continue;
 		
@@ -1111,8 +1111,8 @@ static Array* getMostPlayed(void) {
 
 static int hasRoms(char* dir_name) {
 	int has = 0;
-	char emu_name[256];
-	char rom_path[256];
+	char emu_name[MAX_PATH];
+	char rom_path[MAX_PATH];
 
 	getEmuName(dir_name, emu_name);
 	
@@ -1169,7 +1169,7 @@ static int getSwitcherPath(Entry* entry, char* path) {
 	strcpy(sd_path, entry->path);
 	if (entry->type==ENTRY_DIR) { // a multi-disc folder pins its m3u, like minarch does
 		char* name = strrchr(entry->path, '/');
-		sprintf(sd_path, "%s%s.m3u", entry->path, name);
+		snprintf(sd_path, sizeof(sd_path), "%s%s.m3u", entry->path, name);
 		if (!exists(sd_path)) return 0;
 	}
 	else if (entry->type!=ENTRY_ROM) return 0;
@@ -1595,7 +1595,7 @@ static void readyResume(Entry* entry) {
 		resume_pick = -1; // (the slot in slot_path)
 	}
 	if (can_resume) { // a native core has no save states to resume (eg. a Pico-8 cart moved to the official PICO-8)
-		char emu_name[256], tag[64];
+		char emu_name[MAX_PATH], tag[64];
 		getEmuName(entry->path, emu_name);
 		if (exactMatch(emu_name, "PICO8") || (exactMatch(emu_name, "P8") && getGameCore(entry->path, tag) && exactMatch(tag, "PICO8"))) can_resume = 0;
 	}
@@ -1798,31 +1798,27 @@ static int getGameCore(char* sd_path, char* tag) {
 }
 // tag NULL goes back to the system's own core
 static void setGameCore(char* rel_path, char* tag) {
-	static char out[32*1024];
-	out[0] = '\0';
+	char tmp_path[MAX_PATH+8];
+	snprintf(tmp_path, sizeof(tmp_path), "%s.tmp", GAME_CORES_PATH);
+	FILE* out = fopen(tmp_path, "w");
+	if (!out) return;
 	FILE* file = fopen(GAME_CORES_PATH, "r");
 	if (file) {
 		char line[MAX_PATH+64];
 		while (fgets(line, sizeof(line), file)) {
-			char copy[MAX_PATH+64];
-			strcpy(copy, line);
-			normalizeNewline(copy);
-			trimTrailingNewlines(copy);
-			char* tab = strrchr(copy, '\t');
+			normalizeNewline(line);
+			trimTrailingNewlines(line);
+			char* tab = strrchr(line, '\t');
 			if (!tab) continue;
 			*tab = '\0';
-			if (exactMatch(copy, rel_path)) continue; // replaced below
-			*tab = '\t';
-			if (strlen(out)+strlen(copy)+2<sizeof(out)) { strcat(out, copy); strcat(out, "\n"); }
+			if (exactMatch(line, rel_path)) continue; // replaced below
+			fprintf(out, "%s\t%s\n", line, tab+1);
 		}
 		fclose(file);
 	}
-	if (tag) {
-		char line[MAX_PATH+64];
-		snprintf(line, sizeof(line), "%s\t%s\n", rel_path, tag);
-		if (strlen(out)+strlen(line)<sizeof(out)) strcat(out, line);
-	}
-	putFile(GAME_CORES_PATH, out);
+	if (tag) fprintf(out, "%s\t%s\n", rel_path, tag);
+	if (fclose(out)==0) rename(tmp_path, GAME_CORES_PATH);
+	else unlink(tmp_path);
 	sync();
 }
 
@@ -1840,7 +1836,7 @@ static int getPakExe(char* tag, char* exe) {
 	getEmuPath(tag, pak);
 	FILE* file = fopen(pak, "r");
 	if (!file) return 0;
-	char line[256];
+	char line[MAX_PATH];
 	while (fgets(line, sizeof(line), file)) {
 		if (!prefixMatch("EMU_EXE=", line)) continue;
 		trimTrailingNewlines(line);
@@ -2289,39 +2285,35 @@ static time_t modifiedAt(char* path) {
 // replaces lines starting with old_path (followed by a tab or the end) with new_path in a list file
 // when new_path is already listed the old line is just dropped, so several discs of one game become one entry
 static void replaceListPath(char* list_path, char* old_path, char* new_path) {
-	static char before[64*1024];
 	FILE* file = fopen(list_path, "r");
 	if (!file) return;
-	size_t size = fread(before, 1, sizeof(before)-1, file);
-	before[size] = '\0';
-	fclose(file);
-
 	int len = strlen(old_path);
-	char listed_mid[MAX_PATH+2];
-	sprintf(listed_mid, "\n%s", new_path);
-	int listed = prefixMatch(new_path, before) || strstr(before, listed_mid)!=NULL;
+	int new_len = strlen(new_path);
+	char line[MAX_PATH*2];
+	int listed = 0;
+	while (!listed && fgets(line, sizeof(line), file)) listed = !strncmp(line, new_path, new_len) && (line[new_len]=='\t' || line[new_len]=='\n' || line[new_len]=='\0');
+	rewind(file);
 
-	static char out[64*1024];
-	out[0] = '\0';
+	char tmp_path[MAX_PATH+8];
+	snprintf(tmp_path, sizeof(tmp_path), "%s.tmp", list_path);
+	FILE* out = fopen(tmp_path, "w");
+	if (!out) {
+		fclose(file);
+		return;
+	}
 	int changed = 0;
-	char* line = before;
-	while (*line) {
-		char* end = strchr(line, '\n');
-		int line_len = end ? end - line + 1 : (int)strlen(line);
-		char text[MAX_PATH*2];
-		snprintf(text, sizeof(text), "%.*s", line_len, line);
-		line += line_len;
-		if (!strncmp(text, old_path, len) && (text[len]=='\t' || text[len]=='\n' || text[len]=='\0')) {
+	while (fgets(line, sizeof(line), file)) {
+		if (!strncmp(line, old_path, len) && (line[len]=='\t' || line[len]=='\n' || line[len]=='\0')) {
 			changed = 1;
 			if (listed) continue;
 			listed = 1;
-			char fixed[MAX_PATH*2];
-			snprintf(fixed, sizeof(fixed), "%s%s", new_path, text+len);
-			strcpy(text, fixed);
+			fprintf(out, "%s%s", new_path, line+len);
 		}
-		if (strlen(out)+strlen(text)<sizeof(out)) strcat(out, text);
+		else fputs(line, out);
 	}
-	if (changed) putFile(list_path, out);
+	fclose(file);
+	if (fclose(out)==0 && changed) rename(tmp_path, list_path);
+	else unlink(tmp_path);
 }
 
 // copies the progress kept under each disc's name to the m3u's, without touching the originals
@@ -2599,7 +2591,7 @@ static void getResPath(Entry* entry, char* res_path) {
 	char* res_name = strrchr(entry->path, '/') + 1;
 	char* tmp = strrchr(res_root, '/');
 	tmp[0] = '\0';
-	sprintf(res_path, "%s/.res/%s.png", res_root, res_name);
+	snprintf(res_path, MAX_PATH, "%s/.res/%s.png", res_root, res_name);
 }
 // decodes art flattened onto black in the screen's format, NULL when there's none
 static SDL_Surface* loadArt(char* res_path, SDL_Surface* screen) {
@@ -3767,9 +3759,11 @@ static void blitFlash(SDL_Surface* screen) {
 	if (flash_big && !flash_font) flash_font = TTF_OpenFont(FONT_PATH, SCALE1(FONT_LARGE*3));
 	TTF_Font* f = flash_big && flash_font ? flash_font : font.large;
 	
-	SDL_Surface* text = TTF_RenderUTF8_Blended(f, flash_text, COLOR_WHITE);
-	if (!text) return;
 	int pad = SCALE1(flash_big ? PADDING*2 : BUTTON_PADDING*2);
+	char shown[sizeof(flash_text)+4];
+	GFX_truncateText(f, flash_text, shown, screen->w - SCALE1(PADDING*2) - pad*2, 0); // a long name stays on the screen
+	SDL_Surface* text = TTF_RenderUTF8_Blended(f, shown, COLOR_WHITE);
+	if (!text) return;
 	int w = text->w + pad*2;
 	int h = text->h + pad*(flash_big ? 2 : 1);
 	if (flash_big && w<h) w = h; // square for single letters
@@ -3827,6 +3821,27 @@ static void centerRows(Directory* dir, int selected) {
 }
 // deleting a game (MENU + X in a system's list): asks first, then whether its saves and box art go too
 
+// text wrapped onto as many as max_lines lines no wider than max_w (the last ending in "..." when there's more), a word
+// too wide for a line on its own cut to fit: one surface a line, returning how many
+#define ASK_LINES 3
+static int renderWrapped(TTF_Font* font, char* text, SDL_Color color, int max_w, int max_lines, SDL_Surface** lines) {
+	char wrapped[MAX_PATH+64];
+	snprintf(wrapped, sizeof(wrapped)-4, "%s", text); // (room for the "...")
+	GFX_wrapTextEnding(font, wrapped, max_w, max_lines, "...");
+	int count = 0;
+	char* line = wrapped;
+	while (line && count<max_lines) {
+		char* end = strchr(line, '\n');
+		if (end) *end = '\0';
+		char shown[MAX_PATH+64];
+		GFX_truncateText(font, line, shown, max_w, 0); // (only shortens a line that's still too wide)
+		SDL_Surface* surface = shown[0] ? TTF_RenderUTF8_Blended(font, shown, color) : NULL;
+		if (surface) lines[count++] = surface;
+		line = end ? end + 1 : NULL;
+	}
+	return count;
+}
+
 // a yes/no screen, 1 for A and 0 for B
 static int askDelete(SDL_Surface* screen, char* title, char* detail, char* yes, char* no) {
 	int dirty = 1;
@@ -3840,16 +3855,28 @@ static int askDelete(SDL_Surface* screen, char* title, char* detail, char* yes, 
 		PWR_update(&dirty, &show_setting, NULL, NULL);
 		if (dirty) {
 			GFX_clear(screen);
-			char shown[256];
-			GFX_truncateText(font.large, title, shown, screen->w - SCALE1(PADDING*4), 0);
-			SDL_Surface* big = TTF_RenderUTF8_Blended(font.large, shown, COLOR_WHITE);
-			SDL_Surface* small = detail && detail[0] ? TTF_RenderUTF8_Blended(font.small, detail, COLOR_LIGHT_TEXT) : NULL;
-			int h = big->h + (small ? SCALE1(4) + small->h : 0);
-			int y = (screen->h - SCALE1(PILL_SIZE+PADDING) - h) / 2;
-			SDL_BlitSurface(big, NULL, screen, &(SDL_Rect){ (screen->w - big->w) / 2, y });
-			if (small) SDL_BlitSurface(small, NULL, screen, &(SDL_Rect){ (screen->w - small->w) / 2, y + big->h + SCALE1(4) });
-			SDL_FreeSurface(big);
-			if (small) SDL_FreeSurface(small);
+			// a long game name goes onto the next lines rather than off the screen's edges
+			int max_w = screen->w - SCALE1(PADDING*4);
+			SDL_Surface* bigs[ASK_LINES];
+			SDL_Surface* smalls[ASK_LINES];
+			int big_count = renderWrapped(font.large, title, COLOR_WHITE, max_w, ASK_LINES, bigs);
+			int small_count = detail && detail[0] ? renderWrapped(font.small, detail, COLOR_LIGHT_TEXT, max_w, 2, smalls) : 0;
+			int h = 0;
+			for (int i=0; i<big_count; i++) h += bigs[i]->h;
+			if (small_count) h += SCALE1(4);
+			for (int i=0; i<small_count; i++) h += smalls[i]->h;
+			int y = MAX(SCALE1(PADDING), (screen->h - SCALE1(PILL_SIZE+PADDING) - h) / 2);
+			for (int i=0; i<big_count; i++) {
+				SDL_BlitSurface(bigs[i], NULL, screen, &(SDL_Rect){ (screen->w - bigs[i]->w) / 2, y });
+				y += bigs[i]->h;
+				SDL_FreeSurface(bigs[i]);
+			}
+			if (small_count) y += SCALE1(4);
+			for (int i=0; i<small_count; i++) {
+				SDL_BlitSurface(smalls[i], NULL, screen, &(SDL_Rect){ (screen->w - smalls[i]->w) / 2, y });
+				y += smalls[i]->h;
+				SDL_FreeSurface(smalls[i]);
+			}
 			GFX_blitButtonGroup((char*[]){ "B",no, "A",yes, NULL }, 1, screen, 1);
 			GFX_blitSettingOnly(screen, show_setting); // (the volume or brightness bar, while it's changed)
 			GFX_flip(screen);
@@ -4089,7 +4116,7 @@ static void deleteSelected(SDL_Surface* screen) {
 	char launch_path[MAX_PATH];
 	snprintf(launch_path, sizeof(launch_path), "%s%s", SDCARD_PATH, rel_path);
 
-	char title[256];
+	char title[MAX_PATH]; // (a whole name, and the question mark)
 	snprintf(title, sizeof(title), "Delete %s?", entry->name);
 	if (!askDelete(screen, title, "This can't be undone.", "DELETE", "CANCEL")) return;
 
@@ -4196,31 +4223,36 @@ static void deleteSelected(SDL_Surface* screen) {
 
 // a list file of paths relative to SDCARD_PATH (anything after a tab is kept): old_rel becomes new_rel, and when
 // old_dir is set, files inside it (each disc of a multi-disc game) move to new_dir
+// the lines are written to a temp file that replaces the list, whatever its size (play time has a line per game played)
 static void renameInList(char* list_path, char* old_rel, char* new_rel, char* old_dir, char* new_dir) {
 	FILE* file = fopen(list_path, "r");
 	if (!file) return;
-	static char out[64*1024];
-	out[0] = '\0';
+	char tmp_path[MAX_PATH+8];
+	snprintf(tmp_path, sizeof(tmp_path), "%s.tmp", list_path);
+	FILE* out = fopen(tmp_path, "w");
+	if (!out) {
+		fclose(file);
+		return;
+	}
 	int changed = 0;
 	int dir_len = old_dir ? strlen(old_dir) : 0;
 	char line[MAX_PATH*2];
 	while (fgets(line, sizeof(line), file)) {
-		char fixed[MAX_PATH*2];
 		char* tab = strchr(line, '\t');
 		int path_len = tab ? tab - line : (int)strcspn(line, "\r\n");
 		if (path_len==(int)strlen(old_rel) && !strncmp(line, old_rel, path_len)) {
-			snprintf(fixed, sizeof(fixed), "%s%s", new_rel, line + path_len);
+			fprintf(out, "%s%s", new_rel, line + path_len);
 			changed = 1;
 		}
 		else if (old_dir && path_len>dir_len && !strncmp(line, old_dir, dir_len) && line[dir_len]=='/') {
-			snprintf(fixed, sizeof(fixed), "%s%s", new_dir, line + dir_len);
+			fprintf(out, "%s%s", new_dir, line + dir_len);
 			changed = 1;
 		}
-		else strcpy(fixed, line);
-		if (strlen(out)+strlen(fixed)<sizeof(out)) strcat(out, fixed);
+		else fputs(line, out);
 	}
 	fclose(file);
-	if (changed) putFile(list_path, out);
+	if (fclose(out)==0 && changed) rename(tmp_path, list_path);
+	else unlink(tmp_path);
 }
 static void renameInRecents(Array* list, char* old_rel, char* new_rel, char* old_dir, char* new_dir, char* new_name) {
 	int dir_len = old_dir ? strlen(old_dir) : 0;
@@ -4242,12 +4274,16 @@ static void renameInRecents(Array* list, char* old_rel, char* new_rel, char* old
 }
 // drops map.txt's custom name for the old file, the typed name is the one to show now
 static void dropMapAlias(char* dir, char* file_name) {
-	char map_path[MAX_PATH];
+	char map_path[MAX_PATH], tmp_path[MAX_PATH+8];
 	snprintf(map_path, sizeof(map_path), "%s/map.txt", dir);
 	FILE* file = fopen(map_path, "r");
 	if (!file) return;
-	static char out[32*1024];
-	out[0] = '\0';
+	snprintf(tmp_path, sizeof(tmp_path), "%s.tmp", map_path);
+	FILE* out = fopen(tmp_path, "w");
+	if (!out) {
+		fclose(file);
+		return;
+	}
 	int changed = 0;
 	int len = strlen(file_name);
 	char line[MAX_PATH*2];
@@ -4256,10 +4292,11 @@ static void dropMapAlias(char* dir, char* file_name) {
 			changed = 1;
 			continue;
 		}
-		if (strlen(out)+strlen(line)<sizeof(out)) strcat(out, line);
+		fputs(line, out);
 	}
 	fclose(file);
-	if (changed) putFile(map_path, out);
+	if (fclose(out)==0 && changed) rename(tmp_path, map_path);
+	else unlink(tmp_path);
 }
 static void renameSelected(SDL_Surface* screen) {
 	if (!isSortableFolder(top->path) || !top->entries->count) return;
@@ -4284,14 +4321,14 @@ static void renameSelected(SDL_Surface* screen) {
 	char old_file[MAX_PATH];
 	strcpy(old_file, strrchr(entry->path, '/')+1);
 	char ext[32] = "";
-	char name[128];
+	char name[256]; // (a whole file name, so the extension is never cut off)
 	snprintf(name, sizeof(name), "%s", old_file);
 	char* dot = strrchr(name, '.');
 	if (!is_dir && dot && dot>name && strlen(dot)<sizeof(ext)) {
 		strcpy(ext, dot);
 		*dot = '\0';
 	}
-	char old_name[128];
+	char old_name[256];
 	strcpy(old_name, name);
 	if (!KB_enterText(screen, "Rename", name, sizeof(name), "RENAME", KB_FILE_NAME)) {
 		SFX_play(SFX_BACK);
@@ -5715,7 +5752,7 @@ int main (int argc, char *argv[]) {
 					if (info_row==INFO_ROW_TIME_ZONE) strcpy(hint, "Automatic, or pick yours");
 					else if (info_row==INFO_ROW_CLOCK) strcpy(hint, "Syncs over Wi-Fi, or use Set Time");
 					else if (info_row==INFO_ROW_SET_TIME) strcpy(hint, "Without Wi-Fi. Kept while it's off");
-					else if (info_row==INFO_ROW_SLEEP_LIGHT) strcpy(hint, "The light while asleep");
+					else if (info_row==INFO_ROW_SLEEP_LIGHT) strcpy(hint, "Keeps the power light on while asleep");
 					else if (info_row==INFO_ROW_SWAP_AX) strcpy(hint, swap_ax ? "A Resume, X Open (after save state)" : "A Open, X Resume (after save state)");
 					else {
 						int songs = BGM_countSongs();
@@ -5834,7 +5871,7 @@ int main (int argc, char *argv[]) {
 				}
 				else {
 					// TODO: for some reason screen's dimensions end up being 0x0 in GFX_blitMessage...
-					if (inSwitcher()) GFX_blitMessage(font.small, "No games pinned yet\n\nHold SELECT on a game in a list,\nor press X in a game's menu", screen, &(SDL_Rect){0,0,screen->w,screen->h});
+					if (inSwitcher()) GFX_blitMessage(font.small, "No games pinned yet\n\nHold SELECT on a game in a list,\nor press X in the in-game menu", screen, &(SDL_Rect){0,0,screen->w,screen->h});
 					else if (exactMatch(top->path, FAUX_MOSTPLAYED_PATH)) GFX_blitMessage(font.small, "No play time yet\n\nPlay a game and it shows up here", screen, &(SDL_Rect){0,0,screen->w,screen->h});
 					else GFX_blitMessage(font.large, "Empty folder", screen, &(SDL_Rect){0,0,screen->w,screen->h}); //, NULL);
 				}
@@ -5844,7 +5881,7 @@ int main (int argc, char *argv[]) {
 				if (flash_gpu && (show_setting || GFX_settingFading()) && !GetHDMI()) queueHardwareGroup(screen, ow); // brightness/volume on top too
 				
 				// buttons
-				char fav_path[256];
+				char fav_path[MAX_PATH];
 				char* fav_button = (total>0 && getFavoritePath(top->entries->items[top->selected], fav_path)) ? "Y" : NULL; // NULL ends the group early
 				if (show_setting && !GetHDMI()) GFX_blitHardwareHints(screen, show_setting);
 				else if (inSwitcher()) GFX_blitButtonGroup((char*[]){ total>0 ? "X" : NULL,"UNPIN", NULL }, 0, screen, 0); // the word the in-game menus use

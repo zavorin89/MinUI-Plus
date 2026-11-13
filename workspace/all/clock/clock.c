@@ -45,6 +45,10 @@ int main(int argc , char* argv[]) {
 #define CHAR_COLON 11
 	while (c = chars[i]) {
 		digit = TTF_RenderUTF8_Blended(font.large, c, COLOR_WHITE);
+		if (!digit) {
+			i += 1;
+			continue;
+		}
 		int y = i==CHAR_COLON ? SCALE1(-1.5) : 0; // : sits too low naturally
 		// TODO: y offset is wrong here
 		// printf("%s x:%i y:%i SCALE1(DIGIT_HEIGHT):%i SCALE1(DIGIT_HEIGHT) - digit->h:%i\n", c, (i * SCALE1(DIGIT_WIDTH)), y, SCALE1(DIGIT_HEIGHT), SCALE1(DIGIT_HEIGHT) - digit->h); fflush(stdout);
@@ -230,10 +234,10 @@ int main(int argc , char* argv[]) {
 			if (select_cursor >= option_count) select_cursor -= option_count;
 			
 			if (show_24hour) {
-				system("touch " USERDATA_PATH "/show_24hour");
+				touch(USERDATA_PATH "/show_24hour"); // (no shell started for it)
 			}
 			else {
-				system("rm " USERDATA_PATH "/show_24hour");
+				unlink(USERDATA_PATH "/show_24hour");
 			}
 		}
 		
@@ -292,9 +296,12 @@ int main(int argc , char* argv[]) {
 			if (!show_24hour) {
 				x += SCALE1(10); // space
 				SDL_Surface* text = TTF_RenderUTF8_Blended(font.large, am_selected ? "AM" : "PM", COLOR_WHITE);
-				ampm_w = text->w + SCALE1(2);
-				SDL_BlitSurface(text, NULL, screen, &(SDL_Rect){x,y-SCALE1(3)});
-				SDL_FreeSurface(text);
+				ampm_w = SCALE1(DIGIT_WIDTH*2) + SCALE1(2);
+				if (text) {
+					ampm_w = text->w + SCALE1(2);
+					SDL_BlitSurface(text, NULL, screen, &(SDL_Rect){x,y-SCALE1(3)});
+					SDL_FreeSurface(text);
+				}
 			}
 		
 			// cursor

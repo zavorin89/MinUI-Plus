@@ -52,7 +52,7 @@ write_conf() {
 				if [ -n "$PSK" ]; then echo "	psk=\"$PSK\""; else echo "	key_mgmt=NONE"; fi
 				echo "	priority=$P"
 				echo "}"
-				echo "$SSID" >> "$SSIDS"
+				printf "%s\n" "$SSID" >> "$SSIDS" # (printf: a name like -n is still a name)
 				P=$((P-1))
 			}
 			while IFS= read -r LINE || [ -n "$LINE" ]; do

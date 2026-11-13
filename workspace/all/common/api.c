@@ -15,6 +15,8 @@
 #include <stdint.h>
 
 #include <msettings.h>
+#include <signal.h>
+#include <dirent.h>
 
 #include "defines.h"
 #include "api.h"
@@ -187,7 +189,13 @@ static SDL_Surface* renderHint(TTF_Font* font, char* text, SDL_Color color) { //
 		if (!hint_cache[i].surface || (hint_cache[oldest].surface && hint_cache[i].used<hint_cache[oldest].used)) oldest = i;
 	}
 	SDL_Surface* surface = TTF_RenderUTF8_Blended(font, text, color);
-	if (!surface || strlen(text)>=sizeof(hint_cache[0].text)) return surface; // too long to keep (rare): the caller can't free it, so it leaks once
+	if (surface && strlen(text)>=sizeof(hint_cache[0].text)) { // too long to cache (rare): held until the next one, as every caller draws it right away
+		static SDL_Surface* long_hint = NULL;
+		if (long_hint) SDL_FreeSurface(long_hint);
+		long_hint = surface;
+		return surface;
+	}
+	if (!surface) return NULL;
 	if (hint_cache[oldest].surface) SDL_FreeSurface(hint_cache[oldest].surface);
 	hint_cache[oldest].font = font;
 	hint_cache[oldest].color = key;
@@ -210,6 +218,7 @@ static struct PWR_Context {
 	int can_autosleep;
 	int requested_sleep;
 	int requested_wake;
+	volatile int asleep; // the battery is checked less often meanwhile
 	
 	pthread_t battery_pt;
 	int is_charging;
@@ -870,46 +879,43 @@ void GFX_blitButton(char* hint, char*button, SDL_Surface* dst, SDL_Rect* dst_rec
 }
 void GFX_blitMessage(TTF_Font* font, char* msg, SDL_Surface* dst, SDL_Rect* dst_rect) {
 	if (!dst_rect) dst_rect = &(SDL_Rect){0,0,dst->w,dst->h};
+	if (!msg) return;
 	
-	// LOG_info("GFX_blitMessage: %p (%ix%i)", dst, dst_rect->w,dst_rect->h);
-	
-	SDL_Surface* text;
 #define TEXT_BOX_MAX_ROWS 16
 #define LINE_HEIGHT 24
+	// a line too long for the screen (a long game or network name) goes on to the next, as every prompt does; a single
+	// word too wide on its own is cut with "..." rather than running off the edges
+	int max_w = dst_rect->w - SCALE1(PADDING*2);
+	int max_rows = MAX(1, MIN(TEXT_BOX_MAX_ROWS, dst_rect->h / SCALE1(LINE_HEIGHT)));
+	char wrapped[2048];
+	snprintf(wrapped, sizeof(wrapped)-4, "%s", msg); // (room for the "..." of a last line that's cut)
+	GFX_wrapTextEnding(font, wrapped, max_w, max_rows, "...");
+
 	char* rows[TEXT_BOX_MAX_ROWS];
 	int row_count = 0;
-
-	char* tmp;
-	rows[row_count++] = msg;
-	while ((tmp=strchr(rows[row_count-1], '\n'))!=NULL) {
-		if (row_count+1>=TEXT_BOX_MAX_ROWS) return; // TODO: bail
-		rows[row_count++] = tmp+1;
+	char* row = wrapped;
+	while (row && row_count<max_rows) {
+		rows[row_count++] = row;
+		char* end = strchr(row, '\n');
+		if (end) *end = '\0';
+		row = end ? end + 1 : NULL;
 	}
 	
 	int rendered_height = SCALE1(LINE_HEIGHT) * row_count;
 	int y = dst_rect->y;
 	y += (dst_rect->h - rendered_height) / 2;
 	
-	char line[256];
+	char line[2048];
 	for (int i=0; i<row_count; i++) {
-		int len;
-		if (i+1<row_count) {
-			len = rows[i+1]-rows[i]-1;
-			if (len) strncpy(line, rows[i], len);
-			line[len] = '\0';
-		}
-		else {
-			len = strlen(rows[i]);
-			strcpy(line, rows[i]);
-		}
-		
-		
-		if (len) {
-			text = TTF_RenderUTF8_Blended(font, line, COLOR_WHITE);
-			int x = dst_rect->x;
-			x += (dst_rect->w - text->w) / 2;
-			SDL_BlitSurface(text, NULL, dst, &(SDL_Rect){x,y});
-			SDL_FreeSurface(text);
+		if (rows[i][0]) {
+			GFX_truncateText(font, rows[i], line, max_w, 0);
+			SDL_Surface* text = TTF_RenderUTF8_Blended(font, line, COLOR_WHITE);
+			if (text) {
+				int x = dst_rect->x;
+				x += (dst_rect->w - text->w) / 2;
+				SDL_BlitSurface(text, NULL, dst, &(SDL_Rect){x,y});
+				SDL_FreeSurface(text);
+			}
 		}
 		y += SCALE1(LINE_HEIGHT);
 	}
@@ -1086,7 +1092,7 @@ void GFX_setTimeZone(int zone) {
 #define HEADER_PAUSE_MS 1200 // still at each end
 #define HEADER_SPEED 30 // unscaled pixels a second
 // how far a text overflow pixels too wide has scrolled, there and back with a pause at each end
-static int scrollOffset(int overflow, uint32_t started) {
+int GFX_scrollOffset(int overflow, uint32_t started) {
 	if (overflow<=0) return 0;
 	int scroll_ms = MAX(1, overflow * 1000 / SCALE1(HEADER_SPEED));
 	int t = (SDL_GetTicks() - started) % (HEADER_PAUSE_MS*2 + scroll_ms*2);
@@ -1114,7 +1120,7 @@ int GFX_blitHintPill(SDL_Surface* dst, const char* text, int right_w) {
 	int pill_y = dst->h - SCALE1(PADDING + PILL_SIZE);
 	GFX_blitPill(ASSET_DARK_GRAY_PILL, dst, &(SDL_Rect){ SCALE1(PADDING), pill_y, shown_w + SCALE1(BUTTON_PADDING*2), SCALE1(PILL_SIZE) });
 	int overflow = rendered->w - room;
-	int offset = scrollOffset(overflow, started);
+	int offset = GFX_scrollOffset(overflow, started);
 	SDL_BlitSurface(rendered, &(SDL_Rect){ offset, 0, shown_w, rendered->h }, dst, &(SDL_Rect){ SCALE1(PADDING + BUTTON_PADDING), pill_y + (SCALE1(PILL_SIZE) - rendered->h) / 2 });
 	return overflow>0;
 }
@@ -1138,7 +1144,7 @@ int GFX_blitHeaderText(SDL_Surface* dst, TTF_Font* f, SDL_Color color, const cha
 	int room = dst->w - SCALE1(PADDING) - ow - SCALE1(PADDING) - x;
 	if (room<=0) return 0;
 	int overflow = text->w - room;
-	int offset = scrollOffset(overflow, started);
+	int offset = GFX_scrollOffset(overflow, started);
 	SDL_BlitSurface(text, &(SDL_Rect){ offset, 0, MIN(room, text->w), text->h }, dst, &(SDL_Rect){ x, SCALE1(PADDING) + (SCALE1(PILL_SIZE) - text->h) / 2 });
 	return overflow>0;
 }
@@ -1204,7 +1210,7 @@ void GFX_showList(SDL_Surface* dst, const char* title, char** names, char** note
 					int room = w - SCALE1(BUTTON_PADDING*3) - (note ? note->w : 0);
 					int overflow = name->w - room;
 					if (overflow>0 && start+j==selected) scrolls = 1;
-					int offset = start+j==selected ? scrollOffset(overflow, selected_at) : 0;
+					int offset = start+j==selected ? GFX_scrollOffset(overflow, selected_at) : 0;
 					SDL_BlitSurface(name, &(SDL_Rect){ offset, 0, MIN(room, name->w), name->h }, dst, &(SDL_Rect){ x + SCALE1(BUTTON_PADDING), y + (SCALE1(PILL_SIZE) - name->h) / 2 });
 				}
 			}
@@ -1906,6 +1912,12 @@ static void SFX_make(int sound, int rate) {
 	float seconds = sound==SFX_ACHIEVEMENT ? 1.2f : 0.05f;
 	int length = seconds * rate;
 	float* out = calloc(length, sizeof(float));
+	int16_t* samples = malloc(length * sizeof(int16_t));
+	if (!out || !samples) { // (stays unmade: it's tried again next time it's played)
+		free(out);
+		free(samples);
+		return;
+	}
 	switch (sound) {
 		case SFX_TICK: // a crisp click: a snap of bright noise with a faint high ping
 			SFX_noise(out, length, rate, 0, 0.55f, 0.0012f, 0.85f);
@@ -1932,7 +1944,7 @@ static void SFX_make(int sound, int rate) {
 			break;
 		}
 	}
-	sfx.samples[sound] = malloc(length * sizeof(int16_t));
+	sfx.samples[sound] = samples;
 	for (int i=0; i<length; i++) {
 		float v = out[i];
 		if (v>1) v = 1;
@@ -2068,6 +2080,7 @@ void SFX_play(int sound) {
 	SFX_prepare();
 	if (!sfx.rate) return;
 	if (!sfx.samples[sound]) SFX_make(sound, sfx.rate); // only the sounds that get used (the chime is never made in the launcher)
+	if (!sfx.samples[sound]) return;
 	SDL_LockAudio();
 	int voice = 0;
 	for (int v=0; v<SFX_VOICES; v++) { // a free voice, or the one furthest along
@@ -2340,6 +2353,9 @@ FALLBACK_IMPLEMENTATION void PLAT_pollInput(void) {
 	
 	if (lid.has_lid && PLAT_lidChanged(NULL)) pad.just_released |= BTN_SLEEP;
 }
+FALLBACK_IMPLEMENTATION void PLAT_waitForInput(int ms) {
+	SDL_Delay(ms<200 ? ms : 200); // (a device without its own: the buttons are looked at 5 times a second)
+}
 FALLBACK_IMPLEMENTATION int PLAT_shouldWake(void) {
 	int lid_open = 1; // assume open by default
 	if (lid.has_lid && PLAT_lidChanged(&lid_open) && lid_open) return 1;
@@ -2500,7 +2516,11 @@ static void* PWR_monitorBattery(void *arg) {
 	while(1) {
 		// TODO: the frequency of checking could depend on whether 
 		// we're in game (less frequent) or menu (more frequent)
+		// asleep, every 30 s is plenty: it only decides whether to power off, and the A30 still wakes for it
+		static int asleep_ticks = 0;
 		sleep(5);
+		if (pwr.asleep && ++asleep_ticks<6) continue;
+		asleep_ticks = 0;
 		PWR_updateBatteryStatus();
 	}
 	return NULL;
@@ -2775,6 +2795,31 @@ void PWR_powerOff(void) {
 	}
 }
 
+// keymon stopped while asleep (so volume presses then don't count), by its pid: killall started a shell and read
+// every process on each sleep and wake, which put its time on the wake. Found once, and checked it's still keymon
+static pid_t keymon_pid = 0;
+static int isKeymon(pid_t pid) {
+	char path[32], name[32] = "";
+	snprintf(path, sizeof(path), "/proc/%i/comm", (int)pid);
+	getFile(path, name, sizeof(name));
+	return prefixMatch("keymon", name);
+}
+static void signalKeymon(int sig) {
+	if (!keymon_pid || !isKeymon(keymon_pid)) {
+		keymon_pid = 0;
+		DIR* proc = opendir("/proc");
+		if (!proc) return;
+		struct dirent* entry;
+		while (!keymon_pid && (entry = readdir(proc))) {
+			if (entry->d_name[0]<'1' || entry->d_name[0]>'9') continue;
+			pid_t pid = atoi(entry->d_name);
+			if (isKeymon(pid)) keymon_pid = pid;
+		}
+		closedir(proc);
+	}
+	if (keymon_pid) kill(keymon_pid, sig);
+}
+
 static void PWR_enterSleep(void) {
 	// closed rather than paused: paused, SDL still writes silence to the sound chip ~100 times a second
 	if (audio_open) {
@@ -2792,11 +2837,14 @@ static void PWR_enterSleep(void) {
 		SetRawVolume(MUTE_VOLUME_RAW);
 		PLAT_enableBacklight(0);
 	}
-	system("killall -STOP keymon.elf");
+	signalKeymon(SIGSTOP);
+	pwr.asleep = 1;
 	
-	sync();
+	sync(); // (the saves are on the card before anything can go wrong while asleep)
 }
 static void PWR_exitSleep(void) {
+	uint32_t started = SDL_GetTicks();
+	pwr.asleep = 0;
 	PLAT_powerSave(POWER_AWAKE);
 	refreshClock();
 	if (audio_slept) { // the same as before sleep, so its rate etc. hold
@@ -2805,17 +2853,17 @@ static void PWR_exitSleep(void) {
 		audio_open = 0;
 		if (SDL_OpenAudio(&audio_want, &have)==0) audio_open = 1;
 	}
-	system("killall -CONT keymon.elf");
+	signalKeymon(SIGCONT);
 	if (GetHDMI()) {
 		// buh
 	}
 	else {
 		PLAT_enableBacklight(1);
-		SetVolume(GetVolume());
+		SetRawVolume(GetVolume() * 5); // back as it was (SetVolume also saved it to the card, unchanged)
 	}
 	SDL_PauseAudio(0);
-	
-	sync();
+	// no sync(): nothing worth it was written while asleep, and it only held up getting back to the game
+	LOG_info("sleep: awake in %u ms\n", SDL_GetTicks() - started);
 }
 
 #define DEEP_SLEEP_MS 60000 // asleep this long, wifi goes off too (back on when woken)
@@ -2824,7 +2872,8 @@ static void PWR_waitForWake(void) {
 	uint32_t poweroff_delay = PWR_getTimerMs(PWR_TIMER_POWEROFF); // 0 means never
 	int deep = 0;
 	while (!PAD_wake()) {
-		if (!deep && SDL_GetTicks()-sleep_ticks>=DEEP_SLEEP_MS) { // a real break, not a moment: more goes off
+		uint32_t asleep_for = SDL_GetTicks()-sleep_ticks;
+		if (!deep && asleep_for>=DEEP_SLEEP_MS) { // a real break, not a moment: more goes off
 			PLAT_powerSave(POWER_ASLEEP_LONG);
 			deep = 1;
 		}
@@ -2832,7 +2881,12 @@ static void PWR_waitForWake(void) {
 			pwr.requested_wake = 0;
 			break;
 		}
-		SDL_Delay(200);
+		// waits for a button (on devices that can: the A30 does nothing at all until one, and wakes the moment
+		// power is let go) until the next thing due: wifi going off, or powering off. Never more than 10 s, as a backstop
+		int wait = 10000;
+		if (!deep) wait = MIN(wait, (int)(DEEP_SLEEP_MS - asleep_for));
+		if (pwr.can_poweroff && poweroff_delay) wait = MIN(wait, asleep_for<poweroff_delay ? (int)(poweroff_delay - asleep_for) : 0);
+		PLAT_waitForInput(MAX(wait, 1));
 		if (pwr.can_poweroff && poweroff_delay && SDL_GetTicks()-sleep_ticks>=poweroff_delay) {
 			if (pwr.is_charging) sleep_ticks += 60000; // check again in a minute
 			else PWR_powerOff();

@@ -79,16 +79,20 @@ static void showProgress(int done, int count, char* name, char* stage, int force
 	int y = screen->h/2 - SCALE1(PILL_SIZE*2);
 	
 	SDL_Surface* text = TTF_RenderUTF8_Blended(font.large, "Syncing achievements", COLOR_WHITE);
-	SDL_BlitSurface(text, NULL, screen, &(SDL_Rect){ (screen->w-text->w)/2, y });
-	y += text->h + SCALE1(4);
-	SDL_FreeSurface(text);
+	if (text) {
+		SDL_BlitSurface(text, NULL, screen, &(SDL_Rect){ (screen->w-text->w)/2, y });
+		y += text->h + SCALE1(4);
+		SDL_FreeSurface(text);
+	}
 	
 	char shown[256];
 	GFX_truncateText(font.small, name, shown, width, 0);
-	text = TTF_RenderUTF8_Blended(font.small, shown, COLOR_DARK_TEXT);
-	SDL_BlitSurface(text, NULL, screen, &(SDL_Rect){ (screen->w-text->w)/2, y });
-	y += text->h + SCALE1(PADDING);
-	SDL_FreeSurface(text);
+	text = shown[0] ? TTF_RenderUTF8_Blended(font.small, shown, COLOR_DARK_TEXT) : NULL;
+	if (text) {
+		SDL_BlitSurface(text, NULL, screen, &(SDL_Rect){ (screen->w-text->w)/2, y });
+		SDL_FreeSurface(text);
+	}
+	y += TTF_FontHeight(font.small) + SCALE1(PADDING);
 	
 	// the bar: a dark track with a white fill, both rounded
 	int bar_h = SCALE1(20);
@@ -100,8 +104,10 @@ static void showProgress(int done, int count, char* name, char* stage, int force
 	char status[128];
 	snprintf(status, sizeof(status), "Game %i of %i (%i%% done)%s%s", MIN(done+1, count), count, count ? done*100/count : 0, stage ? "  \xC2\xB7  " : "", stage ? stage : "");
 	text = TTF_RenderUTF8_Blended(font.small, status, COLOR_WHITE);
-	SDL_BlitSurface(text, NULL, screen, &(SDL_Rect){ (screen->w-text->w)/2, y });
-	SDL_FreeSurface(text);
+	if (text) {
+		SDL_BlitSurface(text, NULL, screen, &(SDL_Rect){ (screen->w-text->w)/2, y });
+		SDL_FreeSurface(text);
+	}
 	
 	GFX_blitButtonGroup((char*[]){ "B","CANCEL", NULL }, 0, screen, 1);
 	GFX_flip(screen);
@@ -165,6 +171,7 @@ static int byPathThenLine(const void* a, const void* b) {
 static void loadHashes(void) {
 	int capacity = 1024;
 	known_hashes = calloc(capacity, sizeof(KnownHash));
+	if (!known_hashes) return;
 	FILE* file = fopen(HASHES_PATH, "r");
 	if (!file) return;
 	char line[MAX_PATH+128];
@@ -172,11 +179,17 @@ static void loadHashes(void) {
 	while (fgets(line, sizeof(line), file)) { // <hash> <size> <mtime> <path>
 		trimTrailingNewlines(line);
 		lines += 1;
-		if (known_count==capacity) known_hashes = realloc(known_hashes, (capacity *= 2) * sizeof(KnownHash));
+		if (known_count==capacity) {
+			KnownHash* bigger = realloc(known_hashes, capacity * 2 * sizeof(KnownHash));
+			if (!bigger) break; // the rest are hashed again, as if new
+			known_hashes = bigger;
+			capacity *= 2;
+		}
 		KnownHash* known = &known_hashes[known_count];
 		int at = 0;
 		if (sscanf(line, "%32s %lld %lld %n", known->hash, &known->size, &known->mtime, &at)!=3 || !at || !line[at]) continue;
 		known->path = strdup(line + at);
+		if (!known->path) continue;
 		known->line = lines;
 		known_count += 1;
 	}
@@ -229,7 +242,7 @@ static int hashFile(const char* path, uint32_t console, char hash[33]) {
 	if (!suffixMatch(".zip", (char*)path)) return rc_hash_generate_from_file(hash, console, path);
 
 	// zips hash by the rom inside, the same file minarch extracts before loading
-	char escaped[MAX_PATH*2], cmd[MAX_PATH*2+64];
+	char escaped[MAX_PATH*4], cmd[MAX_PATH*4+64]; // (room for a path of nothing but quotes, each 4 when escaped)
 	char* out = escaped;
 	for (const char* in=path; *in; in++) {
 		if (*in=='\'') { strcpy(out, "'\\''"); out += 4; }
@@ -241,6 +254,10 @@ static int hashFile(const char* path, uint32_t console, char hash[33]) {
 	if (!pipe) return 0;
 	size_t capacity = 1<<20, size = 0;
 	uint8_t* data = malloc(capacity);
+	if (!data) {
+		pclose(pipe);
+		return 0;
+	}
 	size_t n;
 	while ((n = fread(data+size, 1, capacity-size, pipe))>0) {
 		size += n;
@@ -307,7 +324,7 @@ static int collectGames(Game* games) {
 	struct dirent* system;
 	while ((system = readdir(roms)) && count<MAX_GAMES) {
 		if (hide(system->d_name) || system->d_type!=DT_DIR) continue;
-		char tag[64];
+		char tag[MAX_PATH]; // (getEmuName writes up to 256 bytes: a folder without a tag is its whole name)
 		getEmuName(system->d_name, tag);
 		uint32_t console = RACache_consoleForTag(tag);
 		if (!console) continue;
@@ -367,8 +384,15 @@ static void addMissed(Missed* missed, const char* path, const char* why) {
 	if (open && close && close-open-1<(int)sizeof(tag)) snprintf(tag, sizeof(tag), "%.*s - ", (int)(close-open-1), open+1);
 	char note[128];
 	snprintf(note, sizeof(note), "%s%s", tag, why);
-	missed->names[missed->count] = strdup(name);
-	missed->notes[missed->count] = strdup(note);
+	char* name_copy = strdup(name);
+	char* note_copy = strdup(note);
+	if (!name_copy || !note_copy) {
+		free(name_copy);
+		free(note_copy);
+		return;
+	}
+	missed->names[missed->count] = name_copy;
+	missed->notes[missed->count] = note_copy;
 	missed->count += 1;
 }
 // whether a game's saved reply from an earlier sync has a set (a local read, no network)
@@ -427,8 +451,9 @@ static void runSync(void) {
 			int sent = RACache_sendPending(&creds, USER_AGENT);
 
 			Game* games = calloc(MAX_GAMES, sizeof(Game));
-			int count = collectGames(games);
+			int count = games ? collectGames(games) : 0;
 			Missed missed = { calloc(MAX(1, count), sizeof(char*)), calloc(MAX(1, count), sizeof(char*)), 0 };
+			if (!missed.names || !missed.notes) count = 0; // (out of memory: a sync of nothing, rather than a crash)
 			int synced = 0, skipped = 0, with_achievements = 0, failed = 0, cancelled = 0;
 			int offline_streak = 0, lost = 0, done = 0; // three games in a row without reaching the server means the connection dropped
 			int rejected = 0; // the server refused the saved login
@@ -489,7 +514,7 @@ static void runSync(void) {
 							for (uint32_t k=0; k<sets.num_sets; k++) total += sets.sets[k].num_achievements;
 							RA_BadgeName* badge_names = calloc(total ? total : 1, sizeof(RA_BadgeName));
 							int n = 0;
-							for (uint32_t k=0; k<sets.num_sets; k++) {
+							if (badge_names) for (uint32_t k=0; k<sets.num_sets; k++) {
 								for (uint32_t j=0; j<sets.sets[k].num_achievements; j++) {
 									const char* badge = sets.sets[k].achievements[j].badge_name;
 									if (badge) strncpy(badge_names[n++], badge, sizeof(RA_BadgeName)-1);
@@ -553,7 +578,7 @@ static void runSync(void) {
 				if (unknown) n += snprintf(summary+n, sizeof(summary)-n, "\n%i not in RetroAchievements", unknown);
 				if (failed) n += snprintf(summary+n, sizeof(summary)-n, "\n%i couldn't be checked", failed);
 			}
-			if (sent) n += snprintf(summary+n, sizeof(summary)-n, "\n%i offline unlock%s sent", sent, sent==1 ? "" : "s");
+			if (sent && n<(int)sizeof(summary)) snprintf(summary+n, sizeof(summary)-n, "\n%i offline unlock%s sent", sent, sent==1 ? "" : "s");
 			SYNC_LOG("unknown to RetroAchievements: %i\n", unknown);
 			SYNC_LOG("done: %s, %i synced, %i skipped, %i with achievements, %i failed, %i badges\n", rejected ? "login rejected" : lost ? "lost connection" : cancelled ? "cancelled" : "complete", synced, skipped, with_achievements, failed, badges);
 			PWR_enableAutosleep(); // the summary waits for a button, sleeping is fine again
@@ -726,10 +751,11 @@ void RetroAchievements_open(SDL_Surface* main_screen) {
 				char shown[192];
 				GFX_truncateText(font.large, name, shown, width - value_w - SCALE1(BUTTON_PADDING*3), 0);
 				SDL_Surface* text = TTF_RenderUTF8_Blended(font.large, shown, is_selected ? COLOR_BLACK : COLOR_WHITE);
-				SDL_BlitSurface(text, NULL, screen, &(SDL_Rect){ SCALE1(PADDING+BUTTON_PADDING), y + SCALE1(4) });
-				SDL_FreeSurface(text);
-				if (value[0]) {
-					text = TTF_RenderUTF8_Blended(font.small, value, is_selected ? COLOR_BLACK : COLOR_DARK_TEXT);
+				if (text) {
+					SDL_BlitSurface(text, NULL, screen, &(SDL_Rect){ SCALE1(PADDING+BUTTON_PADDING), y + SCALE1(4) });
+					SDL_FreeSurface(text);
+				}
+				if (value[0] && (text = TTF_RenderUTF8_Blended(font.small, value, is_selected ? COLOR_BLACK : COLOR_DARK_TEXT))) {
 					SDL_BlitSurface(text, NULL, screen, &(SDL_Rect){ SCALE1(PADDING) + width - SCALE1(BUTTON_PADDING) - text->w, y + (SCALE1(PILL_SIZE) - text->h)/2 });
 					SDL_FreeSurface(text);
 				}

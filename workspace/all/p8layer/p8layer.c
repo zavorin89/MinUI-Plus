@@ -92,12 +92,17 @@ static void loadSettings(void) {
 	}
 	fclose(file);
 }
-static void saveSettings(void) {
-	FILE* file = fopen(settings_path, "w");
+static void saveSettings(void) { // swapped in whole, so a power cut can't leave them half written
+	char tmp[sizeof(settings_path)+8];
+	snprintf(tmp, sizeof(tmp), "%s.tmp", settings_path);
+	FILE* file = fopen(tmp, "w");
 	if (!file) return;
 	fprintf(file, "p8_scaling = %s\np8_effect = %s\np8_border = %s\np8_buttons = %s\n",
 		scaling_labels[scaling], effect_labels[effect], off_on[border_on], layout_labels[swap_ab]);
+	int ok = fflush(file)==0 && !ferror(file) && fsync(fileno(file))==0;
 	fclose(file);
+	if (ok) rename(tmp, settings_path);
+	else unlink(tmp);
 }
 static void ensureSettings(void) { // the volume can be wanted before the window
 	if (settings_ready) return;
@@ -472,6 +477,7 @@ static void Menu_blitPill(uint32_t color, SDL_Surface* dst, SDL_Rect* rect) {
 }
 
 static void composeBackdrop(SDL_Surface* dst) { // the game as it looks, without the effect
+	if (!dst) return;
 	if (border_dirty) loadBorder();
 	SDL_FillRect(dst, NULL, 0);
 	if (border_flat) SDL_BlitSurface(border_flat, NULL, dst, NULL);
@@ -909,7 +915,7 @@ static void runMenu(void) {
 			title_width = max_width;
 
 			if (show_setting && !GetHDMI()) GFX_blitHardwareHints(screen, show_setting);
-			else GFX_blitButtonGroup((char*[]){"POWER","SLEEP", pin_path ? "X" : NULL, pinned ? "UNPIN" : "PIN", NULL}, 0, screen, 0);
+			else GFX_blitButtonGroup((char*[]){BTN_SLEEP==BTN_POWER?"POWER":"MENU","SLEEP", pin_path ? "X" : NULL, pinned ? "UNPIN" : "PIN", NULL}, 0, screen, 0);
 			GFX_blitButtonGroup((char*[]){"B","BACK", "A","OKAY", NULL}, 1, screen, 1);
 
 			char** items = menu_items;
@@ -978,8 +984,7 @@ static void runMenu(void) {
 					}
 				}
 			}
-			if (menu_message_until) { // the pin confirmation, drawn and faded as minarch's is
-				text = TTF_RenderUTF8_Blended(font.large, menu_message, COLOR_WHITE);
+			if (menu_message_until && (text = TTF_RenderUTF8_Blended(font.large, menu_message, COLOR_WHITE))) { // the pin confirmation, drawn and faded as minarch's is
 				int pw = text->w + SCALE1(BUTTON_PADDING*4);
 				int ph = text->h + SCALE1(BUTTON_PADDING*2);
 				SDL_Rect box = { (screen->w-pw)/2, (screen->h-ph)/2, pw, ph };

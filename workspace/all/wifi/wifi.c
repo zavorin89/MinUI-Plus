@@ -70,13 +70,17 @@ static void writeCreds(void) {
 		sync();
 		return;
 	}
-	FILE* file = fopen(CREDS_PATH, "w");
+	// written beside it and swapped in, so a power cut mid-write can't lose every saved network
+	FILE* file = fopen(CREDS_PATH ".tmp", "w");
 	if (!file) return;
 	for (int i=0; i<saved_count; i++) {
 		fprintf(file, "ssid=%s\n", saved[i].ssid);
 		if (saved[i].psk[0]) fprintf(file, "psk=%s\n", saved[i].psk);
 	}
+	int ok = fflush(file)==0 && fsync(fileno(file))==0;
 	fclose(file);
+	if (ok) rename(CREDS_PATH ".tmp", CREDS_PATH);
+	else unlink(CREDS_PATH ".tmp");
 	sync();
 }
 static int findSaved(char* ssid) { // its place in saved, -1 when it isn't
@@ -187,6 +191,7 @@ static SDL_Surface* screen;
 
 static void blitText(TTF_Font* font, char* text, SDL_Color color, int x, int y) {
 	SDL_Surface* surface = TTF_RenderUTF8_Blended(font, text, color);
+	if (!surface) return;
 	SDL_BlitSurface(surface, NULL, screen, &(SDL_Rect){x, y});
 	SDL_FreeSurface(surface);
 }
@@ -324,8 +329,10 @@ static int savedList(char* address) {
 				GFX_truncateText(font.large, name, shown, width - value_w - SCALE1(BUTTON_PADDING*3), 0);
 				blitText(font.large, shown, is_selected ? COLOR_BLACK : COLOR_WHITE, SCALE1(PADDING + BUTTON_PADDING), y + SCALE1(4));
 				SDL_Surface* text = TTF_RenderUTF8_Blended(font.small, value, is_selected ? COLOR_BLACK : COLOR_DARK_TEXT);
-				SDL_BlitSurface(text, NULL, screen, &(SDL_Rect){ SCALE1(PADDING) + width - SCALE1(BUTTON_PADDING) - text->w, y + (SCALE1(PILL_SIZE) - text->h)/2 });
-				SDL_FreeSurface(text);
+				if (text) {
+					SDL_BlitSurface(text, NULL, screen, &(SDL_Rect){ SCALE1(PADDING) + width - SCALE1(BUTTON_PADDING) - text->w, y + (SCALE1(PILL_SIZE) - text->h)/2 });
+					SDL_FreeSurface(text);
+				}
 			}
 			if (show_setting && !GetHDMI()) GFX_blitHardwareHints(screen, show_setting);
 			else GFX_blitButtonGroup((char*[]){ "Y","FORGET", NULL }, 0, screen, 0);
@@ -482,8 +489,10 @@ void Wifi_open(SDL_Surface* main_screen) {
 				blitText(font.large, shown, is_selected ? COLOR_BLACK : COLOR_WHITE, SCALE1(PADDING + BUTTON_PADDING), y + SCALE1(4));
 				
 				SDL_Surface* text = TTF_RenderUTF8_Blended(font.small, value, is_selected ? COLOR_BLACK : COLOR_DARK_TEXT);
-				SDL_BlitSurface(text, NULL, screen, &(SDL_Rect){ SCALE1(PADDING) + width - SCALE1(BUTTON_PADDING) - text->w, y + (SCALE1(PILL_SIZE) - text->h)/2 });
-				SDL_FreeSurface(text);
+				if (text) {
+					SDL_BlitSurface(text, NULL, screen, &(SDL_Rect){ SCALE1(PADDING) + width - SCALE1(BUTTON_PADDING) - text->w, y + (SCALE1(PILL_SIZE) - text->h)/2 });
+					SDL_FreeSurface(text);
+				}
 			}
 			if (network_count==0) {
 				int y = SCALE1(PADDING + (total-start+1)*PILL_SIZE);

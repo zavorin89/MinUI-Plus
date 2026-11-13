@@ -87,10 +87,10 @@ int KB_enterText(SDL_Surface* screen, const char* title, char* text, int max_len
 		GFX_startFrame();
 		PAD_poll();
 
-		if (PAD_justRepeated(BTN_UP)) { row = (row + KEYBOARD_ROWS - 1) % KEYBOARD_ROWS; dirty = 1; }
-		else if (PAD_justRepeated(BTN_DOWN)) { row = (row + 1) % KEYBOARD_ROWS; dirty = 1; }
-		else if (PAD_justRepeated(BTN_LEFT)) { col -= 1; dirty = 1; }
-		else if (PAD_justRepeated(BTN_RIGHT)) { col += 1; dirty = 1; }
+		if (PAD_justRepeated(BTN_UP)) { row = (row + KEYBOARD_ROWS - 1) % KEYBOARD_ROWS; dirty = 1; SFX_play(SFX_TICK); }
+		else if (PAD_justRepeated(BTN_DOWN)) { row = (row + 1) % KEYBOARD_ROWS; dirty = 1; SFX_play(SFX_TICK); }
+		else if (PAD_justRepeated(BTN_LEFT)) { col -= 1; dirty = 1; SFX_play(SFX_TICK); }
+		else if (PAD_justRepeated(BTN_RIGHT)) { col += 1; dirty = 1; SFX_play(SFX_TICK); }
 		int count = rowLength(layout, row);
 		if (col<0) col = count-1;
 		if (col>=count) col = 0;
@@ -102,15 +102,14 @@ int KB_enterText(SDL_Surface* screen, const char* title, char* text, int max_len
 				char c = layouts[layout][row][col];
 				if (canType(c, flags)) {
 					insertChar(text, &pos, max_len, c);
+					SFX_play(SFX_TICK);
 					if (layout==LAYOUT_UPPER) layout = LAYOUT_LOWER; // shift applies to one letter
 				}
 			}
 			dirty = 1;
 		}
-		else if (PAD_justRepeated(BTN_B)) {
-			if (!text[0]) return 0;
-			key = KEY_DELETE;
-		}
+		else if (PAD_justPressed(BTN_B) && !text[0]) return 0; // a fresh press: holding B to clear the text stops at empty
+		else if (PAD_justRepeated(BTN_B) && text[0]) key = KEY_DELETE;
 		else if (PAD_justRepeated(BTN_L1)) key = KEY_BACK;
 		else if (PAD_justRepeated(BTN_R1)) key = KEY_FORWARD;
 		else if (PAD_justPressed(BTN_X)) key = KEY_SHIFT;
@@ -128,6 +127,7 @@ int KB_enterText(SDL_Surface* screen, const char* title, char* text, int max_len
 				case KEY_DELETE: deleteChar(text, &pos); break;
 				case KEY_DONE: if (text[0]) return 1; break;
 			}
+			if (key!=KEY_DONE) SFX_play(SFX_TICK);
 			int count = rowLength(layout, row); // the symbols layout has a short last row
 			if (col>=count) col = count-1;
 			dirty = 1;
@@ -192,8 +192,10 @@ int KB_enterText(SDL_Surface* screen, const char* title, char* text, int max_len
 					TTF_Font* f = r==SPECIAL_ROW ? font.medium : font.large;
 					SDL_Color color = selected ? COLOR_BLACK : (usable ? COLOR_WHITE : COLOR_DARK_TEXT);
 					SDL_Surface* text = TTF_RenderUTF8_Blended(f, label, color);
-					SDL_BlitSurface(text, NULL, screen, &(SDL_Rect){ rect.x + (rect.w-text->w)/2, rect.y + (rect.h-text->h)/2 });
-					SDL_FreeSurface(text);
+					if (text) {
+						SDL_BlitSurface(text, NULL, screen, &(SDL_Rect){ rect.x + (rect.w-text->w)/2, rect.y + (rect.h-text->h)/2 });
+						SDL_FreeSurface(text);
+					}
 					if (active && !selected) { // underline the layout that's on
 						SDL_FillRect(screen, &(SDL_Rect){ rect.x + SCALE1(6), rect.y + rect.h - SCALE1(4), rect.w - SCALE1(12), SCALE1(2) }, RGB_WHITE);
 					}
@@ -202,7 +204,7 @@ int KB_enterText(SDL_Surface* screen, const char* title, char* text, int max_len
 
 			if (show_setting && !GetHDMI()) GFX_blitHardwareHints(screen, show_setting);
 			else GFX_blitButtonGroup((char*[]){ "SELECT","CANCEL", NULL }, 0, screen, 0);
-			GFX_blitButtonGroup((char*[]){ "B","DEL", "START",(char*)done, NULL }, 1, screen, 1);
+			GFX_blitButtonGroup((char*[]){ "B",text[0] ? "DELETE" : "BACK", "START",(char*)done, NULL }, 1, screen, 1);
 
 			GFX_flip(screen);
 			dirty = header_scrolls;

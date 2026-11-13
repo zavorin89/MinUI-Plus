@@ -35,6 +35,7 @@ static Settings DefaultSettings = {
 	.hdmi = 0,
 };
 static Settings* settings;
+static Settings local_settings; // when the shared memory can't be had: this program's own, so it still runs
 
 #define SHM_KEY "/SharedSettings"
 static char SettingsPath[256];
@@ -44,31 +45,41 @@ static int shm_size = sizeof(Settings);
 static int brightnessRaw(int value);
 
 void InitSettings(void) {	
-	sprintf(SettingsPath, "%s/msettings.bin", getenv("USERDATA_PATH"));
+	const char* userdata = getenv("USERDATA_PATH");
+	snprintf(SettingsPath, sizeof(SettingsPath), "%s/msettings.bin", userdata ? userdata : ".");
 	
 	shm_fd = shm_open(SHM_KEY, O_RDWR | O_CREAT | O_EXCL, 0644); // see if it exists
 	if (shm_fd==-1 && errno==EEXIST) { // already exists
 		puts("Settings client");
 		shm_fd = shm_open(SHM_KEY, O_RDWR, 0644);
-		settings = mmap(NULL, shm_size, PROT_READ | PROT_WRITE, MAP_SHARED, shm_fd, 0);
+		settings = shm_fd>=0 ? mmap(NULL, shm_size, PROT_READ | PROT_WRITE, MAP_SHARED, shm_fd, 0) : MAP_FAILED;
+		if (settings==MAP_FAILED) { // (read from the card instead, as a host would)
+			settings = &local_settings;
+			memcpy(settings, &DefaultSettings, shm_size);
+			int fd = open(SettingsPath, O_RDONLY);
+			if (fd>=0) {
+				if (read(fd, settings, shm_size)!=shm_size) memcpy(settings, &DefaultSettings, shm_size);
+				close(fd);
+			}
+		}
 	}
 	else { // host
 		puts("Settings host"); // should always be keymon
 		is_host = 1;
 		// we created it so set initial size and populate
-		ftruncate(shm_fd, shm_size);
-		settings = mmap(NULL, shm_size, PROT_READ | PROT_WRITE, MAP_SHARED, shm_fd, 0);
+		settings = shm_fd>=0 && ftruncate(shm_fd, shm_size)==0 ? mmap(NULL, shm_size, PROT_READ | PROT_WRITE, MAP_SHARED, shm_fd, 0) : MAP_FAILED;
+		if (settings==MAP_FAILED) settings = &local_settings;
 		
+		memcpy(settings, &DefaultSettings, shm_size);
 		int fd = open(SettingsPath, O_RDONLY);
 		if (fd>=0) {
-			read(fd, settings, shm_size);
-			// TODO: use settings->version for future proofing?
+			if (read(fd, settings, shm_size)!=shm_size) memcpy(settings, &DefaultSettings, shm_size); // a cut-short file
 			close(fd);
 		}
-		else {
-			// load defaults
-			memcpy(settings, &DefaultSettings, shm_size);
-		}
+		// a damaged file can't set the screen dark for good or the volume past the top
+		if (settings->brightness<0 || settings->brightness>10) settings->brightness = DefaultSettings.brightness;
+		if (settings->speaker<0 || settings->speaker>20) settings->speaker = DefaultSettings.speaker;
+		if (settings->headphones<0 || settings->headphones>20) settings->headphones = DefaultSettings.headphones;
 		
 		// these shouldn't be persisted
 		// settings->jack = 0;
@@ -83,15 +94,25 @@ void InitSettings(void) {
 	// system("echo $(< " BRIGHTNESS_PATH ")");
 }
 void QuitSettings(void) {
-	munmap(settings, shm_size);
+	if (settings!=&local_settings) munmap(settings, shm_size);
+	if (shm_fd>=0) close(shm_fd);
 	if (is_host) shm_unlink(SHM_KEY);
 }
 static inline void SaveSettings(void) {
-	int fd = open(SettingsPath, O_CREAT|O_WRONLY, 0644);
+	// what's on the card already (eg. the same brightness and volume put back on every wake) isn't written again.
+	// Compared with the file, not a copy kept here: keymon and the launcher or a game each save to it
+	Settings on_card;
+	int fd = open(SettingsPath, O_RDONLY);
+	if (fd>=0) {
+		int same = read(fd, &on_card, shm_size)==shm_size && !memcmp(&on_card, settings, shm_size);
+		close(fd);
+		if (same) return;
+	}
+	fd = open(SettingsPath, O_CREAT|O_WRONLY, 0644);
 	if (fd>=0) {
 		write(fd, settings, shm_size);
+		fsync(fd); // just this file: sync() flushed the whole card on every volume and brightness step
 		close(fd);
-		sync();
 	}
 }
 
@@ -142,8 +163,8 @@ void SetRawBrightness(int val) { // 0 - 255
 	if (settings->hdmi) return;
 	
 	printf("SetRawBrightness(%i)\n", val); fflush(stdout);
-    int fd = open("/dev/disp", O_RDWR);
-	if (fd) {
+	int fd = open("/dev/disp", O_RDWR);
+	if (fd>=0) {
 	    unsigned long param[4]={0,val,0,0};
 		ioctl(fd, DISP_LCD_SET_BRIGHTNESS, &param);
 		close(fd);
@@ -167,7 +188,7 @@ void SetRawVolume(int val) { // 0 - 100
 		if (ok) return;
 	}
 	char cmd[256];
-	sprintf(cmd, "amixer set 'headphone volume' %i%% > /dev/null 2>&1", val);
+	snprintf(cmd, sizeof(cmd), "amixer set 'headphone volume' %i%% > /dev/null 2>&1", val);
 	system(cmd);
 }
 

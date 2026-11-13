@@ -63,6 +63,7 @@ static int blitKeys(char* keys, int x, int y, int h, int draw) {
 		int button_y = y + (h - SCALE1(BUTTON_SIZE)) / 2;
 		if (isText(word)) {
 			SDL_Surface* text = TTF_RenderUTF8_Blended(font.small, word, COLOR_LIGHT_TEXT);
+			if (!text) continue;
 			if (draw) SDL_BlitSurface(text, NULL, screen, &(SDL_Rect){ x, y + (h - text->h) / 2 });
 			x += text->w;
 			SDL_FreeSurface(text);
@@ -71,8 +72,10 @@ static int blitKeys(char* keys, int x, int y, int h, int draw) {
 			if (draw) {
 				GFX_blitAsset(ASSET_BUTTON, NULL, screen, &(SDL_Rect){ x, button_y });
 				SDL_Surface* text = TTF_RenderUTF8_Blended(font.medium, word, COLOR_BUTTON_TEXT);
-				SDL_BlitSurface(text, NULL, screen, &(SDL_Rect){ x + (SCALE1(BUTTON_SIZE) - text->w) / 2, button_y + (SCALE1(BUTTON_SIZE) - text->h) / 2 });
-				SDL_FreeSurface(text);
+				if (text) {
+					SDL_BlitSurface(text, NULL, screen, &(SDL_Rect){ x + (SCALE1(BUTTON_SIZE) - text->w) / 2, button_y + (SCALE1(BUTTON_SIZE) - text->h) / 2 });
+					SDL_FreeSurface(text);
+				}
 			}
 			x += SCALE1(BUTTON_SIZE);
 		}
@@ -82,10 +85,10 @@ static int blitKeys(char* keys, int x, int y, int h, int draw) {
 			int w = shoulder ? SHOULDER_W : SHOULDER_W*2 + KEY_GAP;
 			if (draw) {
 				GFX_blitPill(ASSET_BUTTON, screen, &(SDL_Rect){ x, button_y, w, SCALE1(BUTTON_SIZE) });
-				SDL_BlitSurface(text, NULL, screen, &(SDL_Rect){ x + (w - text->w) / 2, button_y + (SCALE1(BUTTON_SIZE) - text->h) / 2 });
+				if (text) SDL_BlitSurface(text, NULL, screen, &(SDL_Rect){ x + (w - text->w) / 2, button_y + (SCALE1(BUTTON_SIZE) - text->h) / 2 });
 			}
 			x += w;
-			SDL_FreeSurface(text);
+			if (text) SDL_FreeSurface(text);
 		}
 	}
 	return x - start;
@@ -106,6 +109,7 @@ static void blitHeader(char* title, char* where, int show_setting) {
 	int x = SCALE1(PADDING + BUTTON_PADDING);
 	int max_w = screen->w - x - ow - SCALE1(PADDING*2);
 	SDL_Surface* text = TTF_RenderUTF8_Blended(font.large, title, COLOR_DARK_TEXT); // grey, as every header
+	if (!text) return;
 	int y = SCALE1(PADDING) + (SCALE1(PILL_SIZE) - text->h) / 2;
 	SDL_BlitSurface(text, NULL, screen, &(SDL_Rect){ x, y });
 	int title_w = text->w;

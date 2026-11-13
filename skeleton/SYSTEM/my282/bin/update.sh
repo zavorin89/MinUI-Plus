@@ -181,11 +181,11 @@ install_update() {
 	[ "$FREE_KB" -ge "$NEEDED_KB" ] || fail "The card needs more free space"
 
 	echo 2 > "$PROGRESS"
-	show.elf "$UPDATE_IMAGE" 600 "$PROGRESS" &
+	show.elf "$UPDATE_IMAGE" 2400 "$PROGRESS" & # (outlasts the download, with room to verify and unpack)
 	SHOW_PID=$!
 	log "downloading: $TAG ($ASSET)"
 	rm -f "$PART" "$DOWNLOAD"
-	CA_CERT_PATH="$CA_CERT" "$HTTPS" -t 10m "$URL" "$PART" 2>>"$LOG" &
+	CA_CERT_PATH="$CA_CERT" "$HTTPS" -t 30m "$URL" "$PART" 2>>"$LOG" &
 	DOWNLOAD_PID=$!
 	while kill -0 "$DOWNLOAD_PID" 2>/dev/null; do
 		BYTES=0

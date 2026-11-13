@@ -386,9 +386,12 @@ static void writeSettings(int scope, int only) { // only: this scope is what app
 	fprintf(file, "effect = %i\nlayout = %i\nborder = %i\nswap = %i\ntearing = %i\nstick = %i\ncpu_speed = %i\n", effect_type, layout_index, border_style, swap_screens, prevent_tearing, stick_dpad, cpu_speed);
 	for (int i=0; i<EMU_OPTION_COUNT; i++) fprintf(file, "emu %s = %i\n", emu_options[i].key, emu_options[i].value);
 	for (int i=0; i<ACTION_COUNT; i++) fprintf(file, "bind %s = %i %i\n", actionKey(i), actions[i].btn, actions[i].mod);
-	fflush(file);
-	fsync(fileno(file));
+	int ok = fflush(file)==0 && !ferror(file) && fsync(fileno(file))==0;
 	fclose(file);
+	if (!ok) { // (a full card: the settings there stay as they were)
+		unlink(tmp);
+		return;
+	}
 	rename(tmp, path);
 	settings_loaded = scope;
 }
@@ -431,11 +434,12 @@ static void applyEmuOptions(void) { // into DraStic's config, before it reads it
 	for (int i=0; i<EMU_OPTION_COUNT; i++) {
 		if (!found[i]) fprintf(out, "%s = %i\n", emu_options[i].key, i==EMU_FPS_COUNTER ? 0 : emu_options[i].value);
 	}
+	int ok = !ferror(in);
 	fclose(in);
-	fflush(out);
-	fsync(fileno(out));
+	ok = ok && fflush(out)==0 && !ferror(out) && fsync(fileno(out))==0;
 	fclose(out);
-	rename(tmp, path);
+	if (ok) rename(tmp, path); // never a cut-short config in place of DraStic's own
+	else unlink(tmp);
 }
 
 ///////////////////////////////
@@ -616,6 +620,7 @@ static void setCoreOnline(int core, int online) {
 }
 
 static void composeShot(SDL_Surface* dst) { // the game as it looks, without the screen effect
+	if (!dst) return; // (no memory for the picture: saved without one)
 	if (border_dirty) loadBorder();
 	SDL_FillRect(dst, NULL, 0);
 	if (border_flat) SDL_BlitSurface(border_flat, NULL, dst, NULL);
@@ -777,7 +782,7 @@ static void getAlias(char* path, char* alias) {
 					char* key = line;
 					char* value = tmp+1;
 					if (exactMatch(file_name,key)) {
-						strcpy(alias, value);
+						snprintf(alias, 256, "%s", value); // (rom_name)
 						break;
 					}
 				}
@@ -1014,8 +1019,10 @@ static int Menu_options(MenuList* list) {
 						if (item->desc) desc = item->desc;
 					}
 					text = TTF_RenderUTF8_Blended(font.small, item->name, text_color);
-					SDL_BlitSurface(text, NULL, screen, &(SDL_Rect){ox+SCALE1(OPTION_PADDING), oy+SCALE1((j*BUTTON_SIZE)+1)});
-					SDL_FreeSurface(text);
+					if (text) {
+						SDL_BlitSurface(text, NULL, screen, &(SDL_Rect){ox+SCALE1(OPTION_PADDING), oy+SCALE1((j*BUTTON_SIZE)+1)});
+						SDL_FreeSurface(text);
+					}
 				}
 			}
 			else {
@@ -1056,12 +1063,16 @@ static int Menu_options(MenuList* list) {
 						if (item->desc) desc = item->desc;
 					}
 					text = TTF_RenderUTF8_Blended(font.small, item->name, text_color);
-					SDL_BlitSurface(text, NULL, screen, &(SDL_Rect){ox+SCALE1(OPTION_PADDING), oy+SCALE1((j*BUTTON_SIZE)+1)});
-					SDL_FreeSurface(text);
+					if (text) {
+						SDL_BlitSurface(text, NULL, screen, &(SDL_Rect){ox+SCALE1(OPTION_PADDING), oy+SCALE1((j*BUTTON_SIZE)+1)});
+						SDL_FreeSurface(text);
+					}
 					if (!(await_input && j==selected_row) && item->value>=0) {
 						text = TTF_RenderUTF8_Blended(font.tiny, item->values[item->value], COLOR_WHITE); // always white
-						SDL_BlitSurface(text, NULL, screen, &(SDL_Rect){ox + mw - text->w - SCALE1(OPTION_PADDING), oy+SCALE1((j*BUTTON_SIZE)+3)});
-						SDL_FreeSurface(text);
+						if (text) {
+							SDL_BlitSurface(text, NULL, screen, &(SDL_Rect){ox + mw - text->w - SCALE1(OPTION_PADDING), oy+SCALE1((j*BUTTON_SIZE)+3)});
+							SDL_FreeSurface(text);
+						}
 					}
 				}
 			}
@@ -1164,6 +1175,7 @@ static MenuList OptionEmulator_menu = {.type=MENU_FIXED, .title="Emulator Option
 static int OptionEmulator_openMenu(MenuList* list, int i) {
 	if (!emulator_items) {
 		emulator_items = calloc(EMU_OPTION_COUNT+1, sizeof(MenuItem));
+		if (!emulator_items) return MENU_CALLBACK_NOP;
 		for (int j=0; j<EMU_OPTION_COUNT; j++) {
 			emulator_items[j].name = (char*)emu_options[j].name;
 			emulator_items[j].desc = (char*)emu_options[j].desc;
@@ -1212,6 +1224,7 @@ static MenuList OptionShortcuts_menu = {.type=MENU_INPUT, .title="Shortcuts", .d
 static int openBindings(MenuList* menu, int from, int to) {
 	if (!menu->items) {
 		menu->items = calloc(to-from+1, sizeof(MenuItem));
+		if (!menu->items) return MENU_CALLBACK_NOP;
 		for (int j=from; j<to; j++) {
 			MenuItem* item = &menu->items[j-from];
 			item->name = (char*)actions[j].name;
@@ -1284,6 +1297,7 @@ static void initOptions(void) {
 		snprintf(name, sizeof(name), "MENU+%s", buttons[b].name);
 		button_labels[b] = (char*)buttons[b].name;
 		button_labels[BUTTON_COUNT-1+b] = strdup(name);
+		if (!button_labels[BUTTON_COUNT-1+b]) button_labels[BUTTON_COUNT-1+b] = (char*)buttons[b].name;
 	}
 }
 
@@ -1480,12 +1494,16 @@ static void runMenu(void) {
 				}
 				else {
 					text = TTF_RenderUTF8_Blended(font.medium, item, COLOR_BLACK);
-					SDL_BlitSurface(text, NULL, screen, &(SDL_Rect){SCALE1(2 + PADDING + BUTTON_PADDING), SCALE1(1 + PADDING + oy + (r * MENU_ROW_SIZE)) + text_oy});
-					SDL_FreeSurface(text);
+					if (text) {
+						SDL_BlitSurface(text, NULL, screen, &(SDL_Rect){SCALE1(2 + PADDING + BUTTON_PADDING), SCALE1(1 + PADDING + oy + (r * MENU_ROW_SIZE)) + text_oy});
+						SDL_FreeSurface(text);
+					}
 				}
 				text = TTF_RenderUTF8_Blended(font.medium, item, text_color);
-				SDL_BlitSurface(text, NULL, screen, &(SDL_Rect){SCALE1(PADDING + BUTTON_PADDING), SCALE1(oy + PADDING + (r * MENU_ROW_SIZE)) + text_oy});
-				SDL_FreeSurface(text);
+				if (text) {
+					SDL_BlitSurface(text, NULL, screen, &(SDL_Rect){SCALE1(PADDING + BUTTON_PADDING), SCALE1(oy + PADDING + (r * MENU_ROW_SIZE)) + text_oy});
+					SDL_FreeSurface(text);
+				}
 				r += 1;
 			}
 
@@ -1557,16 +1575,19 @@ static void runMenu(void) {
 				for (int i=0; i<STATS_ROWS; i++) {
 					int ty = oy + SCALE1(BUTTON_PADDING + i * STATS_ROW_SIZE) + stats_oy;
 					text = TTF_RenderUTF8_Blended(font.small, labels[i], COLOR_DARK_TEXT);
-					SDL_BlitSurface(text, NULL, screen, &(SDL_Rect){ox + SCALE1(BUTTON_PADDING), ty});
-					SDL_FreeSurface(text);
+					if (text) {
+						SDL_BlitSurface(text, NULL, screen, &(SDL_Rect){ox + SCALE1(BUTTON_PADDING), ty});
+						SDL_FreeSurface(text);
+					}
 					text = TTF_RenderUTF8_Blended(font.small, values[i], COLOR_WHITE);
-					SDL_BlitSurface(text, NULL, screen, &(SDL_Rect){ox + pw - SCALE1(BUTTON_PADDING) - text->w, ty});
-					SDL_FreeSurface(text);
+					if (text) {
+						SDL_BlitSurface(text, NULL, screen, &(SDL_Rect){ox + pw - SCALE1(BUTTON_PADDING) - text->w, ty});
+						SDL_FreeSurface(text);
+					}
 				}
 			}
 
-			if (menu_message_until) {
-				text = TTF_RenderUTF8_Blended(font.large, menu_message, COLOR_WHITE);
+			if (menu_message_until && (text = TTF_RenderUTF8_Blended(font.large, menu_message, COLOR_WHITE))) {
 				int pw = text->w + SCALE1(BUTTON_PADDING*4);
 				int ph = text->h + SCALE1(BUTTON_PADDING*2);
 				SDL_Rect box = {(screen->w-pw)/2, (screen->h-ph)/2, pw, ph};
@@ -1735,6 +1756,7 @@ static void h_SDL_RenderGetLogicalSize(void* r, int* w, int* h) {
 }
 static void* h_SDL_CreateTexture(void* r, Uint32 format, int access, int w, int h) {
 	LayerTexture* texture = calloc(1, sizeof(LayerTexture));
+	if (!texture) return NULL;
 	int is_screen = !format; // it leaves the screens' format to SDL
 	texture->real = SDL_CreateTexture(renderer, is_screen ? screen_format : format, access, w, h);
 	if (is_screen && screen_blend!=SDL_BLENDMODE_NONE && SDL_SetTextureBlendMode(texture->real, screen_blend)<0) { // converting beats stripes

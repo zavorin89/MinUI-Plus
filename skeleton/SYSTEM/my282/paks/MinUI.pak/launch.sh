@@ -150,6 +150,15 @@ fi
 	# the LEDs and what they can do (max_brightness 1 is only on or off), for the settings' Sleep light
 	{ for L in /sys/class/leds/*; do echo "$(basename "$L"): max_brightness $(cat "$L/max_brightness" 2>/dev/null), trigger $(cat "$L/trigger" 2>/dev/null)"; done; } > "$LOGS_PATH/leds.txt" 2>&1
 
+	# how long the power button is held to turn the A30 on (the power chip's setting: 128 ms, 1 s, 2 s or 3 s). It reads
+	# 3 s at boot (set by the firmware), so it's written each time, for the next power on; a drained battery resets it.
+	# 128 ms, to try it out: only ever shorter, so it can't undo Boot Tweaks' shorter hold
+	PEK=/sys/devices/platform/axp22_board
+	read -r PEK_BEFORE < $PEK/axp22_pekopen 2>/dev/null
+	[ -n "$PEK_BEFORE" ] && [ "$PEK_BEFORE" != 128 ] && echo 128 > $PEK/axp22_pekopen 2>/dev/null
+	read -r PEK_AFTER < $PEK/axp22_pekopen 2>/dev/null
+	echo "power-on hold: was '$PEK_BEFORE', now '$PEK_AFTER' (long press '$(cat $PEK/axp22_peklong 2>/dev/null)', power cut '$(cat $PEK/axp22_pekclose 2>/dev/null)')" > "$LOGS_PATH/power-key.txt" 2>&1
+
 	# MinUI+ only exposes its own focused tools. Older packages also installed six stock Extras that were never part
 	# of that set. Move them into hidden userdata instead of deleting them, so an existing user can recover one
 	# manually. Only the once: a tool someone puts on the card afterwards is theirs to keep.
@@ -257,6 +266,8 @@ while [ -f "$EXEC_PATH" ]; do
 	stamp "minui exited ($STATUS)"
 	if [ $STATUS -ne 0 ]; then # kept for troubleshooting, minui.txt is replaced on the next run
 		{ echo "=== `date +'%F %T'` minui exited with $STATUS"; tail -n 20 $LOGS_PATH/minui.txt; dmesg | tail -n 15; } >> $LOGS_PATH/minui-crash.txt
+		# the newest crashes only, so a run of them can't fill the card
+		[ "$(wc -c < $LOGS_PATH/minui-crash.txt)" -gt 65536 ] && tail -n 600 $LOGS_PATH/minui-crash.txt > /tmp/minui-crash.txt && mv /tmp/minui-crash.txt $LOGS_PATH/minui-crash.txt
 	fi
 	reclock
 	echo `TZ=UTC0 date +'%F %T'` > "$DATETIME_PATH"

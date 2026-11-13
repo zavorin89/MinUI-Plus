@@ -6,6 +6,8 @@
 #include <fcntl.h>
 #include <dirent.h>
 #include <linux/input.h>
+#include <poll.h>
+#include <sys/time.h>
 
 #include <msettings.h>
 
@@ -66,7 +68,7 @@ int main (int argc, char *argv[]) {
 	while (1) {
 		gettimeofday(&tod, NULL);
 		now = tod.tv_sec * 1000 + tod.tv_usec / 1000;
-		if (now-then>1000) ignore = 1; // ignore input that arrived during sleep
+		if (now-then>1500) ignore = 1; // ignore input that arrived during sleep (the loop is never idle longer than IDLE_MS)
 		
 		for (int i=0; i<INPUT_COUNT; i++) {
 			int input_fd = inputs[i];
@@ -138,6 +140,20 @@ int main (int argc, char *argv[]) {
 		then = now;
 		ignore = 0;
 		
-		usleep(16666); // 60fps
+		// waits for a button instead of waking 60 times a second for nothing: at 60fps only while volume or
+		// brightness is held (for its repeat), otherwise until a button or IDLE_MS
+		#define IDLE_MS 500
+		struct pollfd fds[INPUT_COUNT];
+		int watched = 0;
+		for (int i=0; i<INPUT_COUNT; i++) {
+			if (inputs[i]<0) continue;
+			fds[watched].fd = inputs[i];
+			fds[watched].events = POLLIN;
+			fds[watched].revents = 0;
+			watched += 1;
+		}
+		int holding = up_pressed || down_pressed;
+		if (watched) poll(fds, watched, holding ? 16 : IDLE_MS);
+		else usleep(16666);
 	}
 }

@@ -597,8 +597,8 @@ static void State_write(void) { // from picoarch
 	}
 
 	// beside the old save until it's all on the card: losing power mid-write costs this save, not that one too
-	char tmp_name[MAX_PATH+8];
-	sprintf(tmp_name, "%s.tmp", filename);
+	char tmp_name[sizeof(filename)+8];
+	snprintf(tmp_name, sizeof(tmp_name), "%s.tmp", filename);
 	state_file = fopen(tmp_name, "w");
 	if (!state_file) {
 		LOG_error("Error opening state file: %s (%s)\n", tmp_name, strerror(errno));
@@ -2408,10 +2408,10 @@ static bool set_rumble_state(unsigned port, enum retro_rumble_effect effect, uin
 static struct retro_memory_map memory_map = {0};
 static void saveMemoryMap(const struct retro_memory_map* map) {
 	if (memory_map.descriptors) free((void*)memory_map.descriptors);
-	struct retro_memory_descriptor* copy = malloc(sizeof(struct retro_memory_descriptor) * map->num_descriptors);
-	memcpy(copy, map->descriptors, sizeof(struct retro_memory_descriptor) * map->num_descriptors);
+	struct retro_memory_descriptor* copy = map->num_descriptors ? malloc(sizeof(struct retro_memory_descriptor) * map->num_descriptors) : NULL;
+	if (copy) memcpy(copy, map->descriptors, sizeof(struct retro_memory_descriptor) * map->num_descriptors);
 	memory_map.descriptors = copy;
-	memory_map.num_descriptors = map->num_descriptors;
+	memory_map.num_descriptors = copy ? map->num_descriptors : 0;
 }
 static void getCoreMemory(unsigned id, uint8_t** data, size_t* size) {
 	*data = core.get_memory_data ? core.get_memory_data(id) : NULL;
@@ -5633,9 +5633,9 @@ static void Menu_loop(void) {
 					else GFX_blitMessage(font.large, "Empty Slot", screen, &preview_rect);
 				}
 				
-				if (selected==ITEM_LOAD && RA_isHardcore()) {
+				SDL_Surface* text = selected==ITEM_LOAD && RA_isHardcore() ? TTF_RenderUTF8_Blended(font.small, "Loading ends hardcore", COLOR_WHITE) : NULL;
+				if (text) {
 					// a heads up over the preview: loading turns this session's hardcore off
-					SDL_Surface* text = TTF_RenderUTF8_Blended(font.small, "Loading ends hardcore", COLOR_WHITE);
 					SDL_Rect box = { ox + (hw - text->w)/2 - SCALE1(BUTTON_PADDING), oy + hh - text->h - SCALE1(BUTTON_PADDING*2), text->w + SCALE1(BUTTON_PADDING*2), text->h + SCALE1(BUTTON_PADDING) };
 					GFX_blitRect(ASSET_DARK_GRAY_PILL, screen, &box);
 					SDL_BlitSurface(text, NULL, screen, &(SDL_Rect){ box.x + SCALE1(BUTTON_PADDING), box.y + SCALE1(BUTTON_PADDING)/2 });
@@ -5691,18 +5691,18 @@ static void Menu_loop(void) {
 				}
 			}
 	
-			if (menu_message_until) {
-				SDL_Surface* text = TTF_RenderUTF8_Blended(font.large, menu_message, COLOR_WHITE);
-				int pw = text->w + SCALE1(BUTTON_PADDING*4);
-				int ph = text->h + SCALE1(BUTTON_PADDING*2);
+			SDL_Surface* message_txt = menu_message_until && menu_message ? TTF_RenderUTF8_Blended(font.large, menu_message, COLOR_WHITE) : NULL;
+			if (message_txt) {
+				int pw = message_txt->w + SCALE1(BUTTON_PADDING*4);
+				int ph = message_txt->h + SCALE1(BUTTON_PADDING*2);
 				SDL_Rect box = { (screen->w-pw)/2, (screen->h-ph)/2, pw, ph };
 				// its last moments fade: what was under it goes back over it, more each frame
 				int left = (int32_t)(menu_message_until - SDL_GetTicks());
 				SDL_Surface* under = left<MENU_MESSAGE_FADE_MS ? SDL_CreateRGBSurfaceWithFormat(0, pw, ph, screen->format->BitsPerPixel, screen->format->format) : NULL;
 				if (under) SDL_BlitSurface(screen, &box, under, NULL);
 				GFX_blitRect(ASSET_DARK_GRAY_PILL, screen, &box);
-				SDL_BlitSurface(text, NULL, screen, &(SDL_Rect){ box.x + (pw-text->w)/2, box.y + (ph-text->h)/2 });
-				SDL_FreeSurface(text);
+				SDL_BlitSurface(message_txt, NULL, screen, &(SDL_Rect){ box.x + (pw-message_txt->w)/2, box.y + (ph-message_txt->h)/2 });
+				SDL_FreeSurface(message_txt);
 				if (under) {
 					SDL_SetSurfaceBlendMode(under, SDL_BLENDMODE_BLEND);
 					SDL_SetSurfaceAlphaMod(under, 255 - 255 * MAX(left, 0) / MENU_MESSAGE_FADE_MS);

@@ -9,6 +9,7 @@
 #include <unistd.h>
 #include <errno.h>
 #include <pthread.h>
+#include <poll.h>
 #include <stdint.h>
 
 #include <msettings.h>
@@ -144,6 +145,18 @@ void PLAT_pollInput(void) {
 	PAD_setAnalog(BTN_ID_ANALOG_UP,   BTN_ID_ANALOG_DOWN,  pad.laxis.y, tick+PAD_REPEAT_DELAY);
 }
 
+void PLAT_waitForInput(int ms) { // nothing runs until a button (or ms): the 5 checks a second asleep are gone
+	struct pollfd fds[INPUT_COUNT];
+	int count = 0;
+	for (int i=0; i<INPUT_COUNT; i++) {
+		if (inputs[i]<0) continue;
+		fds[count].fd = inputs[i];
+		fds[count].events = POLLIN;
+		fds[count].revents = 0;
+		count += 1;
+	}
+	if (!count || poll(fds, count, ms)<0) SDL_Delay(ms<200 ? ms : 200); // (no inputs open, or a signal: as before)
+}
 int PLAT_shouldWake(void) {
 	int input;
 	static struct input_event event;
@@ -627,7 +640,7 @@ void PLAT_setBorder(const char* path) {
 		SDL_FreeSurface(image);
 		return;
 	}
-	strcpy(vid.border_path, path);
+	snprintf(vid.border_path, sizeof(vid.border_path), "%s", path);
 	vid.border_image = image;
 	vid.border_fit = (SDL_Rect){0,0,0,0};
 	vid.border_window = borderWindow(image); // (made for aspect scaling)
@@ -676,6 +689,12 @@ static void fitBorder(SDL_Rect* game) {
 		int left = win->x>0, right = win->x+win->w<w, top = win->y>0, bottom = win->y+win->h<h;
 		int* map_x = malloc(w * sizeof(int));
 		int* map_y = malloc(h * sizeof(int));
+		if (!map_x || !map_y) { // (shown as made instead)
+			free(map_x);
+			free(map_y);
+			SDL_FreeSurface(out);
+			return;
+		}
 		for (int x=0; x<w; x++) {
 			if (left && x<want.x) map_x[x] = MAX(0, x - (want.x - win->x));
 			else if (right && x>=want.x+want.w) map_x[x] = MIN(w-1, win->x + win->w + (x - want.x - want.w));
@@ -826,6 +845,10 @@ GFX_Texture* PLAT_createTexture(SDL_Surface* surface) {
 	SDL_SetTextureBlendMode(texture, SDL_BLENDMODE_BLEND);
 	SDL_SetTextureScaleMode(texture, SDL_ScaleModeLinear); // smooth when drawn at a different size
 	GFX_Texture* self = malloc(sizeof(GFX_Texture));
+	if (!self) {
+		SDL_DestroyTexture(texture);
+		return NULL;
+	}
 	self->texture = texture;
 	return self;
 }
@@ -1219,6 +1242,10 @@ static void* setCPUSpeedThread(void* arg) {
 }
 static void setCPUFreqAsync(int freq, int cores) {
 	CPUChange* change = malloc(sizeof(CPUChange));
+	if (!change) {
+		setCPUCores(freq, cores, 0);
+		return;
+	}
 	pthread_mutex_lock(&cpu_lock);
 	change->freq = freq;
 	change->cores = cores;

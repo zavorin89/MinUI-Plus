@@ -75,6 +75,10 @@ static int dismissed_alpha = 0;
 
 static pthread_mutex_t jobs_mx = PTHREAD_MUTEX_INITIALIZER;
 static int jobs_running = 0;
+static int unlocks_running = 0; // the requests worth waiting for on quit: an unlock or a leaderboard entry
+static pthread_mutex_t callback_mx; // a reply reaching rc_client, never while it's destroyed (recursive: a reply can start
+                                    // a request, which runs right there when no thread can be made)
+static int quitting = 0; // replies after this are dropped (the client is gone)
 
 ///////////////////////////////
 
@@ -105,6 +109,7 @@ static void notify(const char* title, const char* text) {
 ///////////////////////////////
 
 typedef struct Job {
+	int unlock;
 	char* url;
 	char* post_data;
 	char* content_type;
@@ -129,6 +134,7 @@ static void sendPending(void) { // after any successful request, so a connection
 
 static void* jobThread(void* arg) {
 	Job* job = arg;
+	int unlock = job->unlock;
 	HTTP_Response http = {0};
 	rc_api_server_response_t response = {0};
 	char key[128];
@@ -146,7 +152,9 @@ static void* jobThread(void* arg) {
 	}
 	else response.http_status_code = RC_API_SERVER_RESPONSE_RETRYABLE_CLIENT_ERROR;
 
-	job->callback(&response, job->callback_data);
+	pthread_mutex_lock(&callback_mx);
+	if (!quitting) job->callback(&response, job->callback_data);
+	pthread_mutex_unlock(&callback_mx);
 
 	HTTP_freeResponse(&http);
 	if (offline) free(offline);
@@ -158,6 +166,7 @@ static void* jobThread(void* arg) {
 
 	pthread_mutex_lock(&jobs_mx);
 	jobs_running -= 1;
+	if (unlock) unlocks_running -= 1;
 	pthread_mutex_unlock(&jobs_mx);
 	return NULL;
 }
@@ -169,9 +178,11 @@ static void serverCall(const rc_api_request_t* request, rc_client_server_callbac
 	job->content_type = request->content_type ? strdup(request->content_type) : NULL;
 	job->callback = callback;
 	job->callback_data = callback_data;
+	job->unlock = job->post_data && (prefixMatch("r=awardachievement&", job->post_data) || prefixMatch("r=submitlbentry&", job->post_data));
 
 	pthread_mutex_lock(&jobs_mx);
 	jobs_running += 1;
+	if (job->unlock) unlocks_running += 1;
 	pthread_mutex_unlock(&jobs_mx);
 
 	pthread_t thread;
@@ -332,6 +343,16 @@ void RA_init(const char* core_tag, const char* rom_path, const void* rom_data, s
 	core_get_memory = get_memory;
 	memory_ready = rc_libretro_memory_init(&memory, mmap, getCoreMemoryInfo, console_id);
 
+	static int callback_mx_ready = 0;
+	if (!callback_mx_ready) {
+		pthread_mutexattr_t attr;
+		pthread_mutexattr_init(&attr);
+		pthread_mutexattr_settype(&attr, PTHREAD_MUTEX_RECURSIVE);
+		pthread_mutex_init(&callback_mx, &attr);
+		pthread_mutexattr_destroy(&attr);
+		callback_mx_ready = 1;
+	}
+	quitting = 0;
 	client = rc_client_create(readMemory, serverCall);
 	rc_client_enable_logging(client, RC_CLIENT_LOG_LEVEL_WARN, clientLog); // its warnings and errors, in the log
 	rc_client_set_event_handler(client, eventHandler);
@@ -399,7 +420,9 @@ static int wrapLines(TTF_Font* f, const char* text, int max_w, int max_lines, SD
 		}
 		char fitted[512];
 		GFX_truncateText(f, line, fitted, max_w, 0);
-		out[count++] = TTF_RenderUTF8_Blended(f, fitted, color);
+		SDL_Surface* rendered = fitted[0] ? TTF_RenderUTF8_Blended(f, fitted, color) : NULL;
+		if (rendered) out[count++] = rendered;
+		else break; // (nothing to show, or out of memory)
 		if (count==max_lines) break;
 	}
 	return count;
@@ -408,6 +431,7 @@ static int wrapLines(TTF_Font* f, const char* text, int max_w, int max_lines, SD
 // draws a notification onto a transparent full screen surface for the platform to show over the game
 static void showNotification(Notification* n) {
 	SDL_Surface* overlay = SDL_CreateRGBSurfaceWithFormat(0, FIXED_WIDTH, FIXED_HEIGHT, 32, SDL_PIXELFORMAT_RGBA32);
+	if (!overlay) return;
 	SDL_FillRect(overlay, NULL, SDL_MapRGBA(overlay->format, 0,0,0,0));
 
 	SDL_Surface* badge = n->badge[0] ? loadBadge(n->badge) : NULL;
@@ -557,14 +581,18 @@ int RA_dismissNotification(void) {
 
 void RA_quit(void) {
 	if (!client) return;
-	// give unlocks earned right before quitting a chance to reach the server
-	for (int waited=0; waited<RA_QUIT_WAIT_MS; waited+=100) {
+	// give unlocks earned right before quitting a chance to reach the server. Nothing else is waited for (a rich
+	// presence ping on a slow connection held up leaving a game for seconds): those replies are dropped from here on
+	for (int waited=0; waited<RA_QUIT_WAIT_MS; waited+=20) {
 		pthread_mutex_lock(&jobs_mx);
-		int running = jobs_running;
+		int running = unlocks_running;
 		pthread_mutex_unlock(&jobs_mx);
 		if (!running) break;
-		usleep(100000);
+		usleep(20000);
 	}
+	pthread_mutex_lock(&callback_mx);
+	quitting = 1;
+	pthread_mutex_unlock(&callback_mx);
 	GFX_setNotification(NULL);
 	notify_showing = 0;
 	rc_client_unload_game(client);
@@ -603,7 +631,8 @@ typedef struct Row {
 	const rc_client_achievement_t* achievement;
 } Row;
 
-#define LIST_ROWS 4 // leaves room for the summary above and the description below
+#define LIST_ROWS 5 // under the summary, with the highlighted one's description on one line below them
+#define LIST_ROW_SIZE 27 // a little under a pill, so five rows and the description fit above the buttons
 
 // X cycles the order of the achievements list, remembered between games
 enum {
@@ -685,6 +714,10 @@ void RA_showAchievements(SDL_Surface* screen, RA_SleepCallback before_sleep, RA_
 	int capacity = 2; // the most headers a non-default sort adds
 	for (uint32_t b=0; b<list->num_buckets; b++) capacity += 1 + list->buckets[b].num_achievements;
 	Row* rows = calloc(capacity, sizeof(Row));
+	if (!rows) {
+		rc_client_destroy_achievement_list(list);
+		return;
+	}
 	int sort = getInt(SORT_PATH);
 	if (sort<0 || sort>=SORT_COUNT) sort = SORT_DEFAULT;
 	int count = buildRows(list, sort, rows);
@@ -698,13 +731,19 @@ void RA_showAchievements(SDL_Surface* screen, RA_SleepCallback before_sleep, RA_
 	
 	SDL_Surface** badges = calloc(capacity, sizeof(SDL_Surface*)); // loaded the first time each row is drawn
 	char* badge_tried = calloc(capacity, 1);
+	if (!badges || !badge_tried) {
+		free(badges);
+		free(badge_tried);
+		free(rows);
+		rc_client_destroy_achievement_list(list);
+		return;
+	}
 
 	int summary_ow = 0, summary_scrolls = 0;
-	// the highlighted achievement's description as laid out, worked out again only when another is highlighted
-	int laid_out = -1;
-	char laid_description[512+3]; // room for wrapping's "..."
-	TTF_Font* desc_font = font.small;
-	int desc_step = 0, rows_shown = LIST_ROWS;
+	// the highlighted achievement's description, on one line that scrolls when it's too long
+	int described = -1;
+	SDL_Surface* desc_txt = NULL;
+	uint32_t desc_at = 0;
 	int selected = firstAchievement(rows, count); // row 0 is a header
 	int start = 0;
 	int dirty = 1;
@@ -731,7 +770,7 @@ void RA_showAchievements(SDL_Surface* screen, RA_SleepCallback before_sleep, RA_
 			count = buildRows(list, sort, rows);
 			selected = firstAchievement(rows, count);
 			start = 0;
-			laid_out = -1; // (another achievement may be at the same row now)
+			described = -1; // (another achievement may be at the same row now)
 			flash_until = SDL_GetTicks() + 1000;
 			dirty = 1;
 		}
@@ -763,6 +802,27 @@ void RA_showAchievements(SDL_Surface* screen, RA_SleepCallback before_sleep, RA_
 		
 		PWR_update(&dirty, &show_setting, before_sleep, after_sleep);
 		
+		int width = screen->w - SCALE1(PADDING*2);
+		int desc_x = SCALE1(PADDING+BUTTON_PADDING);
+		int desc_w = width - SCALE1(BUTTON_PADDING*2);
+		int desc_y = SCALE1(PADDING + PILL_SIZE + LIST_ROWS*LIST_ROW_SIZE + 2);
+		if (described!=selected) {
+			// with its progress when it tracks any
+			described = selected;
+			if (desc_txt) SDL_FreeSurface(desc_txt);
+			desc_txt = NULL;
+			const rc_client_achievement_t* a = rows[selected].achievement;
+			if (a && a->description[0]) {
+				char raw[512];
+				if (a->measured_progress[0] && !a->unlocked) snprintf(raw, sizeof(raw), "%s (%s)", a->description, a->measured_progress);
+				else snprintf(raw, sizeof(raw), "%s", a->description);
+				for (char* c=raw; *c; c++) if (c[0]==' ' && c[1]==' ') { memmove(c, c+1, strlen(c)); c--; } // "Temple.  When"
+				desc_txt = TTF_RenderUTF8_Blended(font.small, raw, COLOR_WHITE);
+			}
+			desc_at = SDL_GetTicks();
+		}
+		int desc_scrolls = desc_txt && desc_txt->w>desc_w;
+		
 		if (dirty) {
 			GFX_clear(screen);
 			int ow = GFX_blitHardwareGroup(screen, show_setting);
@@ -771,68 +831,21 @@ void RA_showAchievements(SDL_Surface* screen, RA_SleepCallback before_sleep, RA_
 			summary_scrolls = GFX_blitHeaderText(screen, font.small, COLOR_WHITE, summary_text, ow);
 			SDL_Surface* text = NULL;
 			
-			int width = screen->w - SCALE1(PADDING*2);
-			// the highlighted achievement's description, with progress when it tracks any, all of it when it can be:
-			// two lines, or smaller ones, and for the longest the list shows a row or two fewer
-			const rc_client_achievement_t* a = rows[selected].achievement;
-			char description[512+3];
-			if (laid_out!=selected) {
-				laid_out = selected;
-				description[0] = '\0';
-				desc_font = font.small;
-				desc_step = TTF_FontHeight(font.small);
-				rows_shown = LIST_ROWS;
-				if (a) {
-					char raw[512];
-					if (a->measured_progress[0] && !a->unlocked) snprintf(raw, sizeof(raw), "%s (%s)", a->description, a->measured_progress);
-					else snprintf(raw, sizeof(raw), "%s", a->description);
-					for (char* c=raw; *c; c++) if (c[0]==' ' && c[1]==' ') { memmove(c, c+1, strlen(c)); c--; } // "Temple.  When"
-					int max_w = width - SCALE1(BUTTON_PADDING*2);
-					int bar = screen->h - SCALE1(PADDING + PILL_SIZE); // the buttons' top
-					int fitted = 0;
-					for (int shown=LIST_ROWS; shown>=2 && !fitted; shown--) {
-						int room = bar - SCALE1(PADDING + (shown+1)*PILL_SIZE + 2);
-						for (int small=shown==LIST_ROWS; small>=0 && !fitted; small--) {
-							TTF_Font* f = small ? font.small : font.tiny;
-							snprintf(description, sizeof(description), "%s", raw);
-							GFX_wrapText(f, description, max_w, 0);
-							int lines = 1;
-							for (char* c=description; *c; c++) if (*c=='\n') lines++;
-							int h = TTF_FontHeight(f);
-							int step = MIN(h, room / lines);
-							if (step*100 >= h*(small ? 100 : 88)) { // (small lines a touch closer together still read fine)
-								fitted = 1;
-								rows_shown = shown;
-								desc_font = f;
-								desc_step = step;
-							}
-						}
-					}
-					if (!fitted) { // the longest of all: as much as fits under two rows
-						rows_shown = 2;
-						int room = bar - SCALE1(PADDING + (rows_shown+1)*PILL_SIZE + 2);
-						desc_font = font.tiny;
-						desc_step = TTF_FontHeight(font.tiny)*88/100;
-						snprintf(description, sizeof(description), "%s", raw);
-						GFX_wrapText(font.tiny, description, max_w, MAX(1, room / desc_step));
-					}
-				}
-				snprintf(laid_description, sizeof(laid_description), "%s", description);
-			}
-			else snprintf(description, sizeof(description), "%s", laid_description); // (drawing cuts it up)
-			if (selected>=start+rows_shown) start = selected - rows_shown + 1; // the highlighted row stays in view
-			for (int i=start, j=0; i<count && j<rows_shown; i++, j++) {
-				int y = SCALE1(PADDING + (j+1)*PILL_SIZE);
+			int row_h = SCALE1(LIST_ROW_SIZE);
+			for (int i=start, j=0; i<count && j<LIST_ROWS; i++, j++) {
+				int y = SCALE1(PADDING + PILL_SIZE) + j*row_h;
 				Row* row = &rows[i];
 				if (row->header) {
 					text = TTF_RenderUTF8_Blended(font.small, row->header, COLOR_DARK_TEXT);
-					SDL_BlitSurface(text, NULL, screen, &(SDL_Rect){ SCALE1(PADDING+BUTTON_PADDING), y + (SCALE1(PILL_SIZE)-text->h)/2 });
-					SDL_FreeSurface(text);
+					if (text) {
+						SDL_BlitSurface(text, NULL, screen, &(SDL_Rect){ SCALE1(PADDING+BUTTON_PADDING), y + (row_h-text->h)/2 });
+						SDL_FreeSurface(text);
+					}
 					continue;
 				}
 				const rc_client_achievement_t* a = row->achievement;
 				int is_selected = i==selected;
-				if (is_selected) GFX_blitPill(ASSET_WHITE_PILL, screen, &(SDL_Rect){ SCALE1(PADDING), y, width, SCALE1(PILL_SIZE) });
+				if (is_selected) GFX_blitRect(ASSET_WHITE_PILL, screen, &(SDL_Rect){ SCALE1(PADDING), y, width, row_h }); // (rounded at this height too)
 				SDL_Color color = is_selected ? COLOR_BLACK : (a->unlocked ? COLOR_WHITE : COLOR_DARK_TEXT);
 				
 				if (!badge_tried[i]) {
@@ -840,7 +853,7 @@ void RA_showAchievements(SDL_Surface* screen, RA_SleepCallback before_sleep, RA_
 					badges[i] = loadBadge(a->badge_name);
 					if (badges[i] && !a->unlocked) SDL_SetSurfaceColorMod(badges[i], 90, 90, 90); // locked ones are dimmed
 				}
-				int badge_size = SCALE1(PILL_SIZE - 6);
+				int badge_size = row_h - SCALE1(6);
 				int text_x = SCALE1(PADDING+BUTTON_PADDING);
 				if (badges[i]) {
 					SDL_BlitScaled(badges[i], NULL, screen, &(SDL_Rect){ SCALE1(PADDING+BUTTON_PADDING)/2 + SCALE1(PADDING)/2, y + SCALE1(3), badge_size, badge_size });
@@ -850,38 +863,33 @@ void RA_showAchievements(SDL_Surface* screen, RA_SleepCallback before_sleep, RA_
 				char points[16];
 				snprintf(points, sizeof(points), "%u", a->points);
 				SDL_Surface* points_txt = TTF_RenderUTF8_Blended(font.small, points, color);
+				int points_w = points_txt ? points_txt->w : 0;
 				char title[160];
-				GFX_truncateText(font.large, (char*)a->title, title, width - (text_x - SCALE1(PADDING)) - points_txt->w - SCALE1(BUTTON_PADDING*2), 0);
+				GFX_truncateText(font.large, (char*)a->title, title, width - (text_x - SCALE1(PADDING)) - points_w - SCALE1(BUTTON_PADDING*2), 0);
 				text = TTF_RenderUTF8_Blended(font.large, title, color);
-				SDL_BlitSurface(text, NULL, screen, &(SDL_Rect){ text_x, y + SCALE1(4) });
-				SDL_FreeSurface(text);
-				SDL_BlitSurface(points_txt, NULL, screen, &(SDL_Rect){ SCALE1(PADDING) + width - SCALE1(BUTTON_PADDING) - points_txt->w, y + (SCALE1(PILL_SIZE)-points_txt->h)/2 });
-				SDL_FreeSurface(points_txt);
-			}
-			
-			if (description[0]) {
-				int y = SCALE1(PADDING + (rows_shown+1)*PILL_SIZE + 2);
-				char* line = strtok(description, "\n");
-				while (line) {
-					text = TTF_RenderUTF8_Blended(desc_font, line, COLOR_WHITE);
-					if (text) {
-						SDL_BlitSurface(text, NULL, screen, &(SDL_Rect){ SCALE1(PADDING+BUTTON_PADDING), y });
-						SDL_FreeSurface(text);
-					}
-					y += desc_step;
-					line = strtok(NULL, "\n");
+				if (text) {
+					SDL_BlitSurface(text, NULL, screen, &(SDL_Rect){ text_x, y + (row_h-text->h)/2 });
+					SDL_FreeSurface(text);
+				}
+				if (points_txt) {
+					SDL_BlitSurface(points_txt, NULL, screen, &(SDL_Rect){ SCALE1(PADDING) + width - SCALE1(BUTTON_PADDING) - points_w, y + (row_h-points_txt->h)/2 });
+					SDL_FreeSurface(points_txt);
 				}
 			}
+			
+			if (desc_txt) SDL_BlitSurface(desc_txt, &(SDL_Rect){ GFX_scrollOffset(desc_txt->w - desc_w, desc_at), 0, desc_w, desc_txt->h }, screen, &(SDL_Rect){ desc_x, desc_y });
 			
 			if (flash_until) {
 				// the new order's name in a box over the list, like the launcher's sort popup
 				text = TTF_RenderUTF8_Blended(font.large, sort_labels[sort], COLOR_WHITE);
-				int pw = text->w + SCALE1(BUTTON_PADDING*4);
-				int ph = text->h + SCALE1(BUTTON_PADDING*2);
-				SDL_Rect box = { (screen->w-pw)/2, (screen->h-ph)/2, pw, ph };
-				GFX_blitRect(ASSET_DARK_GRAY_PILL, screen, &box);
-				SDL_BlitSurface(text, NULL, screen, &(SDL_Rect){ box.x + (pw-text->w)/2, box.y + (ph-text->h)/2 });
-				SDL_FreeSurface(text);
+				if (text) {
+					int pw = text->w + SCALE1(BUTTON_PADDING*4);
+					int ph = text->h + SCALE1(BUTTON_PADDING*2);
+					SDL_Rect box = { (screen->w-pw)/2, (screen->h-ph)/2, pw, ph };
+					GFX_blitRect(ASSET_DARK_GRAY_PILL, screen, &box);
+					SDL_BlitSurface(text, NULL, screen, &(SDL_Rect){ box.x + (pw-text->w)/2, box.y + (ph-text->h)/2 });
+					SDL_FreeSurface(text);
+				}
 			}
 
 			if (show_setting && !GetHDMI()) GFX_blitHardwareHints(screen, show_setting);
@@ -890,14 +898,22 @@ void RA_showAchievements(SDL_Surface* screen, RA_SleepCallback before_sleep, RA_
 			GFX_flip(screen);
 			dirty = 0;
 		}
-		else if (summary_scrolls) {
-			int x = SCALE1(PADDING+BUTTON_PADDING);
-			SDL_FillRect(screen, &(SDL_Rect){ x, SCALE1(PADDING), screen->w - SCALE1(PADDING*2) - summary_ow - x, SCALE1(PILL_SIZE) }, 0); // only its strip
-			GFX_blitHeaderText(screen, font.small, COLOR_WHITE, summary_text, summary_ow);
+		else if (summary_scrolls || (desc_scrolls && !flash_until)) {
+			// only the strips that move: the rest of the list stays as drawn
+			if (summary_scrolls) {
+				int x = SCALE1(PADDING+BUTTON_PADDING);
+				SDL_FillRect(screen, &(SDL_Rect){ x, SCALE1(PADDING), screen->w - SCALE1(PADDING*2) - summary_ow - x, SCALE1(PILL_SIZE) }, 0);
+				GFX_blitHeaderText(screen, font.small, COLOR_WHITE, summary_text, summary_ow);
+			}
+			if (desc_scrolls) {
+				SDL_FillRect(screen, &(SDL_Rect){ desc_x, desc_y, desc_w, desc_txt->h }, 0);
+				SDL_BlitSurface(desc_txt, &(SDL_Rect){ GFX_scrollOffset(desc_txt->w - desc_w, desc_at), 0, desc_w, desc_txt->h }, screen, &(SDL_Rect){ desc_x, desc_y });
+			}
 			GFX_flip(screen);
 		}
 		else GFX_sync();
 	}
+	if (desc_txt) SDL_FreeSurface(desc_txt);
 	
 	for (int i=0; i<capacity; i++) if (badges[i]) SDL_FreeSurface(badges[i]);
 	free(badges);

@@ -71,7 +71,7 @@ static const char* systems[][2] = {
 // the library's name for a Roms folder's system, NULL when it has none
 static const char* librarySystem(char* folder) {
 	char probe[MAX_PATH], tag[MAX_PATH];
-	sprintf(probe, "%s/x", folder);
+	snprintf(probe, sizeof(probe), "%s/x", folder);
 	getEmuName(probe, tag);
 	for (int i=0; systems[i][0]; i++) if (!strcasecmp(systems[i][0], tag)) return systems[i][1];
 	// variants like SFC10 or SNESX share their base system's art
@@ -136,16 +136,20 @@ static void showProgress(char* title, int done, int count, char* name, int force
 	int y = screen->h/2 - SCALE1(PILL_SIZE*2);
 
 	SDL_Surface* text = TTF_RenderUTF8_Blended(font.large, title, COLOR_WHITE);
-	SDL_BlitSurface(text, NULL, screen, &(SDL_Rect){ (screen->w-text->w)/2, y });
-	y += text->h + SCALE1(4);
-	SDL_FreeSurface(text);
+	if (text) {
+		SDL_BlitSurface(text, NULL, screen, &(SDL_Rect){ (screen->w-text->w)/2, y });
+		y += text->h + SCALE1(4);
+		SDL_FreeSurface(text);
+	}
 
 	char shown[256];
 	GFX_truncateText(font.small, name, shown, width, 0);
-	text = TTF_RenderUTF8_Blended(font.small, shown, COLOR_DARK_TEXT);
-	SDL_BlitSurface(text, NULL, screen, &(SDL_Rect){ (screen->w-text->w)/2, y });
-	y += text->h + SCALE1(PADDING);
-	SDL_FreeSurface(text);
+	text = shown[0] ? TTF_RenderUTF8_Blended(font.small, shown, COLOR_DARK_TEXT) : NULL;
+	if (text) {
+		SDL_BlitSurface(text, NULL, screen, &(SDL_Rect){ (screen->w-text->w)/2, y });
+		SDL_FreeSurface(text);
+	}
+	y += TTF_FontHeight(font.small) + SCALE1(PADDING);
 
 	int bar_h = SCALE1(20);
 	GFX_blitRect(ASSET_OPTION, screen, &(SDL_Rect){ x, y, width, bar_h });
@@ -156,8 +160,10 @@ static void showProgress(char* title, int done, int count, char* name, int force
 	char status[128];
 	snprintf(status, sizeof(status), "%i of %i (%i%% done)", MIN(done+1, count), count, count ? done*100/count : 0);
 	text = TTF_RenderUTF8_Blended(font.small, status, COLOR_WHITE);
-	SDL_BlitSurface(text, NULL, screen, &(SDL_Rect){ (screen->w-text->w)/2, y });
-	SDL_FreeSurface(text);
+	if (text) {
+		SDL_BlitSurface(text, NULL, screen, &(SDL_Rect){ (screen->w-text->w)/2, y });
+		SDL_FreeSurface(text);
+	}
 
 	GFX_blitButtonGroup((char*[]){ "B","CANCEL", NULL }, 0, screen, 1);
 	GFX_flip(screen);
@@ -204,6 +210,11 @@ static void filterRow(const uint8_t* row, const uint8_t* prev, int length, int b
 	static unsigned char tries[5][250*3]; // ART_WIDTH rows of rgb
 	unsigned char* trial[5];
 	unsigned char* spare = length>(int)sizeof(tries[0]) ? malloc(length*5) : NULL;
+	if (length>(int)sizeof(tries[0]) && !spare) { // (no room to try them: unfiltered)
+		out[0] = 0;
+		memcpy(out+1, row, length);
+		return;
+	}
 	for (int f=0; f<5; f++) trial[f] = spare ? spare + f*length : tries[f];
 	long best_sum = -1;
 	int best = 0;
@@ -227,22 +238,25 @@ static void filterRow(const uint8_t* row, const uint8_t* prev, int length, int b
 static int savePNG(const char* path, const uint8_t* rgba, int w, int h) { // rgba rows, 4 bytes per pixel
 	int stride = w*3;
 	uint8_t* rgb = malloc((size_t)h * stride);
+	if (!rgb) return 0;
 	for (size_t i=0; i<(size_t)w*h; i++) {
 		int a = rgba[i*4+3];
 		for (int k=0; k<3; k++) rgb[i*3+k] = (rgba[i*4+k] * a + 127) / 255;
 	}
 	size_t raw_size = (size_t)h * (stride + 1);
 	unsigned char* raw = malloc(raw_size);
+	if (!raw) { free(rgb); return 0; }
 	for (int y=0; y<h; y++) filterRow(rgb + (size_t)y*stride, y ? rgb + (size_t)(y-1)*stride : NULL, stride, 3, raw + (size_t)y*(stride+1));
 	free(rgb);
 	uLongf packed_size = compressBound(raw_size);
 	unsigned char* packed = malloc(packed_size);
+	if (!packed) { free(raw); return 0; }
 	int ok = compress2(packed, &packed_size, raw, raw_size, 6)==Z_OK;
 	free(raw);
 	if (!ok) { free(packed); return 0; }
 
 	char tmp_path[MAX_PATH];
-	sprintf(tmp_path, "%s.tmp", path);
+	snprintf(tmp_path, sizeof(tmp_path), "%s.tmp", path);
 	FILE* file = fopen(tmp_path, "wb");
 	if (!file) { free(packed); return 0; }
 	static const unsigned char signature[8] = { 0x89,'P','N','G','\r','\n',0x1a,'\n' };
@@ -286,6 +300,10 @@ static int saveResized(SDL_Surface* image, const char* path) {
 	int dh = (int)((long)sh * dw / sw);
 	if (dh<1) dh = 1;
 	uint8_t* out = malloc((size_t)dw * dh * 4);
+	if (!out) {
+		SDL_FreeSurface(src);
+		return 0;
+	}
 	SDL_LockSurface(src);
 	for (int y=0; y<dh; y++) {
 		for (int x=0; x<dw; x++) {
@@ -441,19 +459,28 @@ static int loadArtList(const char* system, ArtList* list) {
 	if (!file) return 0;
 	int capacity = 1024;
 	list->items = malloc(capacity * sizeof(Art));
+	if (!list->items) {
+		fclose(file);
+		return 0;
+	}
 	char line[MAX_PATH];
 	while (fgets(line, sizeof(line), file)) {
 		trimTrailingNewlines(line);
-		if (!line[0]) continue;
+		if (!suffixMatch(".png", line)) continue; // (and the rest of a line too long to read whole)
 		if (list->count==capacity) {
+			Art* bigger = realloc(list->items, capacity * 2 * sizeof(Art));
+			if (!bigger) break;
+			list->items = bigger;
 			capacity *= 2;
-			list->items = realloc(list->items, capacity * sizeof(Art));
 		}
-		Art* art = &list->items[list->count++];
+		Art* art = &list->items[list->count];
 		art->href = strdup(line);
+		if (!art->href) break;
+		list->count += 1;
 		char decoded[MAX_PATH];
 		urlDecode(line, decoded);
-		decoded[strlen(decoded)-4] = '\0'; // .png
+		int decoded_len = strlen(decoded);
+		if (decoded_len>=4) decoded[decoded_len-4] = '\0'; // .png
 		normalize(decoded, art->key);
 		art->score = regionScore(decoded);
 	}
@@ -514,7 +541,7 @@ static int collectFolder(char* folder, Game* games, int count, int missing_only)
 		if (dp->d_name[0]=='.' || (!is_dir && !isGameFile(dp->d_name))) continue;
 		if (is_dir && suffixMatch(".pak", dp->d_name)) continue;
 		char art_path[MAX_PATH];
-		sprintf(art_path, "%s/.res/%s.png", folder, dp->d_name);
+		if (snprintf(art_path, sizeof(art_path), "%s/.res/%s.png", folder, dp->d_name)>=(int)sizeof(art_path)) continue; // (a path too long to have art)
 		if (missing_only && exists(art_path)) continue;
 		Game* game = &games[count++];
 		strcpy(game->folder, folder);
@@ -534,7 +561,7 @@ static int collectGames(Game* games, int missing_only) {
 	while ((sys = readdir(roms)) && count<MAX_GAMES) {
 		if (sys->d_name[0]=='.' || sys->d_type!=DT_DIR) continue;
 		char folder[MAX_PATH];
-		sprintf(folder, "%s/%s", ROMS_PATH, sys->d_name);
+		snprintf(folder, sizeof(folder), "%s/%s", ROMS_PATH, sys->d_name);
 		count = collectFolder(folder, games, count, missing_only);
 	}
 	closedir(roms);
@@ -550,6 +577,10 @@ static int markNoMatch(Game* games, int count) {
 	if (!file) return 0;
 	int capacity = 256, total = 0;
 	NoMatch* known = malloc(capacity * sizeof(NoMatch));
+	if (!known) {
+		fclose(file);
+		return 0;
+	}
 	char line[MAX_PATH*2+32];
 	time_t now = time(NULL);
 	while (fgets(line, sizeof(line), file)) {
@@ -557,8 +588,15 @@ static int markNoMatch(Game* games, int count) {
 		char* tab = strchr(line, '\t');
 		time_t at = atol(line);
 		if (!tab || !at || now-at>=LIST_MAX_AGE) continue;
-		if (total==capacity) known = realloc(known, (capacity *= 2) * sizeof(NoMatch));
-		known[total++] = (NoMatch){ strdup(tab+1), at };
+		if (total==capacity) {
+			NoMatch* bigger = realloc(known, capacity * 2 * sizeof(NoMatch));
+			if (!bigger) break;
+			known = bigger;
+			capacity *= 2;
+		}
+		char* path = strdup(tab+1);
+		if (!path) break;
+		known[total++] = (NoMatch){ path, at };
 	}
 	fclose(file);
 	qsort(known, total, sizeof(NoMatch), byPath);
@@ -715,8 +753,10 @@ static void drawPicker(Game* game, SDL_Surface* current, SDL_Surface** loaded, i
 	char title[MAX_PATH];
 	GFX_truncateText(font.large, game->name, title, screen->w - SCALE1(PADDING*2 + 90), 0);
 	SDL_Surface* text = TTF_RenderUTF8_Blended(font.large, title, COLOR_WHITE);
-	SDL_BlitSurface(text, NULL, screen, &(SDL_Rect){ SCALE1(PADDING + BUTTON_PADDING), SCALE1(PADDING) + (SCALE1(PILL_SIZE) - text->h)/2 });
-	SDL_FreeSurface(text);
+	if (text) {
+		SDL_BlitSurface(text, NULL, screen, &(SDL_Rect){ SCALE1(PADDING + BUTTON_PADDING), SCALE1(PADDING) + (SCALE1(PILL_SIZE) - text->h)/2 });
+		SDL_FreeSurface(text);
+	}
 
 	int top = SCALE1(PADDING + PILL_SIZE + 4);
 	int label_h = SCALE1(30);
@@ -731,7 +771,8 @@ static void drawPicker(Game* game, SDL_Surface* current, SDL_Surface** loaded, i
 	blitCaption("Current", COLOR_WHITE, left.x + left.w/2, left.y + left.h + SCALE1(4), half);
 	char name[MAX_PATH], decoded[MAX_PATH];
 	urlDecode(candidates[index]->href, decoded);
-	decoded[strlen(decoded)-4] = '\0'; // .png
+	int decoded_len = strlen(decoded);
+	if (decoded_len>=4) decoded[decoded_len-4] = '\0'; // .png
 	snprintf(name, sizeof(name), "%i of %i", index+1, count);
 	blitCaption(name, COLOR_WHITE, right.x + right.w/2, right.y + right.h + SCALE1(2), half);
 	blitCaption(decoded, COLOR_DARK_TEXT, right.x + right.w/2, right.y + right.h + SCALE1(15), half);
@@ -877,8 +918,16 @@ static void addMissed(Missed* missed, Game* game, const char* why) {
 	if (open && close && close-open-1<(int)sizeof(tag)) snprintf(tag, sizeof(tag), "%.*s - ", (int)(close-open-1), open+1);
 	char note[128];
 	snprintf(note, sizeof(note), "%s%s", tag, why);
-	missed->names[missed->count] = strdup(game->name);
-	missed->notes[missed->count] = strdup(note);
+	if (!missed->names || !missed->notes) return;
+	char* name_copy = strdup(game->name);
+	char* note_copy = strdup(note);
+	if (!name_copy || !note_copy) {
+		free(name_copy);
+		free(note_copy);
+		return;
+	}
+	missed->names[missed->count] = name_copy;
+	missed->notes[missed->count] = note_copy;
 	missed->count += 1;
 }
 static void freeMissed(Missed* missed) {
@@ -899,6 +948,14 @@ static void findMissing(int replace) {
 	log_file = fopen(LOG_PATH, "w");
 
 	Game* games = calloc(MAX_GAMES, sizeof(Game));
+	if (!games) {
+		if (log_file) fclose(log_file);
+		log_file = NULL;
+		PWR_enableAutosleep();
+		PWR_setCPUSpeed(CPU_SPEED_MENU);
+		showMessage("Not enough memory to look for box art", 1);
+		return;
+	}
 	int count = collectGames(games, !replace); // replacing: every game (one with no match keeps the art it has)
 	int known = markNoMatch(games, count);
 	int to_find = replace ? count : count - known;
@@ -980,6 +1037,14 @@ typedef struct FolderSize { char folder[MAX_PATH]; long res_time, roms_time; int
 #define MAX_FOLDERS 256
 static int collectResizable(Game* games) {
 	FolderSize* sizes = calloc(MAX_FOLDERS, sizeof(FolderSize));
+	FolderSize* now = calloc(MAX_FOLDERS, sizeof(FolderSize));
+	Game* all = calloc(MAX_GAMES, sizeof(Game));
+	if (!sizes || !now || !all) {
+		free(sizes);
+		free(now);
+		free(all);
+		return 0;
+	}
 	int cached = 0;
 	FILE* file = fopen(SIZES_PATH, "r");
 	if (file) {
@@ -996,9 +1061,7 @@ static int collectResizable(Game* games) {
 		fclose(file);
 	}
 
-	FolderSize* now = calloc(MAX_FOLDERS, sizeof(FolderSize));
 	int folders = 0, count = 0;
-	Game* all = calloc(MAX_GAMES, sizeof(Game));
 	DIR* roms = opendir(ROMS_PATH);
 	struct dirent* sys;
 	while (roms && (sys = readdir(roms)) && folders<MAX_FOLDERS) {
@@ -1046,14 +1109,14 @@ static int resizeAll(void) {
 	PWR_setCPUSpeed(CPU_SPEED_NORMAL);
 	PWR_disableAutosleep();
 	Game* games = calloc(MAX_GAMES, sizeof(Game));
-	int count = collectResizable(games);
+	int count = games ? collectResizable(games) : 0;
 	int resized = 0, failed = 0, stopped = 0;
 	for (int i=0; i<count; i++) {
 		Game* game = &games[i];
 		showProgress("Resizing box art", i, count, game->name, i==0);
 		if (cancelled()) { stopped = 1; break; }
-		char art_path[MAX_PATH];
-		sprintf(art_path, "%s/.res/%s.png", game->folder, game->file);
+		char art_path[MAX_PATH*2+16];
+		snprintf(art_path, sizeof(art_path), "%s/.res/%s.png", game->folder, game->file);
 		SDL_Surface* image = IMG_Load(art_path);
 		if (image && saveResized(image, art_path)) resized += 1;
 		else failed += 1;
@@ -1085,6 +1148,10 @@ void BoxArt_open(SDL_Surface* main_screen, char* game) {
 	int dirty = 1;
 	int show_setting = 0;
 	Game* scratch = calloc(MAX_GAMES, sizeof(Game));
+	if (!scratch) {
+		showMessage("Not enough memory to check box art", 1);
+		return;
+	}
 	showMessage("Checking box art...", 0); // (only folders that changed since last time are read again)
 	int known = 0;
 	int missing = collectMissing(scratch, &known);
@@ -1140,11 +1207,15 @@ void BoxArt_open(SDL_Surface* main_screen, char* game) {
 				char shown[64];
 				GFX_truncateText(font.large, name, shown, width - value_w - SCALE1(BUTTON_PADDING*3), 0);
 				SDL_Surface* text = TTF_RenderUTF8_Blended(font.large, shown, is_selected ? COLOR_BLACK : COLOR_WHITE);
-				SDL_BlitSurface(text, NULL, screen, &(SDL_Rect){ SCALE1(PADDING+BUTTON_PADDING), y + SCALE1(4) });
-				SDL_FreeSurface(text);
+				if (text) {
+					SDL_BlitSurface(text, NULL, screen, &(SDL_Rect){ SCALE1(PADDING+BUTTON_PADDING), y + SCALE1(4) });
+					SDL_FreeSurface(text);
+				}
 				text = TTF_RenderUTF8_Blended(font.small, value, is_selected ? COLOR_BLACK : COLOR_DARK_TEXT);
-				SDL_BlitSurface(text, NULL, screen, &(SDL_Rect){ SCALE1(PADDING) + width - SCALE1(BUTTON_PADDING) - text->w, y + (SCALE1(PILL_SIZE) - text->h)/2 });
-				SDL_FreeSurface(text);
+				if (text) {
+					SDL_BlitSurface(text, NULL, screen, &(SDL_Rect){ SCALE1(PADDING) + width - SCALE1(BUTTON_PADDING) - text->w, y + (SCALE1(PILL_SIZE) - text->h)/2 });
+					SDL_FreeSurface(text);
+				}
 			}
 
 			char* hint = selected==ROW_MISSING

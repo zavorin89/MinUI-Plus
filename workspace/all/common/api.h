@@ -220,6 +220,7 @@ void GFX_blitMessage(TTF_Font* font, char* msg, SDL_Surface* dst, SDL_Rect* dst_
 int GFX_blitHardwareGroup(SDL_Surface* dst, int show_setting);
 int GFX_blitHeader(SDL_Surface* dst, char* title, int ow); // a screen's title, grey, on the top row beside the hardware group (ow: its width); 1 while it scrolls (too long), so draw it again each frame
 int GFX_blitHeaderText(SDL_Surface* dst, TTF_Font* font, SDL_Color color, const char* title, int ow); // the same in another font or color
+int GFX_scrollOffset(int overflow, uint32_t started); // how far text overflow pixels too wide has scrolled (there and back, the headers' pace)
 int GFX_blitHintPill(SDL_Surface* dst, const char* text, int right_w); // a bottom-left tooltip that scrolls when too long; 1 while it scrolls
 void GFX_showList(SDL_Surface* dst, const char* title, char** names, char** notes, int count); // a list to read through, names with a note each (notes may be NULL); A or B closes it
 int GFX_settingFading(void); // the volume/brightness bar is still fading out (GFX_blitHardwareGroup draws it)
@@ -401,6 +402,7 @@ static inline void PAD_pollWithSounds(void) {
 	SFX_afterInput();
 }
 int PLAT_shouldWake(void);
+void PLAT_waitForInput(int ms); // asleep: returns when a button might have been pressed, or after ms at the latest
 
 SDL_Surface* PLAT_initVideo(void);
 void PLAT_quitVideo(void);

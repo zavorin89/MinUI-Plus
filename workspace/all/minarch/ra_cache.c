@@ -7,6 +7,7 @@
 #include <time.h>
 #include <unistd.h>
 #include <sys/stat.h>
+#include <pthread.h>
 
 #include "rc_api_runtime.h"
 #include "rc_consoles.h"
@@ -17,6 +18,8 @@
 #include "ra_http.h"
 
 #define PENDING_PATH RA_CACHE_DIR "/pending.txt" // "<unlock unix time> <achievement id> <game hash> <hardcore 0|1>" per line
+// requests run on threads of their own: an unlock queued while the queue is being sent and rewritten would be lost
+static pthread_mutex_t pending_file_mx = PTHREAD_MUTEX_INITIALIZER;
 
 ///////////////////////////////
 
@@ -35,11 +38,14 @@ int RACache_readCreds(RA_Creds* creds) {
 	fclose(file);
 	return creds->username[0] && (creds->password[0] || creds->token[0]);
 }
-void RACache_saveToken(const char* username, const char* token) {
-	FILE* file = fopen(RA_CREDS_PATH, "w");
+void RACache_saveToken(const char* username, const char* token) { // swapped in whole, so a power cut can't sign you out
+	FILE* file = fopen(RA_CREDS_PATH ".tmp", "w");
 	if (!file) return;
 	fprintf(file, "username=%s\ntoken=%s\n", username, token);
+	int ok = fflush(file)==0 && fsync(fileno(file))==0;
 	fclose(file);
+	if (ok) rename(RA_CREDS_PATH ".tmp", RA_CREDS_PATH);
+	else unlink(RA_CREDS_PATH ".tmp");
 	sync();
 }
 
@@ -231,25 +237,28 @@ static void queueUnlock(const char* post_data) {
 	getParam(post_data, "m", m, sizeof(m));
 	int hardcore = getParam(post_data, "h", h, sizeof(h)) && atoi(h);
 
+	pthread_mutex_lock(&pending_file_mx);
 	// once per achievement (and mode)
+	int queued = 0;
 	FILE* file = fopen(PENDING_PATH, "r");
 	if (file) {
 		char line[128];
-		while (fgets(line, sizeof(line), file)) {
+		while (!queued && fgets(line, sizeof(line), file)) {
 			unsigned long t, id;
-			if (sscanf(line, "%lu %lu", &t, &id)==2 && id==strtoul(a, NULL, 10) && pendingHardcore(line)==hardcore) {
-				fclose(file);
-				return;
-			}
+			queued = sscanf(line, "%lu %lu", &t, &id)==2 && id==strtoul(a, NULL, 10) && pendingHardcore(line)==hardcore;
 		}
 		fclose(file);
 	}
-	mkdir(RA_CACHE_DIR, 0755);
-	file = fopen(PENDING_PATH, "a");
-	if (!file) return;
-	fprintf(file, "%lu %s %s %i\n", (unsigned long)time(NULL), a, m[0] ? m : "-", hardcore);
-	fclose(file);
-	sync();
+	if (!queued) {
+		mkdir(RA_CACHE_DIR, 0755);
+		file = fopen(PENDING_PATH, "a");
+		if (file) {
+			fprintf(file, "%lu %s %s %i\n", (unsigned long)time(NULL), a, m[0] ? m : "-", hardcore);
+			fclose(file);
+			sync();
+		}
+	}
+	pthread_mutex_unlock(&pending_file_mx);
 }
 
 char* RACache_offlineResponse(const char* post_data, size_t* length, int* status) {
@@ -288,6 +297,7 @@ char* RACache_offlineResponse(const char* post_data, size_t* length, int* status
 		}
 
 		body = malloc(64 + (count+hard_count)*32);
+		if (!body) return NULL;
 		char* out = body + sprintf(body, "{\"Success\":true,\"Unlocks\":[");
 		for (int i=0; i<count; i++) out += sprintf(out, "%s{\"ID\":%u,\"When\":0}", i ? "," : "", ids[i]);
 		out += sprintf(out, "],\"HardcoreUnlocks\":[");
@@ -358,9 +368,9 @@ static int readBadgePack(uint32_t game_id, BadgeEntry** entries, unsigned char**
 	if (data) {
 		fseek(file, 0, SEEK_END);
 		*data_size = ftell(file);
-		*data = malloc(*data_size);
+		*data = malloc(*data_size ? *data_size : 1);
 		fseek(file, 0, SEEK_SET);
-		*data_size = fread(*data, 1, *data_size, file);
+		*data_size = *data ? fread(*data, 1, *data_size, file) : 0;
 	}
 	fclose(file);
 	return count;
@@ -469,9 +479,10 @@ unsigned char* RACache_loadBadge(uint32_t game_id, const char* name, size_t* siz
 		badgePackPath(game_id, path);
 		FILE* file = fopen(path, "rb");
 		if (file) {
-			png = malloc(entries[i].size);
+			png = malloc(entries[i].size ? entries[i].size : 1);
 			fseek(file, entries[i].offset, SEEK_SET);
-			if (fread(png, 1, entries[i].size, file)!=entries[i].size) {
+			if (!png) {}
+			else if (fread(png, 1, entries[i].size, file)!=entries[i].size) {
 				free(png);
 				png = NULL;
 			}
@@ -498,10 +509,15 @@ int RACache_pendingCount(void) {
 
 int RACache_sendPending(const RA_Creds* creds, const char* user_agent) {
 	if (!creds->token[0]) return 0;
+	pthread_mutex_lock(&pending_file_mx); // (an unlock earned meanwhile waits to be queued, rather than being lost)
 	FILE* file = fopen(PENDING_PATH, "r");
-	if (!file) return 0;
+	if (!file) {
+		pthread_mutex_unlock(&pending_file_mx);
+		return 0;
+	}
 
-	char kept[64][128];
+	#define KEPT_MAX 1024 // every unlock that couldn't be sent this time stays queued
+	static char kept[KEPT_MAX][128];
 	int kept_count = 0;
 	int sent = 0;
 	char line[128];
@@ -531,7 +547,7 @@ int RACache_sendPending(const RA_Creds* creds, const char* user_agent) {
 			rc_api_destroy_request(&request);
 		}
 		if (accepted) sent += 1;
-		else if (kept_count<64) snprintf(kept[kept_count++], sizeof(kept[0]), "%s", line);
+		else if (kept_count<KEPT_MAX) snprintf(kept[kept_count++], sizeof(kept[0]), "%s", line);
 	}
 	fclose(file);
 
@@ -544,5 +560,6 @@ int RACache_sendPending(const RA_Creds* creds, const char* user_agent) {
 		}
 	}
 	sync();
+	pthread_mutex_unlock(&pending_file_mx);
 	return sent;
 }

@@ -362,7 +362,7 @@ uint64_t HW_takeReadUs(void) {
 }
 
 const void* HW_readFrame(unsigned width, unsigned height, size_t* pitch) {
-	if (!hw.ready) return NULL;
+	if (!hw.ready || !hw.frame || (!hw.read_565 && !hw.rgba)) return NULL; // (no memory for it: the frame's skipped)
 	uint64_t read_from = getMicroseconds();
 	if ((int)width>hw.width) width = hw.width;
 	if ((int)height>hw.height) height = hw.height;

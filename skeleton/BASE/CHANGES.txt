@@ -1,4 +1,4 @@
-# MinUI+ v1.3 — changes since launch
+# MinUI+ v1.3.1 — changes since launch
 
 For the Miyoo A30. This ZIP is a complete release, suitable for manual download from a mirror.
 
@@ -7,9 +7,40 @@ replacing bundled application/tool files when asked. Keep MinUI.zip zipped; the 
 Copy the included Tools and Emus folders too so their fixes are installed. Preserve any personally customized artwork
 or bezels from your backup. The updater's Shut Down prompt requires you to turn the A30 back on manually.
 
-From v1.1 the built-in updater checks GitLab. Devices on v1.07 or older still look for updates on GitHub, so they need this one manual install to start receiving them.
+From v1.1 the built-in updater checks GitLab. Devices on v1.07 or older look for updates on GitHub, where every release is published too.
 
-This is a consolidated comparison with v1.0.0, rather than a list of every intermediate hotfix. This v1.3 package includes all changes below. The newest changes come first, then v1.0.1–v1.0.5, then v1.06.
+This is a consolidated comparison with v1.0.0, rather than a list of every intermediate hotfix. This v1.3.1 package includes all changes below. The newest changes come first, then v1.0.1–v1.0.5, then v1.06.
+
+## New in v1.3.1
+
+### Updates
+
+- A slow or patchy Wi-Fi connection has longer to download an update: 30 minutes instead of 10, with the progress screen staying up until it's done. (This helps from the next update on: updating to v1.3.1 itself still uses your current updater.)
+- The update screen now says "Updating MinUI+".
+- Devices on v1.07 or older find updates on GitHub again.
+
+### Sleep and power
+
+- Waking from sleep is quicker: the A30 now notices the power button the moment it's let go, instead of checking five times a second.
+- Sleep uses less battery: nothing runs between button presses, the battery is checked every 30 seconds instead of every 5, and the volume and brightness buttons are watched without waking 60 times a second.
+- Waking no longer writes the same brightness and volume back to the card, and changing them no longer flushes the whole card each step.
+- A short press of Power turns the A30 on: MinUI+ sets the A30's power chip to a short hold, from the next power-on. (A battery that runs flat resets it until the next boot.)
+
+### Polish
+
+- RetroAchievements: the list shows five achievements at a time, with the highlighted one's description on a single line that scrolls when it's long.
+- Long game names wrap onto more lines instead of running off the screen, in the delete prompts and on every message screen; short notices are shortened to fit.
+- The game switcher opens faster after a game with RetroAchievements: quitting waits only for unlocks still being sent, not for the regular check-ins.
+- The on-screen keyboard clicks as you type and move, and B deletes a letter (or goes back when there's nothing typed).
+- PICO-8 runs at the normal CPU speed instead of the highest, which the A30 can't hold for long.
+
+### Fixes
+
+- Fixes for crashes and freezes in rare cases: a font or image that fails to load, the device running low on memory, a song that won't play (the music no longer gets stuck), and very long folder or file names in Sync Achievements and Box Art.
+- RetroAchievements is steadier when several requests run at once, and an unlock earned offline can no longer be lost when two are saved at the same moment.
+- Saved Wi-Fi networks, the RetroAchievements sign-in and the DraStic and PICO-8 settings are written safely, so a power cut or a full card can't leave them empty or half-written.
+- A damaged settings file can no longer leave the screen dark or the volume past its top.
+- Renaming, removing and editing game lists no longer stops at a fixed size, and the crash log is kept from growing without end.
 
 ## New in v1.3
 

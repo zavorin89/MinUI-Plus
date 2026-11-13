@@ -9,6 +9,7 @@
 #include <strings.h>
 #include <unistd.h>
 #include <dlfcn.h>
+#include <pthread.h>
 #include <netdb.h>
 #include <sys/socket.h>
 #include <sys/time.h>
@@ -44,6 +45,9 @@ static struct {
 #define TLSEXT_NAMETYPE_host_name 0
 #define X509_V_OK 0
 
+// once for every request (they run on threads of their own, several at a game's start), under this lock: a second
+// request mustn't find it half loaded and give up
+static pthread_mutex_t ssl_mx = PTHREAD_MUTEX_INITIALIZER;
 static int loadSSL(void) {
 	if (ssl.loaded) return ssl.loaded==1;
 	ssl.loaded = -1;
@@ -79,6 +83,23 @@ static int loadSSL(void) {
 	ssl.init_ssl(0, NULL);
 	ssl.loaded = 1;
 	return 1;
+}
+// the certificates, read once: a few hundred of them parsed for every request is slow on the A30. An SSL_CTX is safe
+// to share between threads once it's set up
+static SSL_CTX* shared_ctx = NULL;
+static SSL_CTX* getContext(const char* ca_path) {
+	pthread_mutex_lock(&ssl_mx);
+	if (!shared_ctx && loadSSL()) {
+		SSL_CTX* ctx = ssl.ctx_new(ssl.client_method());
+		if (ctx && ssl.ctx_load_verify_locations(ctx, ca_path, NULL)) { // no certificates means no trust
+			ssl.ctx_set_verify(ctx, SSL_VERIFY_PEER, NULL);
+			shared_ctx = ctx;
+		}
+		else if (ctx) ssl.ctx_free(ctx);
+	}
+	SSL_CTX* ctx = shared_ctx;
+	pthread_mutex_unlock(&ssl_mx);
+	return ctx;
 }
 
 static int openSocket(const char* host, int port) {
@@ -137,7 +158,9 @@ static size_t dechunk(char* body, size_t len, int* complete) {
 
 int HTTP_request(const char* url, const char* post_data, const char* content_type, const char* user_agent, const char* ca_path, HTTP_Response* response) {
 	memset(response, 0, sizeof(HTTP_Response));
-	if (strncmp(url, "https://", 8)!=0 || !loadSSL()) return 0;
+	if (strncmp(url, "https://", 8)!=0) return 0;
+	SSL_CTX* ctx = getContext(ca_path);
+	if (!ctx) return 0;
 
 	char host[256];
 	const char* host_start = url + 8;
@@ -155,13 +178,8 @@ int HTTP_request(const char* url, const char* post_data, const char* content_typ
 	}
 
 	int ok = 0;
-	SSL_CTX* ctx = ssl.ctx_new(ssl.client_method());
 	SSL* conn = NULL;
 	char* raw = NULL;
-	if (!ctx) goto done;
-	if (!ssl.ctx_load_verify_locations(ctx, ca_path, NULL)) goto done; // no certificates means no trust
-	ssl.ctx_set_verify(ctx, SSL_VERIFY_PEER, NULL);
-
 	conn = ssl.ssl_new(ctx);
 	if (!conn) goto done;
 	ssl.set_fd(conn, fd);
@@ -185,6 +203,7 @@ int HTTP_request(const char* url, const char* post_data, const char* content_typ
 
 	size_t capacity = 16384, len = 0;
 	raw = malloc(capacity);
+	if (!raw) goto done;
 	while (1) {
 		if (len+4096+1>capacity) {
 			capacity *= 2;
@@ -215,6 +234,7 @@ int HTTP_request(const char* url, const char* post_data, const char* content_typ
 	}
 
 	response->body = malloc(body_len+1);
+	if (!response->body) goto done;
 	memcpy(response->body, body, body_len);
 	response->body[body_len] = '\0';
 	response->body_length = body_len;
@@ -226,7 +246,6 @@ done:
 		ssl.shutdown(conn);
 		ssl.ssl_free(conn);
 	}
-	if (ctx) ssl.ctx_free(ctx);
 	close(fd);
 	return ok;
 }

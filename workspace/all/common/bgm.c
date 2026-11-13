@@ -362,6 +362,8 @@ static void* BGM_run(void* arg) {
 	static int16_t chunk[CHUNK_FRAMES * 2];
 	int playing = 0;
 	int first = 1; // the first song can be the last menu's, picked up where it was
+	int empty_songs = 0; // in a row that opened but had nothing in them: all of them, and there's nothing to play
+	uint64_t song_frames = 0;
 	// what decoding costs, logged per song: CPU time against the time it plays for
 	struct timespec cpu_from;
 	uint32_t written_from = 0;
@@ -377,16 +379,22 @@ static void* BGM_run(void* arg) {
 			playing = (first && resumeSong()) || nextSong();
 			first = 0;
 			if (!playing) break; // nothing that plays
+			song_frames = 0;
 			clock_gettime(CLOCK_THREAD_CPUTIME_ID, &cpu_from);
 			written_from = bgm.written;
 		}
 		int frames = decode(chunk);
-		if (frames>0) song.decoded += frames;
-		if (frames>0) resampleInto(chunk, frames);
-		if (frames<=0) {
+		if (frames>0) {
+			song.decoded += frames;
+			song_frames += frames;
+			resampleInto(chunk, frames);
+		}
+		else {
 			logCost(&cpu_from, written_from);
 			closeSong();
 			playing = 0;
+			empty_songs = song_frames ? 0 : empty_songs + 1;
+			if (empty_songs>=bgm.song_count) break; // (rather than opening them over and over)
 		}
 	}
 	if (playing) {

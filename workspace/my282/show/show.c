@@ -28,8 +28,8 @@ int main(int argc , char* argv[]) {
 		return 0;
 	}
 	
-	char path[256];
-	strncpy(path,argv[1],256);
+	char path[512];
+	snprintf(path, sizeof(path), "%s", argv[1]);
 	if (access(path, F_OK)!=0) return 0; // nothing to show :(
 	
 	int delay = argc>2 ? atoi(argv[2]) : 2;
@@ -58,6 +58,15 @@ int main(int argc , char* argv[]) {
 	SDL_Surface* screen = SDL_CreateRGBSurfaceFrom(NULL, w,h, FIXED_DEPTH, p, RGBA_MASK_565);
 	
 	SDL_Surface* img = IMG_Load(path);
+	if (!img || !renderer || !texture || !screen) { // (an unreadable image: nothing to show, rather than a crash at boot)
+		if (img) SDL_FreeSurface(img);
+		if (screen) SDL_FreeSurface(screen);
+		if (texture) SDL_DestroyTexture(texture);
+		if (renderer) SDL_DestroyRenderer(renderer);
+		if (window) SDL_DestroyWindow(window);
+		SDL_Quit();
+		return 0;
+	}
 	uint32_t until = SDL_GetTicks() + delay * 1000;
 	int last_progress = -1;
 	do {

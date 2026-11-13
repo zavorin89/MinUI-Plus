@@ -33,11 +33,13 @@ int hide(char* file_name) {
 	return file_name[0]=='.' || suffixMatch(".disabled", file_name) || exactMatch("map.txt", file_name);
 }
 
+// both write at most NAME_MAX+1 (256) bytes to out_name: the work is done on the whole path in a buffer of its own,
+// so a path longer than a name (up to MAX_PATH) can't run past the caller's
+#define NAME_OUT 256
 void getDisplayName(const char* in_name, char* out_name) {
 	char* tmp;
-	char work_name[256];
-	strcpy(work_name, in_name);
-	strcpy(out_name, in_name);
+	char work_name[MAX_PATH];
+	snprintf(work_name, sizeof(work_name), "%s", in_name);
 	
 	if (suffixMatch("/" PLATFORM, work_name)) { // hide platform from Tools path...
 		tmp = strrchr(work_name, '/');
@@ -46,7 +48,7 @@ void getDisplayName(const char* in_name, char* out_name) {
 	
 	// extract just the filename if necessary
 	tmp = strrchr(work_name, '/');
-	if (tmp) strcpy(out_name, tmp+1);
+	snprintf(out_name, NAME_OUT, "%s", tmp ? tmp+1 : work_name);
 	
 	// remove extension(s), eg. .p8.png
 	while ((tmp = strrchr(out_name, '.'))!=NULL) {
@@ -71,34 +73,26 @@ void getDisplayName(const char* in_name, char* out_name) {
     while(tmp>out_name && isspace((unsigned char)*tmp)) tmp--;
     tmp[1] = '\0';
 }
-void getEmuName(const char* in_name, char* out_name) { // NOTE: both char arrays need to be MAX_PATH length!
-	char* tmp;
-	strcpy(out_name, in_name);
-	tmp = out_name;
-	
-	// printf("--------\n  in_name: %s\n",in_name); fflush(stdout);
+void getEmuName(const char* in_name, char* out_name) {
+	char work[MAX_PATH];
+	snprintf(work, sizeof(work), "%s", in_name);
+	char* tmp = work;
 	
 	// extract just the Roms folder name if necessary
-	if (prefixMatch(ROMS_PATH, tmp)) {
+	if (prefixMatch(ROMS_PATH "/", tmp)) {
 		tmp += strlen(ROMS_PATH) + 1;
-		char* tmp2 = strchr(tmp, '/');
-		if (tmp2) tmp2[0] = '\0';
-		// printf("    tmp1: %s\n", tmp);
-		strcpy(out_name, tmp);
-		tmp = out_name;
+		char* slash = strchr(tmp, '/');
+		if (slash) slash[0] = '\0';
 	}
 
 	// finally extract pak name from parenths if present
-	tmp = strrchr(tmp, '(');
-	if (tmp) {
-		tmp += 1;
-		// printf("    tmp2: %s\n", tmp);
-		strcpy(out_name, tmp);
-		tmp = strchr(out_name,')');
-		tmp[0] = '\0';
+	char* paren = strrchr(tmp, '(');
+	if (paren) {
+		tmp = paren + 1;
+		char* close = strchr(tmp, ')');
+		if (close) close[0] = '\0';
 	}
-	
-	// printf(" out_name: %s\n", out_name); fflush(stdout);
+	snprintf(out_name, NAME_OUT, "%s", tmp);
 }
 void getEmuPath(char* emu_name, char* pak_path) {
 	sprintf(pak_path, "%s/Emus/%s/%s.pak/launch.sh", SDCARD_PATH, PLATFORM, emu_name);
@@ -226,7 +220,7 @@ int getPlayTime(char* path, PlayTime* out) {
 	if (!file) return 0;
 	
 	int found = 0;
-	char line[MAX_PATH];
+	char line[MAX_PATH+64]; // a path, then its numbers
 	while (fgets(line, sizeof(line), file)) {
 		char* line_path;
 		PlayTime line_time;
@@ -251,7 +245,7 @@ void setPlayTime(char* path, PlayTime* time) {
 	
 	FILE* in = fopen(PLAYTIME_PATH, "r");
 	if (in) {
-		char line[MAX_PATH];
+		char line[MAX_PATH+64];
 		while (fgets(line, sizeof(line), in)) {
 			char* line_path;
 			PlayTime line_time;
@@ -278,7 +272,7 @@ int getPlayTimeTotals(int* total_seconds, char* top_path, int* top_seconds) {
 	if (!file) return 0;
 	
 	int count = 0;
-	char line[MAX_PATH];
+	char line[MAX_PATH+64];
 	while (fgets(line, sizeof(line), file)) {
 		char* line_path;
 		PlayTime line_time;

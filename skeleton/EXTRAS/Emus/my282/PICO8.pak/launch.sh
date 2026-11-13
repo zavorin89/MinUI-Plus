@@ -61,7 +61,7 @@ if [ "${ROM##*.}" = "splore" ] && [ -z "$(wifi.sh status 2>/dev/null)" ]; then
 Turn it on from the settings.
 Carts already downloaded still play." # (and then on: PICO-8 opens Splore either way)
 fi
-overclock.elf userspace 2 1512 384 1080 0
+overclock.elf userspace 2 1344 384 1080 0 # Normal: PICO-8 is light, and 1512 MHz is past what the A30 holds for long
 cd "$PICO8"
 export HOME="$P8_HOME"
 export LD_LIBRARY_PATH="$SYSTEM_PATH/lib:/usr/miyoo/lib:/usr/lib"

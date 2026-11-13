@@ -68,6 +68,12 @@ were taken by the A30 itself, bezel and LCD grid included.
 
 ## What's new in v1.3
 
+**v1.3.1:** quicker wake from sleep and less battery used asleep, a short Power press to turn on, a new
+RetroAchievements list (five at a time with a scrolling description), long names that wrap instead of running off the
+screen, a faster game switcher after RetroAchievements games, more time for updates on slow Wi-Fi, and many small
+fixes. See CHANGES.txt.
+
+
 - **Rewind**: hold a button to rewind a game. Pick it in the pause menu, Options > Shortcuts > Hold Rewind (any
   button, or MENU plus one). Off in RetroAchievements hardcore, for the Nintendo 64, and for systems whose save states
   are too big to rewind smoothly
