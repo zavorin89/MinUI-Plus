@@ -363,7 +363,7 @@ void Wifi_open(SDL_Surface* main_screen) {
 		sleep(2); // let the loop see the flag before bringing wlan0 up
 	}
 	else showMessage("Scanning...", 0);
-	system("ifconfig wlan0 up 2>/dev/null");
+	system("wifi.sh attach; ifconfig wlan0 up 2>/dev/null"); // (off, the chip is detached from its driver)
 	scanNetworks();
 
 	int enabled = was_on; // shows the "turn off" row, and decides whether to switch the adapter off on exit

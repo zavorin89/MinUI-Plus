@@ -367,14 +367,28 @@ static void* BGM_run(void* arg) {
 	// what decoding costs, logged per song: CPU time against the time it plays for
 	struct timespec cpu_from;
 	uint32_t written_from = 0;
+	int filling = 1; // decoding until the ring is full, then resting until it's down to half: a few wake-ups a second, not dozens
+	uint32_t read_at_nap = bgm.read - 1;
 	while (!bgm.quit) {
+		if (bgm.paused && !bgm.level) { // faded out under a game: nothing to do until BGM_start or BGM_quit
+			pthread_mutex_lock(&nap_lock);
+			while (bgm.paused && !bgm.quit) pthread_cond_wait(&nap_wake, &nap_lock);
+			pthread_mutex_unlock(&nap_lock);
+			continue;
+		}
 		uint32_t queued = bgm.written - bgm.read;
 		uint32_t room = RING_FRAMES - queued;
 		// a chunk can become up to 6x as many frames (8000Hz to 48000Hz)
-		if (room<CHUNK_FRAMES * 6 || queued>RING_FRAMES * 3 / 4) {
-			nap(queued>RING_FRAMES * 7 / 8 ? 150 : 40); // (full and waiting, eg. asleep or in a game: rarely)
+		if (filling ? room<CHUNK_FRAMES * 6 : queued>RING_FRAMES / 2) {
+			filling = 0;
+			// it drains at the device's rate: back about when it's at half. Not draining at all (asleep, the device closed): a second
+			int ms = 1000;
+			if (bgm.read!=read_at_nap && queued>RING_FRAMES / 2) ms = MIN(1000, (int)((uint64_t)(queued - RING_FRAMES / 2) * 1000 / bgm.rate) + 5);
+			read_at_nap = bgm.read;
+			nap(ms);
 			continue;
 		}
+		filling = 1;
 		if (!playing) {
 			playing = (first && resumeSong()) || nextSong();
 			first = 0;
@@ -431,7 +445,10 @@ static void BGM_mix(int16_t* stream, int frames) {
 }
 
 void BGM_start(void) {
+	pthread_mutex_lock(&nap_lock);
 	bgm.paused = 0;
+	pthread_cond_signal(&nap_wake); // (a thread waiting out a game)
+	pthread_mutex_unlock(&nap_lock);
 	if (bgm.running || !BGM_isEnabled() || !BGM_countSongs()) return;
 	bgm.quit = 0;
 	if (pthread_create(&bgm.thread, NULL, BGM_run, NULL)==0) bgm.running = 1;

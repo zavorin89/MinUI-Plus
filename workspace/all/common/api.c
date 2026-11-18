@@ -205,6 +205,10 @@ static SDL_Surface* renderHint(TTF_Font* font, char* text, SDL_Color color) { //
 	return surface;
 }
 
+SDL_Surface* GFX_renderCached(TTF_Font* font, char* text, SDL_Color color) {
+	return text && text[0] ? renderHint(font, text, color) : NULL;
+}
+
 static SDL_Rect asset_rects[ASSET_COUNT];
 GFX_Fonts font;
 
@@ -827,7 +831,7 @@ int GFX_getButtonWidth(char* hint, char* button) {
 	
 	int special_case = !strcmp(button,BRIGHTNESS_BUTTON_LABEL); // TODO: oof
 	
-	if (strlen(button)==1) {
+	if (strlen(button)==1 || !strcmp(button, HOME_BUTTON_LABEL)) {
 		button_width += SCALE1(BUTTON_SIZE);
 	}
 	else {
@@ -844,6 +848,25 @@ int GFX_getButtonWidth(char* hint, char* button) {
 	button_width += width + SCALE1(BUTTON_MARGIN);
 	return button_width;
 }
+// the house printed on the A30's MENU button, in the button labels' color: a roof, and a body with a door in it.
+// Laid out on a 40 pixel button (2x), scaled for others
+void GFX_blitHouse(SDL_Surface* dst, int x, int y) {
+	SDL_Color c = COLOR_BUTTON_TEXT;
+	uint32_t color = SDL_MapRGB(dst->format, c.r, c.g, c.b);
+	int size = SCALE1(BUTTON_SIZE);
+	#define HOUSE(v) ((v) * size / 40)
+	int cx = x + size / 2;
+	for (int r=0; r<HOUSE(11); r++) { // the roof, one pixel wider each side a row: 45 degrees
+		int half = r + 1;
+		SDL_FillRect(dst, &(SDL_Rect){ cx - half, y + HOUSE(8) + r, half * 2, 1 }, color);
+	}
+	int body_top = y + HOUSE(18), body_bottom = y + HOUSE(31);
+	int door_top = y + HOUSE(24);
+	SDL_FillRect(dst, &(SDL_Rect){ cx - HOUSE(8), body_top, HOUSE(16), door_top - body_top }, color);
+	SDL_FillRect(dst, &(SDL_Rect){ cx - HOUSE(8), door_top, HOUSE(5), body_bottom - door_top }, color); // either side of the door
+	SDL_FillRect(dst, &(SDL_Rect){ cx + HOUSE(3), door_top, HOUSE(5), body_bottom - door_top }, color);
+	#undef HOUSE
+}
 void GFX_blitButton(char* hint, char*button, SDL_Surface* dst, SDL_Rect* dst_rect) {
 	SDL_Surface* text;
 	int ox = 0;
@@ -851,7 +874,12 @@ void GFX_blitButton(char* hint, char*button, SDL_Surface* dst, SDL_Rect* dst_rec
 	int special_case = !strcmp(button,BRIGHTNESS_BUTTON_LABEL); // TODO: oof
 	
 	// button
-	if (strlen(button)==1) {
+	if (!strcmp(button, HOME_BUTTON_LABEL)) {
+		GFX_blitAsset(ASSET_BUTTON, NULL, dst, dst_rect);
+		GFX_blitHouse(dst, dst_rect->x, dst_rect->y);
+		ox += SCALE1(BUTTON_SIZE);
+	}
+	else if (strlen(button)==1) {
 		GFX_blitAsset(ASSET_BUTTON, NULL, dst, dst_rect);
 
 		// label
@@ -947,7 +975,7 @@ static int clock_left = 0; // in a pill of its own at the top left (the carousel
 // a pause menu's game name in its pill, up to max_width: one that doesn't fit scrolls back and forth (and returns 1, so
 // call this again each frame, over a clean background) instead of being cut short
 #define TITLE_PAUSE_MS 700 // still at each end
-#define TITLE_SPEED 70 // unscaled pixels a second
+#define TITLE_SPEED 60 // unscaled pixels a second (two screen pixels a frame)
 int GFX_blitTitle(SDL_Surface* dst, const char* name, int max_width) {
 	static uint32_t started = 0;
 	static char drawn[256] = "";
@@ -972,7 +1000,7 @@ int GFX_blitTitle(SDL_Surface* dst, const char* name, int max_width) {
 		int scroll_ms = overflow * 1000 / SCALE1(TITLE_SPEED);
 		int t = (SDL_GetTicks() - started) % (TITLE_PAUSE_MS + scroll_ms + TITLE_PAUSE_MS);
 		if (t>=TITLE_PAUSE_MS+scroll_ms) offset = overflow;
-		else if (t>=TITLE_PAUSE_MS) offset = (t - TITLE_PAUSE_MS) * overflow / scroll_ms;
+		else if (t>=TITLE_PAUSE_MS) offset = MIN(GFX_scrollPixels(t - TITLE_PAUSE_MS, TITLE_SPEED), overflow);
 	}
 	GFX_blitPill(ASSET_BLACK_PILL, dst, &(SDL_Rect){ SCALE1(PADDING), SCALE1(PADDING), width, SCALE1(PILL_SIZE) });
 	SDL_BlitSurface(text, &(SDL_Rect){ offset, 0, width-padding, text->h }, dst, &(SDL_Rect){ SCALE1(PADDING+BUTTON_PADDING), SCALE1(PADDING+4) });
@@ -1090,16 +1118,26 @@ void GFX_setTimeZone(int zone) {
 // names, so no row has to share that line
 // a header too long for the room left of the hardware group (with a gap before its pill) scrolls there and back
 #define HEADER_PAUSE_MS 1200 // still at each end
-#define HEADER_SPEED 30 // unscaled pixels a second
+#define HEADER_SPEED 30 // unscaled pixels a second (a screen pixel a frame)
+// Scrolling text moves the same whole number of pixels every frame: a speed that doesn't divide into the 60 frames a
+// second steps 2, 2, 3... and judders. The time is rounded to the nearest frame, so a frame drawn a little early or
+// late still lands on its own step
+#define SCROLL_FPS 60
+int GFX_scrollPixels(int elapsed_ms, int speed) {
+	if (elapsed_ms<=0) return 0;
+	int frames = (elapsed_ms * SCROLL_FPS + 500) / 1000;
+	return frames * MAX(1, SCALE1(speed) / SCROLL_FPS);
+}
 // how far a text overflow pixels too wide has scrolled, there and back with a pause at each end
 int GFX_scrollOffset(int overflow, uint32_t started) {
 	if (overflow<=0) return 0;
-	int scroll_ms = MAX(1, overflow * 1000 / SCALE1(HEADER_SPEED));
+	int step = MAX(1, SCALE1(HEADER_SPEED) / SCROLL_FPS); // pixels a frame
+	int scroll_ms = (overflow + step - 1) / step * 1000 / SCROLL_FPS;
 	int t = (SDL_GetTicks() - started) % (HEADER_PAUSE_MS*2 + scroll_ms*2);
 	if (t<HEADER_PAUSE_MS) return 0;
-	if (t<HEADER_PAUSE_MS+scroll_ms) return (t - HEADER_PAUSE_MS) * overflow / scroll_ms;
+	if (t<HEADER_PAUSE_MS+scroll_ms) return MIN(GFX_scrollPixels(t - HEADER_PAUSE_MS, HEADER_SPEED), overflow);
 	if (t<HEADER_PAUSE_MS*2+scroll_ms) return overflow;
-	return overflow - (t - HEADER_PAUSE_MS*2 - scroll_ms) * overflow / scroll_ms;
+	return MAX(overflow - GFX_scrollPixels(t - HEADER_PAUSE_MS*2 - scroll_ms, HEADER_SPEED), 0);
 }
 // a tooltip in a dark pill at the bottom left, beside the button hints that take right_w on the right. Text too long
 // for the room scrolls (like a long title) instead of being cut off: returns 1 while it does, so the caller redraws
@@ -1406,12 +1444,11 @@ static int GFX_blitHardwareGroupNow(SDL_Surface* dst, int show_setting) {
 			}
 			clock_drawn_minute = now / 60;
 		}
-		SDL_Surface* clock_text = clock[0] ? TTF_RenderUTF8_Blended(font.small, clock, COLOR_WHITE) : NULL;
+		SDL_Surface* clock_text = clock[0] ? renderHint(font.small, clock, COLOR_WHITE) : NULL; // (cached: the same minute is drawn every frame while scrolling)
 		if (clock_text && clock_left) {
 			int pill_w = clock_text->w + SCALE1(BUTTON_PADDING*2);
 			GFX_blitPill(gfx.mode==MODE_MAIN ? ASSET_DARK_GRAY_PILL : ASSET_BLACK_PILL, dst, &(SDL_Rect){ SCALE1(PADDING), SCALE1(PADDING), pill_w, SCALE1(PILL_SIZE) });
 			SDL_BlitSurface(clock_text, NULL, dst, &(SDL_Rect){ SCALE1(PADDING + BUTTON_PADDING), SCALE1(PADDING) + (SCALE1(PILL_SIZE) - clock_text->h) / 2 });
-			SDL_FreeSurface(clock_text);
 			clock_text = NULL;
 		}
 		int cw = clock_text ? clock_text->w + SCALE1(BUTTON_PADDING) : 0;
@@ -1427,7 +1464,6 @@ static int GFX_blitHardwareGroupNow(SDL_Surface* dst, int show_setting) {
 		});
 		if (clock_text) {
 			SDL_BlitSurface(clock_text, NULL, dst, &(SDL_Rect){ ox + SCALE1(BUTTON_PADDING), oy + (SCALE1(PILL_SIZE) - clock_text->h) / 2 });
-			SDL_FreeSurface(clock_text);
 			ox += cw;
 		}
 		if (show_wifi) {
@@ -1573,6 +1609,7 @@ void GFX_blitText(TTF_Font* font, char* str, int leading, SDL_Color color, SDL_S
 		
 		if (len) {
 			text = TTF_RenderUTF8_Blended(font, line, color);
+			if (!text) continue;
 			SDL_BlitSurface(text, NULL, dst, &(SDL_Rect){x+((dst_rect->w-text->w)/2),y+(i*leading)});
 			SDL_FreeSurface(text);
 		}
@@ -1692,11 +1729,13 @@ static int SND_resampleNone(SND_Frame frame) { // audio_resample_passthrough
 // either writes one output frame (returning 0) or takes the frame in as the new left-hand one (returning 1)
 static int SND_resampleLinear(SND_Frame frame) {
 	if (snd.phase<snd.sample_rate_out) {
-		int64_t t = snd.phase;
-		int64_t span = snd.sample_rate_out;
+		// the blend's weight as a 15-bit fraction: one 32-bit division per output frame, which the A30's CPU does
+		// itself, instead of two 64-bit ones done in software (this runs ~48,000 times a second). phase is below
+		// sample_rate_out (under 131072), so it fits shifted, and a difference (17 bits) times it fits in 32
+		int w = (int)(((uint32_t)snd.phase << 15) / (uint32_t)snd.sample_rate_out);
 		SND_Frame out = { // always between the two, so it fits back in 16 bits
-			.left  = (int16_t)(snd.previous.left  + (int)(((int64_t)(frame.left  - snd.previous.left)  * t) / span)),
-			.right = (int16_t)(snd.previous.right + (int)(((int64_t)(frame.right - snd.previous.right) * t) / span)),
+			.left  = (int16_t)(snd.previous.left  + (((frame.left  - snd.previous.left)  * w) >> 15)),
+			.right = (int16_t)(snd.previous.right + (((frame.right - snd.previous.right) * w) >> 15)),
 		};
 		snd.buffer[snd.frame_in++] = out;
 		if (snd.frame_in >= snd.frame_count) snd.frame_in = 0;
@@ -2175,12 +2214,12 @@ void PAD_setAnalog(int neg_id,int pos_id,int value,int repeat_at) {
 	else { // not pressing
 		if (pad.is_pressed&neg) { // was pressing
 			pad.is_pressed 		&= ~neg; // unset
-			pad.just_repeated	&=  neg; // unset
+			pad.just_repeated	&= ~neg; // unset
 			pad.just_released	|=  neg; // set
 		}
 		if (pad.is_pressed&pos) { // was pressing
 			pad.is_pressed 		&= ~pos; // unset
-			pad.just_repeated	&=  pos; // unset
+			pad.just_repeated	&= ~pos; // unset
 			pad.just_released	|=  pos; // set
 		}
 	}
@@ -2205,6 +2244,7 @@ FALLBACK_IMPLEMENTATION void PLAT_pollInput(void) {
 		if ((pad.is_pressed & btn) && (tick>=pad.repeat_at[i])) {
 			pad.just_repeated |= btn; // set
 			pad.repeat_at[i] += PAD_REPEAT_INTERVAL;
+			if ((int32_t)(tick - pad.repeat_at[i])>=0) pad.repeat_at[i] = tick + PAD_REPEAT_INTERVAL; // (after a slow frame: no burst)
 		}
 	}
 	
@@ -2356,6 +2396,9 @@ FALLBACK_IMPLEMENTATION void PLAT_pollInput(void) {
 FALLBACK_IMPLEMENTATION void PLAT_waitForInput(int ms) {
 	SDL_Delay(ms<200 ? ms : 200); // (a device without its own: the buttons are looked at 5 times a second)
 }
+FALLBACK_IMPLEMENTATION int PLAT_suspend(int alarm_s) {
+	return -1;
+}
 FALLBACK_IMPLEMENTATION int PLAT_shouldWake(void) {
 	int lid_open = 1; // assume open by default
 	if (lid.has_lid && PLAT_lidChanged(&lid_open) && lid_open) return 1;
@@ -2411,44 +2454,65 @@ int PAD_tappedMenu(uint32_t now) {
 
 static struct VIB_Context {
 	int initialized;
+	int quit;
 	pthread_t pt;
 	int queued_strength;
 	int strength;
 } vib = {0};
+// waits for a change instead of looking 60 times a second for the whole game
+static pthread_mutex_t vib_mx = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t vib_changed = PTHREAD_COND_INITIALIZER;
 static void* VIB_thread(void *arg) {
-#define DEFER_FRAMES 3
-	static int defer = 0;
-	while(1) {
-		SDL_Delay(17);
-		if (vib.queued_strength!=vib.strength) {
-			if (defer<DEFER_FRAMES && vib.queued_strength==0) { // minimize vacillation between 0 and some number (which this motor doesn't like)
-				defer += 1;
-				continue;
-			}
-			vib.strength = vib.queued_strength;
-			defer = 0;
-
-			PLAT_setRumble(vib.strength);
+#define DEFER_MS 51 // (three frames)
+	pthread_mutex_lock(&vib_mx);
+	while (!vib.quit) {
+		if (vib.queued_strength==vib.strength) {
+			pthread_cond_wait(&vib_changed, &vib_mx);
+			continue;
 		}
+		if (vib.queued_strength==0) { // minimize vacillation between 0 and some number (which this motor doesn't like)
+			struct timespec until;
+			clock_gettime(CLOCK_REALTIME, &until);
+			until.tv_nsec += DEFER_MS * 1000000;
+			if (until.tv_nsec>=1000000000) {
+				until.tv_sec += 1;
+				until.tv_nsec -= 1000000000;
+			}
+			while (!vib.quit && vib.queued_strength==0 && pthread_cond_timedwait(&vib_changed, &vib_mx, &until)==0); // until it's on again, or the wait is up
+			if (vib.quit) break;
+		}
+		vib.strength = vib.queued_strength;
+		int strength = vib.strength;
+		pthread_mutex_unlock(&vib_mx);
+		PLAT_setRumble(strength);
+		pthread_mutex_lock(&vib_mx);
 	}
+	pthread_mutex_unlock(&vib_mx);
 	return 0;
 }
 void VIB_init(void) {
 	vib.queued_strength = vib.strength = 0;
-	pthread_create(&vib.pt, NULL, &VIB_thread, NULL);
-	vib.initialized = 1;
+	vib.quit = 0;
+	if (pthread_create(&vib.pt, NULL, &VIB_thread, NULL)==0) vib.initialized = 1;
 }
 void VIB_quit(void) {
 	if (!vib.initialized) return;
 	
-	VIB_setStrength(0);
-	pthread_cancel(vib.pt);
+	pthread_mutex_lock(&vib_mx);
+	vib.queued_strength = 0;
+	vib.quit = 1;
+	pthread_cond_signal(&vib_changed);
+	pthread_mutex_unlock(&vib_mx);
 	pthread_join(vib.pt, NULL);
-	PLAT_setRumble(0); // VIB_setStrength is queued; make certain the motor stops before exit
+	vib.initialized = 0;
+	PLAT_setRumble(0); // make certain the motor stops before exit
 }
 void VIB_setStrength(int strength) {
-	if (vib.queued_strength==strength) return;
+	if (vib.queued_strength==strength) return; // (an unlocked look first: a core sets the same strength every frame)
+	pthread_mutex_lock(&vib_mx);
 	vib.queued_strength = strength;
+	pthread_cond_signal(&vib_changed);
+	pthread_mutex_unlock(&vib_mx);
 }
 int VIB_coreHasRumble(const char* core) {
 	char* cores[] = { "gambatte", "gpsp", "mgba", "pcsx_rearmed", "pokemini", NULL };
@@ -2512,18 +2576,33 @@ static void PWR_updateBatteryStatus(void) {
 	PLAT_enableOverlay(pwr.should_warn && pwr.charge<=PWR_LOW_CHARGE);
 }
 
+// every 5 s while awake. Asleep it doesn't wake at all: the wake signals it, for a fresh look straight away, and the
+// sleep loop looks for itself when it's about to power off
+static pthread_mutex_t battery_mx = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t battery_wake = PTHREAD_COND_INITIALIZER;
 static void* PWR_monitorBattery(void *arg) {
+	pthread_mutex_lock(&battery_mx);
+	pthread_cleanup_push((void (*)(void*))pthread_mutex_unlock, &battery_mx); // (PWR_quit cancels it)
 	while(1) {
-		// TODO: the frequency of checking could depend on whether 
-		// we're in game (less frequent) or menu (more frequent)
-		// asleep, every 30 s is plenty: it only decides whether to power off, and the A30 still wakes for it
-		static int asleep_ticks = 0;
-		sleep(5);
-		if (pwr.asleep && ++asleep_ticks<6) continue;
-		asleep_ticks = 0;
+		if (pwr.asleep) pthread_cond_wait(&battery_wake, &battery_mx);
+		else {
+			struct timespec until;
+			clock_gettime(CLOCK_REALTIME, &until);
+			until.tv_sec += 5;
+			pthread_cond_timedwait(&battery_wake, &battery_mx, &until);
+		}
+		if (pwr.asleep) continue;
+		pthread_mutex_unlock(&battery_mx);
 		PWR_updateBatteryStatus();
+		pthread_mutex_lock(&battery_mx);
 	}
+	pthread_cleanup_pop(1);
 	return NULL;
+}
+static void PWR_wakeBatteryMonitor(void) {
+	pthread_mutex_lock(&battery_mx);
+	pthread_cond_signal(&battery_wake);
+	pthread_mutex_unlock(&battery_mx);
 }
 
 ///////////////////////////////
@@ -2845,14 +2924,18 @@ static void PWR_enterSleep(void) {
 static void PWR_exitSleep(void) {
 	uint32_t started = SDL_GetTicks();
 	pwr.asleep = 0;
+	PWR_wakeBatteryMonitor(); // (a charger plugged in or out while asleep shows straight away)
 	PLAT_powerSave(POWER_AWAKE);
+	uint32_t power_ms = SDL_GetTicks() - started;
 	refreshClock();
+	uint32_t audio_at = SDL_GetTicks();
 	if (audio_slept) { // the same as before sleep, so its rate etc. hold
 		SDL_AudioSpec have;
 		audio_slept = 0;
 		audio_open = 0;
 		if (SDL_OpenAudio(&audio_want, &have)==0) audio_open = 1;
 	}
+	uint32_t audio_ms = SDL_GetTicks() - audio_at;
 	signalKeymon(SIGCONT);
 	if (GetHDMI()) {
 		// buh
@@ -2863,7 +2946,7 @@ static void PWR_exitSleep(void) {
 	}
 	SDL_PauseAudio(0);
 	// no sync(): nothing worth it was written while asleep, and it only held up getting back to the game
-	LOG_info("sleep: awake in %u ms\n", SDL_GetTicks() - started);
+	LOG_info("sleep: awake in %u ms (cpu, stick and amp %u ms, sound %u ms)\n", SDL_GetTicks() - started, power_ms, audio_ms);
 }
 
 #define DEEP_SLEEP_MS 60000 // asleep this long, wifi goes off too (back on when woken)
@@ -2871,6 +2954,8 @@ static void PWR_waitForWake(void) {
 	uint32_t sleep_ticks = SDL_GetTicks();
 	uint32_t poweroff_delay = PWR_getTimerMs(PWR_TIMER_POWEROFF); // 0 means never
 	int deep = 0;
+	int suspending = 1; // once deep, the kernel's suspend where there is one, until it's refused or keeps bouncing back
+	int stray_wakes = 0;
 	while (!PAD_wake()) {
 		uint32_t asleep_for = SDL_GetTicks()-sleep_ticks;
 		if (!deep && asleep_for>=DEEP_SLEEP_MS) { // a real break, not a moment: more goes off
@@ -2882,12 +2967,35 @@ static void PWR_waitForWake(void) {
 			break;
 		}
 		// waits for a button (on devices that can: the A30 does nothing at all until one, and wakes the moment
-		// power is let go) until the next thing due: wifi going off, or powering off. Never more than 10 s, as a backstop
-		int wait = 10000;
+		// power is let go) until the next thing due: wifi going off, or powering off. Never more than a minute, as a backstop
+		int wait = 60000;
 		if (!deep) wait = MIN(wait, (int)(DEEP_SLEEP_MS - asleep_for));
 		if (pwr.can_poweroff && poweroff_delay) wait = MIN(wait, asleep_for<poweroff_delay ? (int)(poweroff_delay - asleep_for) : 0);
-		PLAT_waitForInput(MAX(wait, 1));
+		if (deep && suspending) {
+			// a real break, with wifi off: suspended, nearly everything stops. Woken by power, it wakes; by anything
+			// else (the alarm for powering off, a charger) it goes back down. SDL's clock stops while it's down,
+			// so sleep_ticks moves back by the time it was
+			int alarm_s = pwr.can_poweroff && poweroff_delay ? (MAX(wait, 1) + 999) / 1000 : 0;
+			time_t went = time(NULL);
+			uint32_t ticks_went = SDL_GetTicks();
+			int woken = PLAT_suspend(alarm_s);
+			if (woken<0) suspending = 0;
+			else {
+				int down_ms = (int)(time(NULL) - went) * 1000 - (int)(SDL_GetTicks() - ticks_went);
+				if (down_ms>0) sleep_ticks -= down_ms;
+				if (woken) break;
+				if (time(NULL) - went<5) { // back straight away: a few in a row and it stays in the light sleep instead
+					if (++stray_wakes>=5) {
+						suspending = 0;
+						LOG_info("sleep: suspend keeps bouncing back, light sleep for the rest of this one\n");
+					}
+				}
+				else stray_wakes = 0;
+			}
+		}
+		else PLAT_waitForInput(MAX(wait, 1));
 		if (pwr.can_poweroff && poweroff_delay && SDL_GetTicks()-sleep_ticks>=poweroff_delay) {
+			PWR_updateBatteryStatus(); // (the battery thread doesn't look while asleep)
 			if (pwr.is_charging) sleep_ticks += 60000; // check again in a minute
 			else PWR_powerOff();
 		}

@@ -11,6 +11,10 @@
 #include <pthread.h>
 #include <poll.h>
 #include <stdint.h>
+#include <string.h>
+#include <sound/asound.h>
+#include <sys/klog.h>
+#include <time.h>
 
 #include <msettings.h>
 #include <mstick.h>
@@ -80,6 +84,9 @@ void PLAT_pollInput(void) {
 		if ((pad.is_pressed & btn) && (tick>=pad.repeat_at[i])) {
 			pad.just_repeated |= btn; // set
 			pad.repeat_at[i] += PAD_REPEAT_INTERVAL;
+			// after a slow frame (eg. art decoding) the next repeat is from now: catching up would fire one every
+			// frame after it, a burst of moves for one held button
+			if ((int32_t)(tick - pad.repeat_at[i])>=0) pad.repeat_at[i] = tick + PAD_REPEAT_INTERVAL;
 		}
 	}
 	
@@ -157,6 +164,95 @@ void PLAT_waitForInput(int ms) { // nothing runs until a button (or ms): the 5 c
 	}
 	if (!count || poll(fds, count, ms)<0) SDL_Delay(ms<200 ? ms : 200); // (no inputs open, or a signal: as before)
 }
+// the kernel's suspend (Allwinner's "super standby": nearly everything off, memory kept), for a long sleep. Tried on
+// the A30 2026-11-16: power wakes it (the kernel names that 0x10000), and the wake alarm does. What woke it is read
+// from the kernel's log; when that can't be told, it counts as power, so the screen never stays off after a press
+#define SUSPEND_STATE_PATH "/sys/power/state"
+#define WAKE_ALARM_PATH "/sys/class/rtc/rtc0/wakealarm"
+#define WAKE_BY_POWER 0x10000
+#ifndef EVIOCGKEY // (from linux/input.h, whose BTN_ names clash with MinUI's)
+#define EVIOCGKEY(len) _IOC(_IOC_READ, 'E', 0x18, len)
+#endif
+#ifndef KEY_MAX
+#define KEY_MAX 0x2ff
+#endif
+static void lastWakeLine(char* out, int size) { // the kernel's latest "wakesource is:0x..." line, "" if none
+	static char ring[16384];
+	out[0] = '\0';
+	int len = klogctl(3, ring, sizeof(ring)-1); // SYSLOG_ACTION_READ_ALL: the newest that fit
+	if (len<=0) return;
+	ring[len] = '\0';
+	char* found = NULL;
+	for (char* p=ring; (p=strstr(p, "wakesource is:")); p++) found = p;
+	if (!found) return;
+	char* start = found;
+	while (start>ring && start[-1]!='\n') start--;
+	char* end = strchr(found, '\n');
+	int n = end ? end - start : (int)strlen(start);
+	if (n>=size) n = size - 1;
+	memcpy(out, start, n);
+	out[n] = '\0';
+}
+static int powerHeld(void) {
+	for (int i=0; i<INPUT_COUNT; i++) {
+		if (inputs[i]<0) continue;
+		unsigned char keys[KEY_MAX/8 + 1];
+		memset(keys, 0, sizeof(keys));
+		if (ioctl(inputs[i], EVIOCGKEY(sizeof(keys)), keys)>=0 && (keys[RAW_POWER/8] & (1<<(RAW_POWER%8)))) return 1;
+	}
+	return 0;
+}
+static void dropInput(void) {
+	struct input_event event;
+	for (int i=0; i<INPUT_COUNT; i++) {
+		if (inputs[i]<0) continue;
+		while (read(inputs[i], &event, sizeof(event))==sizeof(event));
+	}
+}
+int PLAT_suspend(int alarm_s) {
+	static int can = -1;
+	if (can==-1) {
+		char states[64] = "";
+		getFile(SUSPEND_STATE_PATH, states, sizeof(states));
+		can = strstr(states, "mem")!=NULL;
+		if (!can) LOG_info("sleep: no suspend here (%s)\n", states);
+	}
+	if (!can) return -1;
+	char before[160], after[160];
+	lastWakeLine(before, sizeof(before));
+	if (alarm_s>0) { // (whatever's due while it's down, eg. powering off)
+		char value[16];
+		sprintf(value, "+%i", alarm_s);
+		putFile(WAKE_ALARM_PATH, "0");
+		putFile(WAKE_ALARM_PATH, value);
+	}
+	time_t went = time(NULL);
+	int fd = open(SUSPEND_STATE_PATH, O_WRONLY);
+	int ok = fd>=0 && write(fd, "mem", 3)==3; // returns once it's woken
+	if (fd>=0) close(fd);
+	if (alarm_s>0) putFile(WAKE_ALARM_PATH, "0");
+	if (!ok) {
+		LOG_info("sleep: suspend refused (%s)\n", strerror(errno));
+		return -1;
+	}
+	lastWakeLine(after, sizeof(after));
+	char* source = strstr(after, "wakesource is:");
+	unsigned long wake = source && strcmp(before, after) ? strtoul(source + 14, NULL, 16) : 0;
+	int by_power = !wake || wake==WAKE_BY_POWER;
+	// the card may have been taken out and put back while it was down (eg. to copy games on): what the kernel kept in
+	// memory from it would be stale, and writing by that could damage the card. Nothing was left unwritten before it
+	// went down, so dropping it costs only reading again
+	putFile("/proc/sys/vm/drop_caches", "3");
+	if (by_power) {
+		// the press that woke it, let go and dropped: seen as a new press it would put it straight back to sleep, or
+		// held a second, power it off
+		for (int i=0; i<30 && powerHeld(); i++) usleep(100000);
+		dropInput();
+	}
+	LOG_info("sleep: suspended %li s, woken by %s (0x%lx)\n", (long)(time(NULL) - went), by_power ? "power" : "something else", wake);
+	return by_power;
+}
+
 int PLAT_shouldWake(void) {
 	int input;
 	static struct input_event event;
@@ -1122,6 +1218,19 @@ void PLAT_getBatteryStatus(int* is_charging, int* charge) {
 	online = prefixMatch("up", status);
 }
 
+// asleep the LCD itself goes off (the backlight alone left the panel and the display engine refreshing it 60 times a
+// second, for nothing), and comes back on before the backlight does
+static int screen_blanked = 0;
+static void blankScreen(int blank) {
+	if (blank==screen_blanked) return;
+	uint32_t started = SDL_GetTicks();
+	int fd = open("/dev/fb0", O_RDWR | O_CLOEXEC);
+	int ok = fd>=0 && ioctl(fd, FBIOBLANK, blank ? FB_BLANK_POWERDOWN : FB_BLANK_UNBLANK)==0;
+	if (fd>=0) close(fd);
+	if (ok || !blank) screen_blanked = blank; // (unblanking is tried once: never left thinking it's still off)
+	LOG_info("sleep: screen %s %s (%ums)\n", blank ? "off" : "on", ok ? "ok" : "failed", SDL_GetTicks() - started);
+}
+
 #define LED_PATH "/sys/class/leds/led1/brightness"
 // the sleep light on or off: it reports a max_brightness of 255, but any value lights it fully (tried on the A30)
 static int sleepLightValue(int level) {
@@ -1132,11 +1241,13 @@ void PLAT_showSleepLight(int level) {
 }
 void PLAT_enableBacklight(int enable) {
 	if (enable) {
+		blankScreen(0);
 		SetBrightness(GetBrightness());
 		putInt(LED_PATH, 0);
 	}
 	else {
 		SetRawBrightness(0);
+		blankScreen(1);
 		putInt(LED_PATH, sleepLightValue(PWR_getSleepLight()));
 	}
 }
@@ -1198,9 +1309,38 @@ static int fastCPU(int freq, int cpu) {
 	ccu[0] = cpu_clock[best].reg;
 	return 1;
 }
+#define CPU_SETSPEED_PATH "/sys/devices/system/cpu/cpu0/cpufreq/scaling_setspeed" // (the userspace governor's, set at boot)
+#define CPU_SLEEP_KHZ 120000 // cpuinfo_min_freq
+#define CPU_TOP_KHZ 1344000 // cpuinfo_max_freq: the voltage everything has run at until now, overclock included
+static int cpu_lowered = 0;
+static int putSysfs(const char* path, int value) { // 1 when the write was taken
+	int fd = open(path, O_WRONLY);
+	if (fd<0) return 0;
+	char buf[16];
+	int len = snprintf(buf, sizeof(buf), "%i", value);
+	int ok = write(fd, buf, len)==len;
+	close(fd);
+	return ok;
+}
 static void setCPUCores(int freq, int cpu, int wait) {
 	cpu_freq_now = freq;
 	cpu_cores_now = cpu;
+	// asleep the kernel had the voltage down for its slowest speed: back up first, through the kernel (it raises the
+	// voltage before the clock), whichever change comes first. The other way round the CPU would run fast at the sleep
+	// voltage, and crash
+	if (cpu_lowered) {
+		uint32_t started = SDL_GetTicks();
+		if (!putSysfs(CPU_SETSPEED_PATH, CPU_TOP_KHZ)) LOG_info("sleep: the kernel didn't take its top speed back\n");
+		cpu_lowered = 0;
+		int ok = fastCPU(freq, cpu);
+		if (!ok) {
+			char cmd[128];
+			sprintf(cmd,"overclock.elf userspace %d %d 384 1080 0", cpu, freq);
+			system(cmd);
+		}
+		LOG_info("sleep: cpu back to %i MHz, %i cores in %u ms\n", freq, cpu, SDL_GetTicks() - started);
+		return;
+	}
 	if (fastCPU(freq, cpu)) return;
 	char cmd[128];
 	sprintf(cmd,"overclock.elf userspace %d %d 384 1080 0%s", cpu, freq, wait ? "" : " &");
@@ -1267,33 +1407,103 @@ void PLAT_setCPUFreq(int mhz) {
 	setCPUFreqAsync(mhz, 2);
 }
 
+// a mixer switch's value (value -1), or set to value: -1 when it can't be
+static int mixerSwitch(const char* name, int value) {
+	int fd = open("/dev/snd/controlC0", O_RDWR | O_CLOEXEC);
+	if (fd<0) return -1;
+	struct snd_ctl_elem_value v;
+	memset(&v, 0, sizeof(v));
+	v.id.iface = SNDRV_CTL_ELEM_IFACE_MIXER;
+	snprintf((char*)v.id.name, sizeof(v.id.name), "%s", name);
+	int result = -1;
+	if (value<0) {
+		if (ioctl(fd, SNDRV_CTL_IOCTL_ELEM_READ, &v)>=0) result = v.value.integer.value[0];
+	}
+	else {
+		v.value.integer.value[0] = value;
+		if (ioctl(fd, SNDRV_CTL_IOCTL_ELEM_WRITE, &v)>=0) result = value;
+	}
+	close(fd);
+	return result;
+}
+// asleep the speaker's amplifier is switched off: muted, it still draws power. Put back as it was on waking, unless
+// headphones went in meanwhile (the codec keeps the speaker off for them)
+#define SPEAKER_SWITCH "External Speaker Switch"
+static int speaker_was = -1;
+static void speakerSleep(int asleep) {
+	if (asleep) {
+		speaker_was = mixerSwitch(SPEAKER_SWITCH, -1);
+		if (speaker_was>0) mixerSwitch(SPEAKER_SWITCH, 0);
+		LOG_info("sleep: speaker amp was %i\n", speaker_was);
+	}
+	else if (speaker_was>0) {
+		int headphones = getInt("/sys/class/switch/h2w/state")>0; // (0 where there's no such file)
+		if (!headphones) mixerSwitch(SPEAKER_SWITCH, 1);
+		LOG_info("sleep: speaker amp %s\n", headphones ? "left off (headphones)" : "back on");
+		speaker_was = -1;
+	}
+}
+
 // sleep: the screen and sound are off and all that runs is a check of the buttons a few times a second, so one core
 // at a crawl does. After a minute asleep wifi goes too (it's the biggest draw left), and comes back when woken
 #define ASLEEP_PATH "/tmp/minui_asleep" // launch.sh's background loop checks in less often while it's there
 static int wifi_slept = 0;
+#define WIFI_ON_FLAG SHARED_USERDATA_PATH "/.minui/wifi-on" // set while Wi-Fi is on (the Wi-Fi tool)
+#define BATTERY_MV_PATH "/sys/class/power_supply/battery/voltage_now" // microvolts
+#define BATTERY_PERCENT_PATH "/sys/class/power_supply/battery/capacity" // the power chip's own count, steadier than the voltage
+static time_t slept_at = 0; // (wall time: SDL's clock stops while suspended)
+static void* wifiUpThread(void* arg) {
+	(void)arg;
+	system("wifi.sh up >/dev/null 2>&1");
+	return NULL;
+}
+static int onCharger(void) {
+	return getInt("/sys/class/power_supply/usb/online") || getInt("/sys/class/power_supply/ac/online");
+}
 void PLAT_powerSave(int state) {
 	if (state==POWER_ASLEEP) {
 		pthread_mutex_lock(&cpu_lock);
 		cpu_generation += 1; // a change still on its way would undo this
-		if (!fastCPU(240, 1)) system("overclock.elf userspace 1 240 384 1080 0"); // (cpu_freq_now kept, to go back to)
+		// both cores stay on: bringing the second back online on waking stops every core for over 100 ms (Linux's
+		// cpu hotplug), and an idle core costs next to nothing (in a real suspend everything is off anyway)
+		if (!fastCPU(240, 2)) system("overclock.elf userspace 2 240 384 1080 0"); // (cpu_freq_now kept, to go back to)
+		// the speed set above goes straight to the clock, so the kernel never lowers the voltage for it: it stays where
+		// the kernel left it for its own top speed. Asked for its slowest, the kernel brings both down
+		cpu_lowered = putSysfs(CPU_SETSPEED_PATH, CPU_SLEEP_KHZ);
 		pthread_mutex_unlock(&cpu_lock);
+		LOG_info("sleep: cpu %s\n", cpu_lowered ? "at its slowest, low voltage" : "at 240 MHz (the kernel didn't take its slowest)");
+		Stick_pause(1);
+		speakerSleep(1);
 		touch(ASLEEP_PATH);
+		// the battery's voltage going in and coming out: over a long sleep, how fast it drains (it has no current reading)
+		slept_at = time(NULL);
+		LOG_info("sleep: battery %i mV, %i%%%s\n", getInt(BATTERY_MV_PATH) / 1000, getInt(BATTERY_PERCENT_PATH), onCharger() ? " (on a charger: not a measure of drain)" : "");
 	}
 	else if (state==POWER_ASLEEP_LONG) {
-		if (PLAT_isOnline()) {
+		if (PLAT_isOnline() || exists(WIFI_ON_FLAG)) { // (on but not joined, it still scans: off too)
 			system("wifi.sh down");
 			wifi_slept = 1;
 		}
 	}
 	else {
+		// the speed as it was, from a thread: the voltage coming back up and the second core coming back online took
+		// over 100 ms, all of it on the way back from sleep. Meanwhile it runs at the sleep speed (setCPUCores puts
+		// the voltage back first, whichever change gets there first)
 		pthread_mutex_lock(&cpu_lock);
-		cpu_generation += 1;
-		setCPUCores(cpu_freq_now, cpu_cores_now, 1);
+		int freq = cpu_freq_now, cores = cpu_cores_now;
 		pthread_mutex_unlock(&cpu_lock);
+		setCPUFreqAsync(freq, cores);
+		LOG_info("sleep: battery %i mV, %i%% after %li s asleep%s\n", getInt(BATTERY_MV_PATH) / 1000, getInt(BATTERY_PERCENT_PATH), (long)(time(NULL) - slept_at), onCharger() ? " (on a charger)" : "");
+		Stick_pause(0);
+		speakerSleep(0);
 		unlink(ASLEEP_PATH);
 		if (wifi_slept) {
 			wifi_slept = 0;
-			system("wifi.sh up >/dev/null 2>&1 &"); // reconnects in the background
+			// reconnects in the background, started from a thread: system() holds its caller while it forks
+			// (minui's whole memory) and starts the shell, and that was on the way back from sleep
+			pthread_t thread;
+			if (pthread_create(&thread, NULL, wifiUpThread, NULL)==0) pthread_detach(thread);
+			else system("wifi.sh up >/dev/null 2>&1 &");
 		}
 	}
 }
@@ -1303,17 +1513,15 @@ void PLAT_powerSave(int state) {
 // fixed-strength motor at a gentler duty cycle instead of treating every non-zero request as full power.
 static pthread_once_t rumble_once = PTHREAD_ONCE_INIT;
 static pthread_mutex_t rumble_mutex = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t rumble_changed = PTHREAD_COND_INITIALIZER;
 static int rumble_strength = 0;
 static void* rumbleThread(void* arg) {
 	(void)arg;
 	while (1) {
 		pthread_mutex_lock(&rumble_mutex);
+		while (!rumble_strength) pthread_cond_wait(&rumble_changed, &rumble_mutex); // still until there's something to feel
 		int strength = rumble_strength;
 		pthread_mutex_unlock(&rumble_mutex);
-		if (!strength) {
-			SDL_Delay(12);
-			continue;
-		}
 		// The driver only takes whole milliseconds, too coarse for ten steps on their own, so the cycle's length varies
 		// too: about 15% on at the weakest, and under 40% of the old continuous drive at the strongest.
 		if (strength > 65535) strength = 65535;
@@ -1332,6 +1540,7 @@ void PLAT_setRumble(int strength) {
 	pthread_once(&rumble_once, startRumbleThread);
 	pthread_mutex_lock(&rumble_mutex);
 	rumble_strength = strength > 0 ? strength : 0;
+	pthread_cond_signal(&rumble_changed);
 	pthread_mutex_unlock(&rumble_mutex);
 	if (!strength) putInt(RUMBLE_PATH, 0);
 }

@@ -1009,13 +1009,16 @@ int main(int argc, char **argv) {
 
     if (argc == 7) { // (read_value only feeds the usage path's state: skipped, it ran several shells)
         // printf("User Prefers: %s, %s, %d, %d, %d, %d\n\n", argv[1], argv[2], atoi(argv[3]), atoi(argv[4]), atoi(argv[5]), atoi(argv[6]));
+        // 0 for the cores, CPU, GPU or RAM leaves that one as it is (launch.sh switches cores off on its own, in
+        // the background, and doesn't reset the speed a running game has picked)
         set_sch_by_name(argv[1]);
-        set_core(atoi(argv[2]));
-        cpu_val[0] = find_best_match_cpu_clock(atoi(argv[3]));
-        gpu_val[0] = find_best_match_gpu_clock(atoi(argv[4]));
-        set_cpu(cpu_val[0]);
-        set_gpu(gpu_val[0]);
-        set_ram(atoi(argv[5]) / 24);
+        if (atoi(argv[2]) > 0) set_core(atoi(argv[2]));
+        // (a speed past the table's end matches nothing: left alone too, rather than read from before the table)
+        int cpu = atoi(argv[3]) > 0 ? find_best_match_cpu_clock(atoi(argv[3])) : -1;
+        int gpu = atoi(argv[4]) > 0 ? find_best_match_gpu_clock(atoi(argv[4])) : -1;
+        if (cpu >= 0) set_cpu(cpu);
+        if (gpu >= 0) set_gpu(gpu);
+        if (atoi(argv[5]) > 0) set_ram(atoi(argv[5]) / 24);
         set_swap(atoi(argv[6]));
     }
 	else {

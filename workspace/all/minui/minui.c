@@ -24,7 +24,6 @@
 
 #define TOOLS_DIR SDCARD_PATH "/Tools/" PLATFORM
 #define PLAY_TIME_NAME "Play Time" // Most Played, as it's listed in Tools
-#define PLAY_TIME_FLASH_MS 2200 // the total as Play Time opens
 #define UPDATE_SCRIPT SYSTEM_PATH "/bin/update.sh"
 #include "wifi_ask.h"
 #include "keyboard.h"
@@ -227,6 +226,16 @@ typedef struct Directory {
 	int start;
 	int end;
 } Directory;
+// rows a list shows at once: one fewer under a heading (Tools names itself on the time and battery's line, like the
+// tools and settings do, and its rows start below)
+static int Directory_hasHeading(Directory* dir) {
+	return dir && exactMatch(dir->path, TOOLS_DIR);
+}
+#define PLAY_ROWS 4 // Play Time's list: taller rows, with art and stats
+static int Directory_rows(Directory* dir) {
+	if (dir && exactMatch(dir->path, FAUX_MOSTPLAYED_PATH)) return PLAY_ROWS; // (left and right move a page of them)
+	return Directory_hasHeading(dir) ? MAIN_ROW_COUNT - 1 : MAIN_ROW_COUNT;
+}
 
 static int getIndexChar(char* str) {
 	char i = 0;
@@ -469,7 +478,7 @@ static void Directory_reindex(Directory* self) { // after adding, removing, or r
 	// keep the selection in range and on screen
 	int total = self->entries->count;
 	if (self->selected>=total) self->selected = total>0 ? total-1 : 0;
-	int rows = MIN(total, MAIN_ROW_COUNT);
+	int rows = MIN(total, Directory_rows(self));
 	if (self->selected<self->start) self->start = self->selected;
 	if (self->selected>=self->start+rows) self->start = self->selected-rows+1;
 	if (self->start+rows>total) self->start = total-rows;
@@ -553,7 +562,17 @@ static char* noStateNote(Entry* entry);
 static int canCarousel(void) {
 	if (!top || stack->count<2) return 0;
 	return prefixMatch(ROMS_PATH, top->path) || prefixMatch(COLLECTIONS_PATH, top->path)
-		|| exactMatch(top->path, FAUX_RECENT_PATH) || exactMatch(top->path, FAUX_FAVORITES_PATH) || exactMatch(top->path, FAUX_MOSTPLAYED_PATH);
+		|| exactMatch(top->path, FAUX_RECENT_PATH) || exactMatch(top->path, FAUX_FAVORITES_PATH); // (Play Time's list has art on every row)
+}
+// a tap of home (the A30's MENU button, with the little house) opens the highlighted game's options in a list of games,
+// and the settings everywhere else (the system list, Tools, a folder)
+static int getFavoritePath(Entry* entry, char* rel_path);
+static int homeOpensGame(void) {
+	if (!top || stack->count<2 || inSwitcher() || !top->entries->count) return 0;
+	if (!canCarousel() && !exactMatch(top->path, FAUX_MOSTPLAYED_PATH)) return 0;
+	Entry* entry = top->entries->items[top->selected];
+	char rel_path[MAX_PATH];
+	return entry->type==ENTRY_ROM && getFavoritePath(entry, rel_path);
 }
 static int showsCarousel(void) {
 	return inSwitcher() || (view_mode==VIEW_CAROUSEL && canCarousel());
@@ -1033,7 +1052,7 @@ static void toggleFavorite(void) {
 
 ///////////////////////////////////////
 
-#define MOST_PLAYED_COUNT 10
+#define MOST_PLAYED_COUNT 20
 #define WIFI_ON_PATH SHARED_USERDATA_PATH "/.minui/wifi-on" // set while Wi-Fi is on (see wifi.sh and launch.sh)
 static char wifi_status[128] = "Off"; // the settings' Wi-Fi row, read when they open and when the connection changes
 static void getWifiStatus(char* out, size_t size) { // the network's name when connected, else Off (or Not connected)
@@ -1049,18 +1068,15 @@ static void getWifiStatus(char* out, size_t size) { // the network's name when c
 	else snprintf(out, size, exists(WIFI_ON_PATH) ? "Not connected" : "Off");
 }
 
-static void formatShortPlayTime(int seconds, char* out) { // minutes stop mattering past 10 hours and would crowd the hint bar
-	if (seconds>=10*3600) sprintf(out, "%ih", seconds/3600);
-	else if (seconds>=3600) sprintf(out, "%ih%im", seconds/3600, (seconds/60)%60); // no space, same reason
-	else formatPlayTime(seconds, out);
-}
 static int EntryArray_sortByPlayTime(const void* a, const void* b) {
 	Entry* item1 = *(Entry**)a;
 	Entry* item2 = *(Entry**)b;
 	return item2->play.seconds - item1->play.seconds;
 }
+static int play_total_seconds = 0; // everything played, all told: Play Time's bottom bar
 static Array* getMostPlayed(void) {
 	Array* entries = Array_new();
+	play_total_seconds = 0;
 	FILE* file = fopen(PLAYTIME_PATH, "r");
 	if (!file) return entries;
 	
@@ -1069,6 +1085,7 @@ static Array* getMostPlayed(void) {
 		char* path;
 		PlayTime time;
 		if (!parsePlayTimeLine(line, &path, &time) || time.seconds<=0) continue;
+		play_total_seconds += time.seconds; // (games since deleted too: it was all played)
 		
 		char sd_path[MAX_PATH];
 		sprintf(sd_path, "%s%s", SDCARD_PATH, path);
@@ -1098,15 +1115,7 @@ static Array* getMostPlayed(void) {
 	
 	qsort(entries->items, entries->count, sizeof(void*), EntryArray_sortByPlayTime);
 	while (entries->count>MOST_PLAYED_COUNT) Entry_free(Array_pop(entries));
-	
-	for (int i=0; i<entries->count; i++) {
-		Entry* entry = entries->items[i];
-		char ranked[256];
-		snprintf(ranked, sizeof(ranked), "%i. %s", i+1, entry->name);
-		free(entry->name);
-		entry->name = strdup(ranked);
-	}
-	return entries;
+	return entries; // (the list draws each one's rank)
 }
 
 static int hasRoms(char* dir_name) {
@@ -2030,7 +2039,7 @@ static void openDirectory(char* path, int auto_launch) {
 	
 	top = Directory_new(path, selected);
 	top->start = start;
-	top->end = end ? end : ((top->entries->count<MAIN_ROW_COUNT) ? top->entries->count : MAIN_ROW_COUNT);
+	top->end = end ? end : ((top->entries->count<Directory_rows(top)) ? top->entries->count : Directory_rows(top));
 
 	Array_push(stack, top);
 }
@@ -2046,7 +2055,6 @@ static void closeDirectory(void) {
 
 static void showFlash(char* text, int big);
 static void showUpdate(SDL_Surface* screen);
-static int flash_ms; // (defined with the popups below)
 
 // hardcore mode, shown in the game switcher: a pixel skull and HARDCORE in a pill beside the time and battery
 #define RA_HARDCORE_FLAG SHARED_USERDATA_PATH "/.achievements/hardcore.txt" // (set by the RetroAchievements tool)
@@ -2106,16 +2114,6 @@ static void Entry_open(Entry* self, SDL_Surface* screen) {
 	}
 	else if (self->type==ENTRY_DIR) {
 		openDirectory(self->path, 1);
-		if (exactMatch(self->path, FAUX_MOSTPLAYED_PATH)) { // Play Time: everything played, all told
-			int total_seconds, top_seconds;
-			char top_path[MAX_PATH], played[32], line[64];
-			if (getPlayTimeTotals(&total_seconds, top_path, &top_seconds)) {
-				formatPlayTime(total_seconds, played);
-				snprintf(line, sizeof(line), "%s played in all", played);
-				showFlash(line, 0);
-				flash_ms = PLAY_TIME_FLASH_MS; // a number to read, so it stays a little longer
-			}
-		}
 	}
 }
 
@@ -2202,10 +2200,10 @@ static void loadLast(void) { // call after loading root directory
 					top->selected = i;
 					if (i>=top->end) {
 						top->start = i;
-						top->end = top->start + MAIN_ROW_COUNT;
+						top->end = top->start + Directory_rows(top);
 						if (top->end>top->entries->count) {
 							top->end = top->entries->count;
-							top->start = top->end - MAIN_ROW_COUNT;
+							top->start = top->end - Directory_rows(top);
 						}
 					}
 					if (last->count==0 && !exactMatch(entry->path, FAUX_RECENT_PATH) && !(!exactMatch(entry->path, COLLECTIONS_PATH) && prefixMatch(COLLECTIONS_PATH, entry->path))) break; // don't show contents of auto-launch dirs
@@ -2703,7 +2701,9 @@ static int preloadThumbs(Directory* dir, SDL_Surface* screen) {
 	requestThumbs(dir, screen);
 	return 0; // the thread does the work, so the loop can still wait for the next frame
 }
+static void freePlayThumbs(void);
 static void freeThumbs(void) {
+	freePlayThumbs(); // (made from these)
 	for (int i=0; i<THUMB_CACHE_SIZE; i++) {
 		if (thumbs[i].art) SDL_FreeSurface(thumbs[i].art);
 		memset(&thumbs[i], 0, sizeof(thumbs[i]));
@@ -3401,6 +3401,14 @@ static int Decoder_hasDone(void) {
 	pthread_mutex_unlock(&decode_lock);
 	return done;
 }
+static int Decoder_busy(void) { // art waiting for or being decoded
+	if (!decode_started) return 0;
+	int busy = 0;
+	pthread_mutex_lock(&decode_lock);
+	for (int i=0; i<DECODE_JOBS && !busy; i++) busy = decode_jobs[i].state==JOB_WAITING || decode_jobs[i].state==JOB_WORKING;
+	pthread_mutex_unlock(&decode_lock);
+	return busy;
+}
 static void Decoder_quit(void) {
 	if (decode_started) {
 		pthread_mutex_lock(&decode_lock);
@@ -3417,6 +3425,30 @@ static int Carousel_has(char* res_path) {
 	for (int i=0; i<CAROUSEL_CACHE_SIZE; i++) if (carousel_cache[i].loaded && exactMatch(carousel_cache[i].path, res_path)) return 1;
 	return 0;
 }
+// a DS game's switcher picture is DraStic's save state's: whether that state is still there. DraStic keeps them in its
+// own folder (the first copy NDS.pak's launch.sh finds), named after the game without its extension; one left in an
+// older copy's folder isn't loaded, so picking the picture would start the game from its in-game save instead
+static int getSwitcherSave(Entry* entry, char* preview_path, int* slot);
+static int ndsStateExists(Entry* entry) {
+	char preview[MAX_PATH];
+	int slot;
+	if (!getSwitcherSave(entry, preview, &slot)) return 1; // no picture, nothing to say
+	static const char* dirs[] = { SDCARD_PATH "/Emus/" PLATFORM "/NDS.pak/drastic", SDCARD_PATH "/Emus/" PLATFORM "/NDS.pak", SYSTEM_PATH "/paks/Emus/NDS.pak" };
+	char drastic[MAX_PATH] = "";
+	for (int i=0; i<3 && !drastic[0]; i++) {
+		char exe[MAX_PATH];
+		snprintf(exe, sizeof(exe), "%s/drastic", dirs[i]);
+		if (exists(exe)) snprintf(drastic, sizeof(drastic), "%s", dirs[i]);
+	}
+	if (!drastic[0]) return 1; // DraStic's own message says it's missing
+	char game[MAX_PATH];
+	snprintf(game, sizeof(game), "%s", strrchr(entry->path, '/') + 1);
+	char* dot = strrchr(game, '.');
+	if (dot) *dot = '\0';
+	char state[MAX_PATH*2];
+	snprintf(state, sizeof(state), "%s/savestates/%s_%i.dss", drastic, game, slot);
+	return exists(state);
+}
 // in the switcher: under a PICO-8 game's picture, that picking it starts over (PICO-8 has no save states)
 static int isPico8Native(char* sd_path, char* system_tag);
 // asked every frame: the last answer, until the switcher is opened again: the last answer, until the switcher is opened again
@@ -3428,6 +3460,7 @@ static char* noStateNote(Entry* entry) {
 	getEmuName(entry->path, emu_name);
 	note_text = NULL;
 	if (isPico8Native(entry->path, emu_name)) note_text = suffixMatch(".splore", entry->path) ? "Splore doesn't save its state" : "PICO-8 doesn't save its state";
+	else if (exactMatch(emu_name, "NDS") && !ndsStateExists(entry)) note_text = "Its save state is missing"; // (opens from its in-game save)
 	snprintf(note_path, sizeof(note_path), "%s", entry->path);
 	return note_text;
 }
@@ -3700,8 +3733,8 @@ static int Carousel_preloadGPU(Directory* dir, SDL_Surface* screen) {
 
 // a selected name too long for the space left of its art scrolls back and forth instead of covering the art
 #define MARQUEE_PAUSE_MS 700 // still at each end
-#define MARQUEE_SPEED 70 // unscaled pixels a second
-#define MARQUEE_FRAME_MS 33
+#define MARQUEE_SPEED 60 // unscaled pixels a second (two screen pixels a frame: GFX_scrollPixels)
+#define MARQUEE_FRAME_MS 15 // every frame (60 a second), so it moves evenly
 #define MARQUEE_ONLY 2 // a dirty value: only the scrolling name needs redrawing
 static char marquee_key[MAX_PATH];
 static uint32_t marquee_start = 0;
@@ -3726,8 +3759,141 @@ static int marqueeOffset(char* key, int overflow, uint32_t now) {
 	int cycle = MARQUEE_PAUSE_MS + scroll_ms + MARQUEE_PAUSE_MS;
 	int t = (now - marquee_start) % cycle;
 	if (t<MARQUEE_PAUSE_MS) return 0;
-	if (t<MARQUEE_PAUSE_MS+scroll_ms) return (t - MARQUEE_PAUSE_MS) * overflow / scroll_ms;
+	if (t<MARQUEE_PAUSE_MS+scroll_ms) return MIN(GFX_scrollPixels(t - MARQUEE_PAUSE_MS, MARQUEE_SPEED), overflow);
 	return overflow;
+}
+
+// Play Time's list (it has no carousel): a heading line beside the clock and battery, then a page of four games, each
+// with its rank, its art, its name and how much it's been played. The selected one is boxed whole, its name scrolling
+// when it's too long
+#define PLAY_TOP (PADDING + PILL_SIZE + 2) // unscaled, like the rest of the layout: under the heading line
+#define PLAY_ROW_H 39 // four fill the room down to the hint bar
+#define PLAY_RANK_W 26
+#define PLAY_ART_W 32
+#define PLAY_ART_H 33
+#define PLAY_GAP 8
+#define PLAY_THUMBS 8 // a page, and the one either side's worth of moving back and forth
+static struct { char path[MAX_PATH]; SDL_Surface* art; uint32_t used; int loaded; } play_thumbs[PLAY_THUMBS];
+static uint32_t play_thumb_clock = 0;
+// the list's art (from the same decoding thread) made small once; NULL when there's none or it's still on its way
+static SDL_Surface* getPlayThumb(Entry* entry, SDL_Surface* screen) {
+	char res_path[MAX_PATH];
+	getResPath(entry, res_path);
+	int oldest = 0;
+	for (int i=0; i<PLAY_THUMBS; i++) {
+		if (play_thumbs[i].loaded && exactMatch(play_thumbs[i].path, res_path)) {
+			play_thumbs[i].used = ++play_thumb_clock;
+			return play_thumbs[i].art;
+		}
+		if (!play_thumbs[i].loaded || (play_thumbs[oldest].loaded && play_thumbs[i].used<play_thumbs[oldest].used)) oldest = i;
+	}
+	SDL_Surface* art = getThumb(entry, screen, 0);
+	if (!art && !hasThumb(entry)) return NULL; // not decoded yet: drawn once it is
+	SDL_Surface* small = NULL;
+	if (art && art->w>0 && art->h>0) {
+		int box_w = SCALE1(PLAY_ART_W), box_h = SCALE1(PLAY_ART_H);
+		int w = box_w, h = art->h * box_w / art->w;
+		if (h>box_h) {
+			h = box_h;
+			w = art->w * box_h / art->h;
+		}
+		small = scaleArt(art, MAX(w, 1), MAX(h, 1), 256, 256);
+	}
+	if (play_thumbs[oldest].art) SDL_FreeSurface(play_thumbs[oldest].art);
+	strcpy(play_thumbs[oldest].path, res_path);
+	play_thumbs[oldest].art = small;
+	play_thumbs[oldest].loaded = 1;
+	play_thumbs[oldest].used = ++play_thumb_clock;
+	return small;
+}
+static void freePlayThumbs(void) {
+	for (int i=0; i<PLAY_THUMBS; i++) if (play_thumbs[i].art) SDL_FreeSurface(play_thumbs[i].art);
+	memset(play_thumbs, 0, sizeof(play_thumbs));
+}
+// a label and its value, eg. "TOTAL 2h 2m", returning where the next one goes
+static int blitPlayStat(SDL_Surface* screen, int x, int y, char* label, char* value, int right, int selected) {
+	SDL_Surface* text = renderText(font.small, label, selected ? COLOR_GRAY : COLOR_DARK_TEXT);
+	if (!text || x + text->w>right) return right;
+	SDL_BlitSurface(text, NULL, screen, &(SDL_Rect){x, y});
+	x += text->w + SCALE1(3);
+	text = renderText(font.small, value, selected ? COLOR_BLACK : COLOR_LIGHT_TEXT);
+	if (!text || x + text->w>right) return right;
+	SDL_BlitSurface(text, NULL, screen, &(SDL_Rect){x, y});
+	return x + text->w + SCALE1(8);
+}
+static void blitPlayTimeList(SDL_Surface* screen, Directory* dir, int ow, uint32_t now) {
+	int total = dir->entries->count;
+	// a line at a time, like every other list: the window moves only when the selection would leave it
+	static int start = 0;
+	if (dir->selected<start) start = dir->selected;
+	if (dir->selected>=start+PLAY_ROWS) start = dir->selected - PLAY_ROWS + 1;
+	if (start>total-PLAY_ROWS) start = total - PLAY_ROWS;
+	if (start<0) start = 0;
+
+	// the heading, grey on the time and battery's line like the tools and settings, and how many it ranks
+	GFX_blitHeader(screen, PLAY_TIME_NAME, ow);
+	int heading_w = 0;
+	TTF_SizeUTF8(font.large, PLAY_TIME_NAME, &heading_w, NULL);
+	char top_n[16];
+	snprintf(top_n, sizeof(top_n), "Top %i", total);
+	SDL_Surface* text = renderText(font.small, top_n, COLOR_DARK_TEXT);
+	int text_x = SCALE1(PADDING + BUTTON_PADDING);
+	if (text && text_x + heading_w + SCALE1(8) + text->w < screen->w - ow - SCALE1(PADDING*2)) {
+		int large_h = TTF_FontHeight(font.large);
+		int heading_y = SCALE1(PADDING) + (SCALE1(PILL_SIZE) - large_h) / 2;
+		SDL_BlitSurface(text, NULL, screen, &(SDL_Rect){ text_x + heading_w + SCALE1(8), heading_y + TTF_FontAscent(font.large) - TTF_FontAscent(font.small) }); // on the heading's baseline
+	}
+
+	int rank_right = SCALE1(PADDING + PLAY_RANK_W);
+	int art_x = rank_right + SCALE1(PLAY_GAP);
+	text_x = art_x + SCALE1(PLAY_ART_W + PLAY_GAP);
+	int right = screen->w - SCALE1(PADDING + PLAY_GAP);
+	for (int j=0; j<PLAY_ROWS && start+j<total; j++) {
+		int i = start + j;
+		Entry* entry = dir->entries->items[i];
+		int selected = i==dir->selected;
+		int y = SCALE1(PLAY_TOP + j * PLAY_ROW_H);
+		if (selected) GFX_blitRect(ASSET_PAGE_BG, screen, &(SDL_Rect){ SCALE1(PADDING), y + SCALE1(1), screen->w - SCALE1(PADDING*2), SCALE1(PLAY_ROW_H - 2) });
+
+		char rank[8];
+		snprintf(rank, sizeof(rank), "%i", i+1);
+		text = renderText(font.large, rank, selected ? COLOR_BLACK : COLOR_DARK_TEXT);
+		if (text) SDL_BlitSurface(text, NULL, screen, &(SDL_Rect){ rank_right - text->w, y + (SCALE1(PLAY_ROW_H) - text->h) / 2 });
+
+		SDL_Surface* art = getPlayThumb(entry, screen);
+		if (art) SDL_BlitSurface(art, NULL, screen, &(SDL_Rect){ art_x + (SCALE1(PLAY_ART_W) - art->w) / 2, y + (SCALE1(PLAY_ROW_H) - art->h) / 2 });
+		else if (hasThumb(entry)) SDL_FillRect(screen, &(SDL_Rect){ art_x + SCALE1(3), y + SCALE1(4), SCALE1(PLAY_ART_W - 6), SCALE1(PLAY_ROW_H - 8) }, RGB_DARK_GRAY); // no art for it
+
+		char* name = entry->name;
+		trimSortingMeta(&name);
+		int name_y = y + SCALE1(2);
+		int room = right - text_x;
+		int name_w = 0;
+		TTF_SizeUTF8(font.large, name, &name_w, NULL);
+		if (selected && name_w>room) { // the whole name, scrolling (drawn last, over the rest of the frame kept as it is)
+			if (marquee_text) SDL_FreeSurface(marquee_text);
+			marquee_text = TTF_RenderUTF8_Blended(font.large, name, COLOR_BLACK);
+			marquee_dst = (SDL_Rect){ text_x, name_y, room, 0 };
+			marquee_overflow = name_w - room;
+			marqueeOffset(entry->path, marquee_overflow, now); // starts it over for a new name
+		}
+		else {
+			char shown[256];
+			fitText(font.large, name, shown, room, 0);
+			text = renderText(font.large, shown, selected ? COLOR_BLACK : COLOR_WHITE);
+			if (text) SDL_BlitSurface(text, NULL, screen, &(SDL_Rect){ text_x, name_y });
+		}
+
+		char total_str[32], average_str[32], plays_str[16];
+		formatPlayTime(entry->play.seconds, total_str);
+		formatPlayTime(getAveragePlayTime(&entry->play), average_str);
+		snprintf(plays_str, sizeof(plays_str), "%i", MAX(entry->play.sessions, 1));
+		int stats_y = y + SCALE1(21);
+		int x = text_x;
+		x = blitPlayStat(screen, x, stats_y, "TOTAL", total_str, right, selected);
+		x = blitPlayStat(screen, x, stats_y, "AVG", average_str, right, selected);
+		blitPlayStat(screen, x, stats_y, "SESSIONS", plays_str, right, selected);
+	}
 }
 
 // a short message centered over the list: the current letter while jumping with L1/R1, a new sort or view, pinning
@@ -3814,10 +3980,10 @@ static void showLetter(Entry* entry) {
 // keeps the list's visible rows around selected, so switching back from the carousel lands in the right place
 static void centerRows(Directory* dir, int selected) {
 	int total = dir->entries->count;
-	dir->start = selected - MAIN_ROW_COUNT/2;
-	if (dir->start>total-MAIN_ROW_COUNT) dir->start = total-MAIN_ROW_COUNT;
+	dir->start = selected - Directory_rows(dir)/2;
+	if (dir->start>total-Directory_rows(dir)) dir->start = total-Directory_rows(dir);
 	if (dir->start<0) dir->start = 0;
-	dir->end = MIN(total, dir->start + MAIN_ROW_COUNT);
+	dir->end = MIN(total, dir->start + Directory_rows(dir));
 }
 // deleting a game (MENU + X in a system's list): asks first, then whether its saves and box art go too
 
@@ -4218,7 +4384,7 @@ static void deleteSelected(SDL_Surface* screen) {
 	showFlash("Deleted", 0);
 }
 
-// renaming a game (MENU + Y): the file (or a multi-disc folder and its m3u or cue), and everything named after it,
+// renaming a game (from the game menu: home in a list of games): the file (or a multi-disc folder and its m3u or cue), and everything named after it,
 // its box art, saves, states, settings and bezel, and every list that points at it
 
 // a list file of paths relative to SDCARD_PATH (anything after a tab is kept): old_rel becomes new_rel, and when
@@ -4471,7 +4637,7 @@ static void renameSelected(SDL_Surface* screen) {
 	showFlash(kept ? "Renamed (some old saves were in the way)" : "Renamed", 0);
 }
 
-// choosing a game's core (MENU + Y): a list of every core that can run it
+// choosing a game's core (from the game menu): a list of every core that can run it
 static void pickCore(SDL_Surface* screen) {
 	Entry* entry = top->entries->items[top->selected];
 	char rel_path[MAX_PATH];
@@ -4494,6 +4660,8 @@ static void pickCore(SDL_Surface* screen) {
 
 	int selected = current;
 	int dirty = 1;
+	int first_row = 0; // of the rows shown, under the heading
+	#define PICK_ROWS 5 // like the settings: the heading line, five rows, the button bar
 	int result = -1; // -1 still choosing, 0 cancelled, 1 chosen
 	while (result<0) {
 		GFX_startFrame();
@@ -4506,40 +4674,42 @@ static void pickCore(SDL_Surface* screen) {
 		PWR_update(&dirty, &show_setting, NULL, NULL);
 		if (dirty) {
 			GFX_clear(screen);
+			// laid out like the settings and tools: named on the time and battery's line, full rows below, and what the
+			// highlighted core is good at in the tooltip at the bottom
+			int ow = GFX_blitHardwareGroup(screen, show_setting);
 			char title[256];
-			char shown[256];
 			snprintf(title, sizeof(title), "Core for %s", entry->name);
-			GFX_truncateText(font.large, title, shown, screen->w - SCALE1(PADDING*4), 0);
-			SDL_Surface* text = TTF_RenderUTF8_Blended(font.large, shown, COLOR_WHITE);
-			int rows_h = SCALE1(PILL_SIZE) * count + SCALE1(PADDING + 32); // and two lines about the highlighted core
-			int y = (screen->h - SCALE1(PILL_SIZE+PADDING) - text->h - SCALE1(PADDING) - rows_h) / 2;
-			SDL_BlitSurface(text, NULL, screen, &(SDL_Rect){ (screen->w - text->w) / 2, y });
-			y += text->h + SCALE1(PADDING);
-			SDL_FreeSurface(text);
-			int rows_w = SCALE1(260);
-			int x = (screen->w - rows_w) / 2;
-			for (int i=0; i<count; i++) {
+			int scrolls = GFX_blitHeader(screen, title, ow);
+			int width = screen->w - SCALE1(PADDING*2);
+			if (selected<first_row) first_row = selected;
+			if (selected>=first_row+PICK_ROWS) first_row = selected - PICK_ROWS + 1;
+			for (int i=first_row, j=0; i<count && j<PICK_ROWS; i++, j++) {
+				int y = SCALE1(PADDING + (j+1)*PILL_SIZE);
 				int is_selected = i==selected;
-				if (is_selected) GFX_blitPill(ASSET_WHITE_PILL, screen, &(SDL_Rect){ x - SCALE1(BUTTON_PADDING), y, rows_w + SCALE1(BUTTON_PADDING*2), SCALE1(PILL_SIZE) });
+				if (is_selected) GFX_blitPill(ASSET_WHITE_PILL, screen, &(SDL_Rect){ SCALE1(PADDING), y, width, SCALE1(PILL_SIZE) });
 				SDL_Surface* name = TTF_RenderUTF8_Blended(font.large, cores[i].name, is_selected ? COLOR_BLACK : COLOR_WHITE);
-				SDL_BlitSurface(name, NULL, screen, &(SDL_Rect){ x, y + (SCALE1(PILL_SIZE) - name->h) / 2 });
-				SDL_FreeSurface(name);
+				if (name) {
+					SDL_BlitSurface(name, NULL, screen, &(SDL_Rect){ SCALE1(PADDING + BUTTON_PADDING), y + SCALE1(4) });
+					SDL_FreeSurface(name);
+				}
 				if (i==current || i==0) {
 					SDL_Surface* note = TTF_RenderUTF8_Blended(font.small, i==current ? "IN USE" : "DEFAULT", is_selected ? COLOR_BLACK : COLOR_DARK_TEXT);
-					SDL_BlitSurface(note, NULL, screen, &(SDL_Rect){ x + rows_w - note->w, y + (SCALE1(PILL_SIZE) - note->h) / 2 });
-					SDL_FreeSurface(note);
+					if (note) {
+						SDL_BlitSurface(note, NULL, screen, &(SDL_Rect){ SCALE1(PADDING) + width - SCALE1(BUTTON_PADDING) - note->w, y + (SCALE1(PILL_SIZE) - note->h) / 2 });
+						SDL_FreeSurface(note);
+					}
 				}
-				y += SCALE1(PILL_SIZE);
 			}
-			if (cores[selected].about) { // what the highlighted one is good at, under the list
-				int w,h;
-				GFX_sizeText(font.small, (char*)cores[selected].about, SCALE1(16), &w,&h);
-				GFX_blitText(font.small, (char*)cores[selected].about, SCALE1(16), COLOR_LIGHT_TEXT, screen, &(SDL_Rect){ 0, y + SCALE1(PADDING), screen->w, h });
+			int right_w = GFX_blitButtonGroup((char*[]){ "B","CANCEL", "A","USE", NULL }, 1, screen, 1);
+			if (show_setting && !GetHDMI()) GFX_blitHardwareHints(screen, show_setting);
+			else if (cores[selected].about) {
+				char about[256];
+				snprintf(about, sizeof(about), "%s", cores[selected].about);
+				for (char* c=about; *c; c++) if (*c=='\n') *c = ' '; // one line, scrolling when it's long
+				scrolls |= GFX_blitHintPill(screen, about, right_w);
 			}
-			GFX_blitButtonGroup((char*[]){ "B","CANCEL", "A","USE", NULL }, 1, screen, 1);
-			GFX_blitSettingOnly(screen, show_setting); // (the volume or brightness bar, while it's changed)
 			GFX_flip(screen);
-			dirty = 0;
+			dirty = scrolls; // (a long name or tooltip keeps moving)
 		}
 		else GFX_sync();
 	}
@@ -4683,7 +4853,7 @@ static int isPico8Native(char* sd_path, char* system_tag) {
 	return exactMatch(system_tag, "P8") && getGameCore(sd_path, tag) && exactMatch(tag, "PICO8");
 }
 
-// the game menu (MENU + Y): change its core or CPU speed, get its box art, rename or delete it
+// the game menu (home in a list of games): change its core or CPU speed, get its box art, rename or delete it
 static void gameMenu(SDL_Surface* screen) {
 	Entry* entry = top->entries->items[top->selected];
 	char rel_path[MAX_PATH];
@@ -4798,21 +4968,16 @@ static void gameMenu(SDL_Surface* screen) {
 		PWR_update(&dirty, &show_setting, NULL, NULL);
 		if (dirty) {
 			GFX_clear(screen);
-			char shown[256];
-			GFX_truncateText(font.medium, entry->name, shown, screen->w - SCALE1(PADDING*4), 0);
-			SDL_Surface* text = TTF_RenderUTF8_Blended(font.medium, shown, COLOR_WHITE);
-			// the name, the rows and the hint, centered above the button bar: five rows only fit with small gaps, so the
-			// hint stays clear of the buttons, and a sixth scrolls
-			int bar_top = screen->h - SCALE1(PADDING + PILL_SIZE) - SCALE1(6); // (and a little room above it)
+			// laid out like the settings and tools: the game named on the time and battery's line, full rows below, and
+			// a line about the highlighted row in the tooltip at the bottom
+			int ow = GFX_blitHardwareGroup(screen, show_setting);
+			char* game_name = entry->name;
+			trimSortingMeta(&game_name);
+			int scrolls = GFX_blitHeader(screen, game_name, ow);
 			int shown_rows = MIN(count, 5);
 			int first_row = selected<shown_rows ? 0 : selected - shown_rows + 1;
-			int block_h = text->h + SCALE1(2) + SCALE1(PILL_SIZE) * shown_rows + SCALE1(2) + TTF_FontHeight(font.small);
-			int y = MAX(SCALE1(2), (bar_top - block_h) / 2);
-			SDL_BlitSurface(text, NULL, screen, &(SDL_Rect){ (screen->w - text->w) / 2, y });
-			y += text->h + SCALE1(2);
-			SDL_FreeSurface(text);
-			int rows_w = SCALE1(260);
-			int x = (screen->w - rows_w) / 2;
+			int width = screen->w - SCALE1(PADDING*2);
+			int y = SCALE1(PADDING + PILL_SIZE);
 			char* hint = "";
 			for (int i=first_row; i<first_row+shown_rows; i++) {
 				int is_selected = i==selected;
@@ -4831,27 +4996,27 @@ static void gameMenu(SDL_Surface* screen) {
 					value = p8_settings[s].labels[p8_values[s]];
 					if (is_selected) hint = p8_settings[s].hint;
 				}
-				if (is_selected) GFX_blitPill(ASSET_WHITE_PILL, screen, &(SDL_Rect){ x - SCALE1(BUTTON_PADDING), y, rows_w + SCALE1(BUTTON_PADDING*2), SCALE1(PILL_SIZE) });
+				if (is_selected) GFX_blitPill(ASSET_WHITE_PILL, screen, &(SDL_Rect){ SCALE1(PADDING), y, width, SCALE1(PILL_SIZE) });
 				SDL_Surface* name_txt = TTF_RenderUTF8_Blended(font.large, name, is_selected ? COLOR_BLACK : COLOR_WHITE);
-				SDL_BlitSurface(name_txt, NULL, screen, &(SDL_Rect){ x, y + (SCALE1(PILL_SIZE) - name_txt->h) / 2 });
-				SDL_FreeSurface(name_txt);
+				if (name_txt) {
+					SDL_BlitSurface(name_txt, NULL, screen, &(SDL_Rect){ SCALE1(PADDING + BUTTON_PADDING), y + SCALE1(4) });
+					SDL_FreeSurface(name_txt);
+				}
 				if (value[0]) {
 					SDL_Surface* value_txt = TTF_RenderUTF8_Blended(font.small, value, is_selected ? COLOR_BLACK : COLOR_DARK_TEXT);
-					SDL_BlitSurface(value_txt, NULL, screen, &(SDL_Rect){ x + rows_w - value_txt->w, y + (SCALE1(PILL_SIZE) - value_txt->h) / 2 });
-					SDL_FreeSurface(value_txt);
+					if (value_txt) {
+						SDL_BlitSurface(value_txt, NULL, screen, &(SDL_Rect){ SCALE1(PADDING) + width - SCALE1(BUTTON_PADDING) - value_txt->w, y + (SCALE1(PILL_SIZE) - value_txt->h) / 2 });
+						SDL_FreeSurface(value_txt);
+					}
 				}
 				y += SCALE1(PILL_SIZE);
 			}
-			if (first_row+shown_rows<count) SDL_FillRect(screen, &(SDL_Rect){ screen->w/2 - SCALE1(8), y - SCALE1(1), SCALE1(16), SCALE1(1) }, SDL_MapRGB(screen->format, 128,128,128)); // more below
-			SDL_Surface* hint_txt = TTF_RenderUTF8_Blended(font.small, hint, COLOR_LIGHT_TEXT);
-			if (hint_txt) {
-				SDL_BlitSurface(hint_txt, NULL, screen, &(SDL_Rect){ (screen->w - hint_txt->w) / 2, y + SCALE1(2) });
-				SDL_FreeSurface(hint_txt);
-			}
-			GFX_blitButtonGroup((char*[]){ "B","BACK", "A",rows[selected]==ROW_CPU || rows[selected]==ROW_RUMBLE || rows[selected]==ROW_STICK || rows[selected]>=ROW_P8 ? "CHANGE" : "SELECT", NULL }, 1, screen, 1);
-			GFX_blitSettingOnly(screen, show_setting); // (the volume or brightness bar, while it's changed)
+			if (first_row+shown_rows<count) SDL_FillRect(screen, &(SDL_Rect){ screen->w/2 - SCALE1(8), y + SCALE1(1), SCALE1(16), SCALE1(2) }, RGB_GRAY); // more below, as in the settings
+			int right_w = GFX_blitButtonGroup((char*[]){ "B","BACK", "A",rows[selected]==ROW_CPU || rows[selected]==ROW_RUMBLE || rows[selected]==ROW_STICK || rows[selected]>=ROW_P8 ? "CHANGE" : "SELECT", NULL }, 1, screen, 1);
+			if (show_setting && !GetHDMI()) GFX_blitHardwareHints(screen, show_setting);
+			else if (hint[0]) scrolls |= GFX_blitHintPill(screen, hint, right_w);
 			GFX_flip(screen);
-			dirty = 0;
+			dirty = scrolls; // (a long name or tooltip keeps moving)
 		}
 		else GFX_sync();
 	}
@@ -5030,6 +5195,8 @@ int main (int argc, char *argv[]) {
 	#define BOOT_STAMP_PATH "/tmp/minui_booted"
 	#define BOOT_BOOST_MS 10000
 	#define START_BOOST_MS 3000
+	static int menu_idled = 0; // the last frame waited for a button
+	#define MENU_IDLE_MS 250 // the longest the menu sleeps between looks when nothing moves (a button wakes it at once)
 	#define NAV_BOOST_MS 5000 // long enough that pausing to look then scrolling on stays quick; it only drops when you've really stopped
 	int fresh_boot = !exists(BOOT_STAMP_PATH);
 	if (fresh_boot) touch(BOOT_STAMP_PATH);
@@ -5071,6 +5238,10 @@ int main (int argc, char *argv[]) {
 		// a slow frame (eg. decoding art nobody could preload) would eat the slide, so it starts again after it
 		static uint32_t last_frame_at = 0;
 		uint32_t frame_gap = now - last_frame_at;
+		if (menu_idled) { // (waited for a button on purpose: not slow)
+			menu_idled = 0;
+			frame_gap = 0;
+		}
 		if (carousel_slide_from && last_frame_at && frame_gap>40) carousel_slide_at += frame_gap - 16;
 		if (last_frame_at && frame_gap>=50 && showsCarousel() && Carousel_useGPU()) { // what a slow carousel frame was doing
 			LOG_info("slow carousel frame: %ums (%i uploaded, %i decoded here, %ums on the selected art; input %u, moving %u, drawing %u, to screen %u)\n",
@@ -5247,7 +5418,16 @@ int main (int argc, char *argv[]) {
 			}
 		}
 		else {
-			if (PAD_tappedMenu(now)) {
+			int game_menu = PAD_tappedMenu(now) && homeOpensGame(); // in a list of games, home is the game's options
+			if (game_menu) {
+				SFX_play(SFX_CONFIRM);
+				gameMenu(screen);
+				total = top->entries->count;
+				can_resume = 0;
+				if (total>0) readyResume(top->entries->items[top->selected]); // a different core has its own save states
+				dirty = 1;
+			}
+			else if (PAD_tappedMenu(now)) {
 				show_version = 1;
 				getWifiStatus(wifi_status, sizeof(wifi_status));
 				dirty = 1;
@@ -5288,7 +5468,7 @@ int main (int argc, char *argv[]) {
 						selected -= 1;
 						if (selected<0) {
 							selected = total-1;
-							int start = total - MAIN_ROW_COUNT;
+							int start = total - Directory_rows(top);
 							top->start = (start<0) ? 0 : start;
 							top->end = total; 
 						}
@@ -5307,7 +5487,7 @@ int main (int argc, char *argv[]) {
 						if (selected>=total) {
 							selected = 0;
 							top->start = 0;
-							top->end = (total<MAIN_ROW_COUNT) ? total : MAIN_ROW_COUNT;
+							top->end = (total<Directory_rows(top)) ? total : Directory_rows(top);
 						}
 						else if (selected>=top->end) {
 							top->start += 1;
@@ -5316,30 +5496,30 @@ int main (int argc, char *argv[]) {
 					}
 				}
 				if (PAD_justRepeated(BTN_LEFT)) {
-					selected -= MAIN_ROW_COUNT;
+					selected -= Directory_rows(top);
 					if (selected<0) {
 						selected = 0;
 						top->start = 0;
-						top->end = (total<MAIN_ROW_COUNT) ? total : MAIN_ROW_COUNT;
+						top->end = (total<Directory_rows(top)) ? total : Directory_rows(top);
 					}
 					else if (selected<top->start) {
-						top->start -= MAIN_ROW_COUNT;
+						top->start -= Directory_rows(top);
 						if (top->start<0) top->start = 0;
-						top->end = top->start + MAIN_ROW_COUNT;
+						top->end = top->start + Directory_rows(top);
 					}
 				}
 				else if (PAD_justRepeated(BTN_RIGHT)) {
-					selected += MAIN_ROW_COUNT;
+					selected += Directory_rows(top);
 					if (selected>=total) {
 						selected = total-1;
-						int start = total - MAIN_ROW_COUNT;
+						int start = total - Directory_rows(top);
 						top->start = (start<0) ? 0 : start;
 						top->end = total;
 					}
 					else if (selected>=top->end) {
-						top->end += MAIN_ROW_COUNT;
+						top->end += Directory_rows(top);
 						if (top->end>total) top->end = total;
-						top->start = top->end - MAIN_ROW_COUNT;
+						top->start = top->end - Directory_rows(top);
 					}
 				}
 			}
@@ -5353,11 +5533,11 @@ int main (int argc, char *argv[]) {
 				if (i>=0) {
 					selected = top->alphas->items[i];
 					showLetter(top->entries->items[selected]);
-					if (total>MAIN_ROW_COUNT) {
+					if (total>Directory_rows(top)) {
 						top->start = selected;
-						top->end = top->start + MAIN_ROW_COUNT;
+						top->end = top->start + Directory_rows(top);
 						if (top->end>total) top->end = total;
-						top->start = top->end - MAIN_ROW_COUNT;
+						top->start = top->end - Directory_rows(top);
 					}
 				}
 			}
@@ -5367,11 +5547,11 @@ int main (int argc, char *argv[]) {
 				if (i<top->alphas->count) {
 					selected = top->alphas->items[i];
 					showLetter(top->entries->items[selected]);
-					if (total>MAIN_ROW_COUNT) {
+					if (total>Directory_rows(top)) {
 						top->start = selected;
-						top->end = top->start + MAIN_ROW_COUNT;
+						top->end = top->start + Directory_rows(top);
 						if (top->end>total) top->end = total;
-						top->start = top->end - MAIN_ROW_COUNT;
+						top->start = top->end - Directory_rows(top);
 					}
 				}
 			}
@@ -5458,14 +5638,7 @@ int main (int argc, char *argv[]) {
 			int resume_game = swap_ax ? a_pressed && can_resume && !inSwitcher() : x_tapped && can_resume;
 			int open_game = swap_ax ? (a_pressed && !resume_game) || x_tapped : a_pressed;
 
-			if (total>0 && PAD_isPressed(BTN_MENU) && PAD_justPressed(BTN_Y)) {
-				gameMenu(screen);
-				total = top->entries->count;
-				can_resume = 0;
-				if (total>0) readyResume(top->entries->items[top->selected]); // a different core has its own save states
-				dirty = 1;
-			}
-			else if (total>0 && PAD_isPressed(BTN_MENU) && PAD_justPressed(BTN_X) && isSortableFolder(top->path)) {
+			if (total>0 && PAD_isPressed(BTN_MENU) && PAD_justPressed(BTN_X) && isSortableFolder(top->path)) {
 				deleteSelected(screen);
 				total = top->entries->count;
 				can_resume = 0;
@@ -5617,7 +5790,9 @@ int main (int argc, char *argv[]) {
 			// that is no bigger than platform FIXED_HEIGHT x FIXED_HEIGHT
 			int had_thumb = 0;
 			int carousel = showsCarousel() && total>0;
-			if (!show_version && total>0 && !carousel) {
+			int play_list = !show_version && total>0 && !carousel && exactMatch(top->path, FAUX_MOSTPLAYED_PATH); // art on every row instead
+			if (play_list) requestThumbs(top, screen);
+			else if (!show_version && total>0 && !carousel) {
 				// from the thread while scrolling (shown as soon as it's ready), waited for once the list is still
 				requestThumbs(top, screen);
 				Entry* entry = top->entries->items[top->selected];
@@ -5646,29 +5821,21 @@ int main (int argc, char *argv[]) {
 			
 			if (show_version) {
 				hint_scrolls = 0; // set again below while the row's tooltip scrolls
-				if (!version) {
-					version = TTF_RenderUTF8_Blended(font.large, "Settings", COLOR_DARK_TEXT); // (play time is in Tools now)
-				}
-				// most played and the power timers sit under the version info, the whole block centered
-				int rows_w = MAX(version->w, SCALE1(260));
-				int rows_gap = SCALE1(4);
+				// named on the time and battery's line, grey like every tool, its rows full width below
+				GFX_blitHeader(screen, "Settings", ow);
+				int block_x = SCALE1(PADDING + BUTTON_PADDING); // where the names start
+				int rows_w = screen->w - SCALE1(PADDING + BUTTON_PADDING) * 2; // names to values, inside the pills
 				if (info_row<info_start) info_start = info_row;
 				if (info_row>=info_start+INFO_ROWS_SHOWN) info_start = info_row - INFO_ROWS_SHOWN + 1;
-				int head_h = version->h;
-				int rows_h = rows_gap + SCALE1(PILL_SIZE) * INFO_ROWS_SHOWN;
-				int top = SCALE1(PADDING); // the hardware group is on the right, the text starts left of it
-				int bottom = screen->h - SCALE1(PADDING + PILL_SIZE + 6); // clear of the button hints
-				int block_y = top + (bottom - top - head_h - rows_h) / 2;
-				int block_x = (screen->w - rows_w) / 2;
-				SDL_BlitSurface(version, NULL, screen, &(SDL_Rect){block_x, block_y});
+				int rows_top = SCALE1(PADDING + PILL_SIZE);
 
 				for (int i=info_start; i<INFO_ROW_COUNT && i<info_start+INFO_ROWS_SHOWN; i++) {
-					int y = block_y + head_h + rows_gap + SCALE1(PILL_SIZE) * (i - info_start);
+					int y = rows_top + SCALE1(PILL_SIZE) * (i - info_start);
 					int selected = i==info_row;
 					if (selected) {
 						GFX_blitPill(ASSET_WHITE_PILL, screen, &(SDL_Rect){
-							block_x - SCALE1(BUTTON_PADDING), y,
-							rows_w + SCALE1(BUTTON_PADDING*2), SCALE1(PILL_SIZE)
+							SCALE1(PADDING), y,
+							screen->w - SCALE1(PADDING*2), SCALE1(PILL_SIZE)
 						});
 					}
 					char* name;
@@ -5677,7 +5844,7 @@ int main (int argc, char *argv[]) {
 						name = "Wi-Fi";
 						int name_w;
 						TTF_SizeUTF8(font.large, name, &name_w, NULL);
-						GFX_truncateText(font.large, wifi_status, value, rows_w - name_w - SCALE1(BUTTON_PADDING*2), 0);
+						fitText(font.small, wifi_status, value, rows_w - name_w - SCALE1(BUTTON_PADDING*2), 0);
 					}
 					else if (i==INFO_ROW_THEME) {
 						name = "Theme";
@@ -5723,19 +5890,15 @@ int main (int argc, char *argv[]) {
 						name = timer_names[i-1];
 						strcpy(value, PWR_getTimerLabel(i-1, PWR_getTimer(i-1)));
 					}
-					TTF_Font* row_font = i==INFO_ROW_VERSION ? font.small : font.large;
-					// the names stand out from the dim "Settings" heading, values a step back, as in the game menu
-					SDL_Surface* name_txt = TTF_RenderUTF8_Blended(row_font, name, selected ? COLOR_BLACK : COLOR_WHITE);
-					SDL_Surface* value_txt = TTF_RenderUTF8_Blended(row_font, value, selected ? COLOR_BLACK : COLOR_LIGHT_TEXT);
-					int ty = y + (SCALE1(PILL_SIZE) - name_txt->h) / 2;
-					SDL_BlitSurface(name_txt, NULL, screen, &(SDL_Rect){block_x, ty});
-					SDL_BlitSurface(value_txt, NULL, screen, &(SDL_Rect){block_x + rows_w - value_txt->w, ty});
-					SDL_FreeSurface(name_txt);
-					SDL_FreeSurface(value_txt);
+					// names as in every list, values small and grey on the right as in the tools
+					// (from the text cache: a scrolling tooltip redraws the rows many times a second)
+					SDL_Surface* name_txt = renderText(font.large, name, selected ? COLOR_BLACK : COLOR_WHITE);
+					SDL_Surface* value_txt = renderText(font.small, value, selected ? COLOR_BLACK : COLOR_DARK_TEXT);
+					if (name_txt) SDL_BlitSurface(name_txt, NULL, screen, &(SDL_Rect){block_x, y + SCALE1(4)});
+					if (value_txt) SDL_BlitSurface(value_txt, NULL, screen, &(SDL_Rect){block_x + rows_w - value_txt->w, y + (SCALE1(PILL_SIZE) - value_txt->h) / 2});
 				}
 
-				// more rows below (no room for a mark above, under the play time)
-				int rows_top = block_y + head_h + rows_gap;
+				// more rows below
 				if (info_start+INFO_ROWS_SHOWN<INFO_ROW_COUNT) SDL_FillRect(screen, &(SDL_Rect){ screen->w/2 - SCALE1(8), rows_top + SCALE1(PILL_SIZE) * INFO_ROWS_SHOWN + SCALE1(1), SCALE1(16), SCALE1(2) }, RGB_GRAY);
 
 				// buttons (duped and trimmed from below)
@@ -5773,7 +5936,11 @@ int main (int argc, char *argv[]) {
 					if (Carousel_useGPU()) blitCarouselGPU(screen, top, CAROUSEL_SCROLL_DECODES, Carousel_shift(now)); // the selected art now, the rest from the thread
 					else blitCarousel(screen, top, !scrolling, Carousel_shift(now));
 				}
+				else if (play_list) blitPlayTimeList(screen, top, ow, now);
 				else if (total>0) {
+					int heading = Directory_hasHeading(top);
+					int list_top = PADDING + (heading ? PILL_SIZE : 0); // unscaled: under the heading when there is one
+					if (heading) GFX_blitHeader(screen, "Tools", ow);
 					int selected_row = top->selected - top->start;
 					for (int i=top->start,j=0; i<top->end; i++,j++) {
 						Entry* entry = top->entries->items[i];
@@ -5781,7 +5948,7 @@ int main (int argc, char *argv[]) {
 						char* entry_unique = entry->unique;
 						int available_width = (had_thumb ? ox : screen->w) - SCALE1(PADDING * 2); // every row stays clear of the art
 						if (stack->count==1 && list_art) { // root system menu only; game box-art lists keep their exact old layout
-							int row_y = SCALE1(PADDING+(j*PILL_SIZE));
+							int row_y = SCALE1(list_top+(j*PILL_SIZE));
 							int first_art_x = firstVisibleArtX(list_art, row_y-list_art_y, SCALE1(PILL_SIZE));
 							if (first_art_x>0) {
 								int row_right = list_art_x + first_art_x - SCALE1(4); // a small gap before visible art
@@ -5789,7 +5956,7 @@ int main (int argc, char *argv[]) {
 								available_width = MAX(available_width, row_right - SCALE1(PADDING*2));
 							}
 						}
-						if (i==top->start && !had_thumb) available_width -= ow; // 
+						if (i==top->start && !had_thumb && !heading) available_width -= ow; // (the time and battery share its line)
 					
 						SDL_Color text_color = COLOR_WHITE;
 					
@@ -5816,14 +5983,14 @@ int main (int argc, char *argv[]) {
 							if (full_width>room) {
 								GFX_blitPill(ASSET_WHITE_PILL, screen, &(SDL_Rect){
 									SCALE1(PADDING),
-									SCALE1(PADDING+(j*PILL_SIZE)),
+									SCALE1(list_top+(j*PILL_SIZE)),
 									available_width,
 									SCALE1(PILL_SIZE)
 								});
 								// drawn last, once the rest of the frame is kept for the frames that only move it
 								if (marquee_text) SDL_FreeSurface(marquee_text);
 								marquee_text = TTF_RenderUTF8_Blended(font.large, full_name, COLOR_BLACK);
-								marquee_dst = (SDL_Rect){ SCALE1(PADDING+BUTTON_PADDING), SCALE1(PADDING+(j*PILL_SIZE)+4), room, 0 };
+								marquee_dst = (SDL_Rect){ SCALE1(PADDING+BUTTON_PADDING), SCALE1(list_top+(j*PILL_SIZE)+4), room, 0 };
 								marquee_overflow = full_width - room;
 								marqueeOffset(entry->path, marquee_overflow, now); // starts it over for a new name
 								continue;
@@ -5832,7 +5999,7 @@ int main (int argc, char *argv[]) {
 						if (j==selected_row) {
 							GFX_blitPill(ASSET_WHITE_PILL, screen, &(SDL_Rect){
 								SCALE1(PADDING),
-								SCALE1(PADDING+(j*PILL_SIZE)),
+								SCALE1(list_top+(j*PILL_SIZE)),
 								max_width,
 								SCALE1(PILL_SIZE)
 							});
@@ -5851,7 +6018,7 @@ int main (int argc, char *argv[]) {
 								text->h
 							}, screen, &(SDL_Rect){
 								SCALE1(PADDING+BUTTON_PADDING),
-								SCALE1(PADDING+(j*PILL_SIZE)+4)
+								SCALE1(list_top+(j*PILL_SIZE)+4)
 							});
 
 							fitText(font.large, entry_name, display_name, available_width-dot_width, SCALE1(BUTTON_PADDING*2));
@@ -5865,7 +6032,7 @@ int main (int argc, char *argv[]) {
 							text->h
 						}, screen, &(SDL_Rect){
 							SCALE1(PADDING+BUTTON_PADDING),
-							SCALE1(PADDING+(j*PILL_SIZE)+4)
+							SCALE1(list_top+(j*PILL_SIZE)+4)
 						});
 					}
 				}
@@ -5886,13 +6053,17 @@ int main (int argc, char *argv[]) {
 				if (show_setting && !GetHDMI()) GFX_blitHardwareHints(screen, show_setting);
 				else if (inSwitcher()) GFX_blitButtonGroup((char*[]){ total>0 ? "X" : NULL,"UNPIN", NULL }, 0, screen, 0); // the word the in-game menus use
 				else if (total>0 && exactMatch(top->path, FAUX_MOSTPLAYED_PATH)) { // stats matter more than resume/fav hints here
-					Entry* entry = top->entries->items[top->selected];
-					char total_str[32], average_str[32];
-					formatShortPlayTime(entry->play.seconds, total_str);
-					formatShortPlayTime(getAveragePlayTime(&entry->play), average_str);
-					GFX_blitButtonGroup((char*[]){ total_str,"ALL", average_str,"AVG", NULL }, 0, screen, 0);
+					char all_str[32];
+					formatPlayTime(play_total_seconds, all_str);
+					GFX_blitButtonGroup((char*[]){ all_str,"TOTAL", NULL }, 0, screen, 0); // everything played; each game's own is on its row
 				}
 				else if (can_resume) GFX_blitButtonGroup((char*[]){ "X",swap_ax ? "OPEN" : "RESUME", fav_button,"FAV", NULL }, 0, screen, 0);
+				else if (canCarousel()) { // a list of games: X, the other way to start one, in place of power and sleep
+					char* x_hint = swap_ax ? "OPEN" : NULL; // (X resumes only when there's a save state, and it says so above)
+					if (x_hint) GFX_blitButtonGroup((char*[]){ "X",x_hint, fav_button,"FAV", NULL }, 0, screen, 0);
+					else if (fav_button) GFX_blitButtonGroup((char*[]){ fav_button,"FAV", NULL }, 0, screen, 0);
+				}
+				else if (stack->count==1 && BTN_SLEEP==BTN_POWER && !simple_mode) GFX_blitButtonGroup((char*[]){ "POWER","SLEEP", HOME_BUTTON_LABEL,"SETTINGS", NULL }, 0, screen, 0); // home, the house on MENU
 				else GFX_blitButtonGroup((char*[]){
 					BTN_SLEEP==BTN_POWER?"POWER":"MENU",
 					BTN_SLEEP==BTN_POWER||simple_mode?"SLEEP":"INFO",
@@ -5931,6 +6102,7 @@ int main (int argc, char *argv[]) {
 			frame_drawn_at = SDL_GetTicks();
 			GFX_flip(screen);
 			frame_flipped_at = SDL_GetTicks();
+			GFX_setClockLeft(0); // set again for the next frame: a screen opened from here (the game options, say) has its own heading there
 			dirty = 0;
 			static int first_frame = 1;
 			if (first_frame) {
@@ -5947,7 +6119,15 @@ int main (int argc, char *argv[]) {
 			int worked = 0;
 			if (idle && showsCarousel()) worked = Carousel_useGPU() ? Carousel_preloadGPU(top, screen) : Carousel_preload(top, screen);
 			else if (idle) worked = preloadThumbs(top, screen);
-			if (!worked) GFX_sync();
+			// nothing moving, held or on its way: asleep until a button instead of 60 empty frames a second. A
+			// quarter second at most, for what changes by itself (the clock, battery, Wi-Fi, a finished update check)
+			int still = !worked && !PAD_anyPressed() && !carousel_slide_from && !marquee_active && !flash_until
+				&& !(show_version && hint_scrolls) && !show_setting && !GFX_settingFading() && !Decoder_busy();
+			if (still) {
+				PLAT_waitForInput(MENU_IDLE_MS);
+				menu_idled = 1;
+			}
+			else if (!worked) GFX_sync();
 		}
 		
 		// if (!first_draw) {

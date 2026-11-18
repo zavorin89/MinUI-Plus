@@ -57,6 +57,7 @@ static Calibration calibration = {
 	.y_mid = MIYOO_ADC_MIDDLE,
 	.y_min = MIYOO_ADC_MIDDLE-MIYOO_ADC_RANGE,
 };
+static Calibration calibration_loaded; // as read from the card (zeros when there was none): saved again only when different
 
 static int MIYOO_ADC_DEAD_ZONE		= 10;
 static int MIYOO_AXIS_INT8_DRIFT	= 5;
@@ -357,16 +358,46 @@ static void printCalibration(void) {
 	fflush(stdout);
 }
 
+// the stick's chip sends its position over the serial line all the time: read as it came, that woke this thread for
+// every few bytes. A short rest after each read lets several frames arrive and be read at once (the newest wins), a
+// fraction of the wakeups for a position at most STICK_BATCH_US older, under a frame. Asleep, the line is closed
+#define STICK_BATCH_US 10000
+static pthread_mutex_t stick_mx = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t stick_resume = PTHREAD_COND_INITIALIZER;
+static int stick_paused = 0;
 static void* readStick(void *arg) {
 	while (1) {
+		pthread_mutex_lock(&stick_mx);
+		if (stick_paused) {
+			miyoo_close_serial_input();
+			pthread_cleanup_push((void (*)(void*))pthread_mutex_unlock, &stick_mx); // (Stick_quit cancels this thread)
+			while (stick_paused) pthread_cond_wait(&stick_resume, &stick_mx);
+			pthread_cleanup_pop(0);
+			miyoo_init_serial_input();
+		}
+		pthread_mutex_unlock(&stick_mx);
+		if (s_fd<0) { // (couldn't open it: tried again, instead of select failing in a tight loop)
+			sleep(1);
+			miyoo_init_serial_input();
+			continue;
+		}
 		char rcv_buf[256] = {0};
-		int len = uart_read(s_fd, rcv_buf, 256);
+		int len = uart_read(s_fd, rcv_buf, 255);
 		if (len > 0) {
 			rcv_buf[len] = '\0';
 			parser_miyoo_input(rcv_buf, len);
 		}
+		else if (len < 0) usleep(100000); // (an error: not spun on)
+		usleep(STICK_BATCH_US);
 	}
 	return NULL;
+}
+void Stick_pause(int paused) { // asleep: the serial line closed, and the stick centered (it isn't read meanwhile)
+	pthread_mutex_lock(&stick_mx);
+	stick_paused = paused;
+	if (paused) g_lastX = g_lastY = 0;
+	else pthread_cond_signal(&stick_resume);
+	pthread_mutex_unlock(&stick_mx);
 }
 
 void Stick_init(void) {
@@ -376,7 +407,7 @@ void Stick_init(void) {
 	sprintf(StickPath, "%s/mstick.bin", getenv("USERDATA_PATH"));
 	int fd = open(StickPath, O_RDONLY);
 	if (fd>=0) {
-		read(fd, &calibration, sizeof(Calibration));
+		if (read(fd, &calibration, sizeof(Calibration))==sizeof(Calibration)) calibration_loaded = calibration;
 		close(fd);
 		
 		printf("loaded stick calibration\n");
@@ -386,21 +417,22 @@ void Stick_init(void) {
 	pthread_create(&stick_pt, NULL, &readStick, NULL);
 }
 void Stick_quit(void) {
+	// the reading thread stops first: closed under it, it would open the line again (and keep it) to retry
+	pthread_cancel(stick_pt);
+	pthread_join(stick_pt, NULL);
 	miyoo_close_serial_input();
 	
-	// save calibration data
-	int fd = open(StickPath, O_CREAT|O_WRONLY, 0644);
+	// save calibration data, only when it's changed: every app quit used to rewrite it and sync the whole card
+	int fd = memcmp(&calibration, &calibration_loaded, sizeof(Calibration)) ? open(StickPath, O_CREAT|O_WRONLY|O_TRUNC, 0644) : -1;
 	if (fd>=0) {
 		write(fd, &calibration, sizeof(Calibration));
+		fsync(fd); // (just this file)
 		close(fd);
-		sync();
+		calibration_loaded = calibration;
 
 		printf("saved stick calibration\n");
 		printCalibration();
 	}
-	
-	pthread_cancel(stick_pt);
-	pthread_join(stick_pt, NULL);
 }
 void Stick_get(int* x, int* y) { // -32768 thru 32767
 	*x = g_lastX * 256;

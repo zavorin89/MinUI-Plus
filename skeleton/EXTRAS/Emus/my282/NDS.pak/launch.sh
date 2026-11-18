@@ -57,6 +57,37 @@ if [ -f "$CFG" ]; then
 fi
 
 mkdir -p "$DRASTIC/savestates"
+
+# saves made by an older copy in .system (DraStic used to live there) are copied over once, so that progress isn't
+# stranded: in-game saves the copy here doesn't have, and save states, unless this copy has a newer in-game save for
+# that game (the state would bring back older progress). Copied with their times, which that check uses. Nothing is
+# overwritten or deleted
+OLD="$SYSTEM_PATH/paks/Emus/NDS.pak"
+COPIED="$USERDATA_PATH/NDS-old-saves-copied"
+if [ "$DRASTIC" != "$OLD" ] && [ -d "$OLD" ] && [ ! -f "$COPIED" ]; then
+	MOVED_LOG="$LOGS_PATH/NDS-old-saves.txt"
+	mkdir -p "$DRASTIC/backup"
+	for SAVE in "$OLD"/backup/*.dsv; do
+		[ -f "$SAVE" ] || continue
+		NAME="$(basename "$SAVE")"
+		[ -e "$DRASTIC/backup/$NAME" ] && continue
+		cp -p "$SAVE" "$DRASTIC/backup/$NAME" && echo "copied in-game save $NAME" >> "$MOVED_LOG"
+	done
+	for STATE in "$OLD"/savestates/*.dss; do
+		[ -f "$STATE" ] || continue
+		NAME="$(basename "$STATE")"
+		[ -e "$DRASTIC/savestates/$NAME" ] && continue
+		GAME="${NAME%_*.dss}"
+		if [ -f "$DRASTIC/backup/$GAME.dsv" ] && [ "$DRASTIC/backup/$GAME.dsv" -nt "$STATE" ]; then
+			echo "left $NAME: $GAME has a newer in-game save here" >> "$MOVED_LOG"
+			continue
+		fi
+		cp -p "$STATE" "$DRASTIC/savestates/$NAME" && echo "copied save state $NAME" >> "$MOVED_LOG"
+	done
+	sync
+	touch "$COPIED"
+fi
+
 SWAPPINESS=`cat /proc/sys/vm/swappiness`
 echo 10 > /proc/sys/vm/swappiness
 

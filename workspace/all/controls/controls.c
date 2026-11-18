@@ -12,7 +12,8 @@
 
 static SDL_Surface* screen;
 
-// keys are written as the buttons to show, separated by spaces: "MENU + Y", "L1 R1", "hold SELECT".
+// keys are written as the buttons to show, separated by spaces: "HOME + X", "L1 R1", "hold SELECT". HOME is the MENU
+// button, drawn with the house it has on the A30, as the hints do.
 // Lowercase words, "+" and "/" are drawn as plain text
 #define ROW_MAX 8
 typedef struct Section {
@@ -28,14 +29,14 @@ static Section sections[] = {
 		{ "SELECT",			"List or carousel view" },
 		{ "hold SELECT",	"Pin to the game switcher" },
 		{ "START",			"Random game, any system" },
-		{ "MENU + Y",		"Game menu: core, CPU, art, rename" },
-		{ "MENU + X",		"Delete game, or clear Play Time" },
+		{ "HOME",			"Game options: core, CPU, art, rename" },
+		{ "HOME + X",		"Delete game, or clear Play Time" },
 	}},
 	{ "Other", NULL, {
-		{ "MENU",			"Settings, or pause a game" },
-		{ "MENU",			"Hide an achievement popup" },
-		{ "hold MENU",		"Game switcher" },
-		{ "MENU + VOL",		"Brightness" },
+		{ "HOME",			"Settings, or pause a game" },
+		{ "HOME",			"Hide an achievement popup" },
+		{ "hold HOME",		"Game switcher" },
+		{ "HOME + VOL",		"Brightness" },
 		{ "hold POWER",		"Power off" },
 	}},
 	{ "Keyboard", NULL, {
@@ -67,6 +68,13 @@ static int blitKeys(char* keys, int x, int y, int h, int draw) {
 			if (draw) SDL_BlitSurface(text, NULL, screen, &(SDL_Rect){ x, y + (h - text->h) / 2 });
 			x += text->w;
 			SDL_FreeSurface(text);
+		}
+		else if (!strcmp(word, HOME_BUTTON_LABEL)) { // round, with the house printed on it
+			if (draw) {
+				GFX_blitAsset(ASSET_BUTTON, NULL, screen, &(SDL_Rect){ x, button_y });
+				GFX_blitHouse(screen, x, button_y);
+			}
+			x += SCALE1(BUTTON_SIZE);
 		}
 		else if (strlen(word)==1) { // a round button, like the hints
 			if (draw) {

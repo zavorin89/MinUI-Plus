@@ -68,6 +68,11 @@ were taken by the A30 itself, bezel and LCD grid included.
 
 ## What's new in v1.3
 
+**v1.3.2:** faster wake and a real low-power suspend, a Wi-Fi chip that powers down when it's off and joins any
+saved network by itself, a new Play Time list (top 20 with art and stats), a tap of MENU on a game for its options,
+headings that match across Settings, Tools and the game options, smoother scrolling text, and DS saves carried over from
+DraStic's old folder. See CHANGES.txt.
+
 **v1.3.1:** quicker wake from sleep and less battery used asleep, a short Power press to turn on, a new
 RetroAchievements list (five at a time with a scrolling description), long names that wrap instead of running off the
 screen, a faster game switcher after RetroAchievements games, more time for updates on slow Wi-Fi, and many small
@@ -103,10 +108,10 @@ Everything that changed from v1.1. On v1.1 the built-in updater offers it; on v1
   isn't included
 - It plays like every other system: MENU opens the in-game menu with your play time, and Options has Screen Scaling,
   Screen Effect, Screen Bezel and Button Layout. START is PICO-8's own pause menu, and the power button sleeps
-- The same settings are in MENU + Y on its carts and on Splore. Fullscreen with the LCD grid is the default
+- The same settings are in the game menu (tap MENU on a cart, or on Splore). Fullscreen with the LCD grid is the default
 - Hold MENU for the game switcher. PICO-8 has no save states, so the switcher keeps a picture and starts the cart over,
   and says so under the picture
-- One `Pico-8 (P8)` cart can switch to the official PICO-8 in MENU + Y, and back to fake-08
+- One `Pico-8 (P8)` cart can switch to the official PICO-8 in its game menu (tap MENU on it), and back to fake-08
 - Splore has its own box art and shows up as "Splore"
 
 **Game switcher and resume**
@@ -155,7 +160,7 @@ Everything that changed from v1.07. On v1.07 or older? [Install this one by hand
   resume
 - Screen layouts, bezels, Main Screen, Screen Effect, Prevent Tearing, and rebindable controls and shortcuts
 - RetroAchievements (softcore)
-- CPU Speed and Thumbstick rows in the game menu (MENU + Y)
+- CPU Speed and Thumbstick rows in the game menu (tap MENU on a game)
 - Renaming or deleting a DS game takes its saves, save states and settings along
 
 **Nintendo 64** (still experimental, [your mileage may vary](#nintendo-64))
@@ -193,10 +198,10 @@ Everything that changed from v1.07. On v1.07 or older? [Install this one by hand
   ranking, and your all-time total
 - **RetroAchievements**: unlock popups, an achievements list in the pause menu, and playing offline
   (unlocks are sent later), PlayStation `.chd` discs included
-- **Game menu** (MENU + Y on a game): pick its emulator core, download its box art, rename it, delete it
+- **Game menu** (tap MENU, the button with the house, on a game): pick its emulator core, download its box art, rename it, delete it
 - **Multi-disc games merge themselves**: drop in "(Disc 1)", "(Disc 2)"... files and MinUI+ turns them into one
   game, with a playlist and your saves carried over
-- **Rename any game** right on the device (MENU + Y, Rename) without breaking anything: its saves, save states,
+- **Rename any game** right on the device (tap MENU on it, Rename) without breaking anything: its saves, save states,
   box art, play time and favorite all follow the new name
 - **Game switcher**: hold MENU anywhere, even mid-game, to jump between your pinned games, each shown as a picture of
   exactly where you left it and picking up from that moment
@@ -283,12 +288,12 @@ kept.
 MinUI+ keeps track of how long you play every game, automatically, from the moment it starts:
 
 - **In the pause menu**: the game's total play time, this session, how many sessions, and your average session.
-- **Play Time** (in Tools): every game you've played, ranked by hours, with its box art, its total and its average
-  session, and your total across everything as it opens. **MENU + X** there clears it all (it asks first).
+- **Play Time** (in Tools): your top 20 games, ranked by hours, each with its box art, total, average session and
+  number of sessions, and your total across everything at the bottom. **MENU + X** there clears it all (it asks first).
 - **Recently Played** is sorted by when you actually last played, and the time follows a game through a rename.
 
 
-### The game menu (MENU + Y)
+### The game menu (tap MENU on a game)
 
 - **Change Core**: some systems have more than one emulator. Pick one per game, with a line about what each is good
   at; the system's default stays on top. Saves and states are kept per core, so switching never loses progress.
@@ -348,7 +353,7 @@ Hold MENU anywhere, in the menus or in a game, to open the game switcher: your p
 of where you left it. A picks a game up from that exact moment. In a game, holding MENU quicksaves first, with a
 "Saving" spinner if it takes a moment. Pin games with a long press of SELECT in a list, or X in the pause menu.
 
-### Settings (tap MENU)
+### Settings (tap MENU in the system list)
 
 - **Wi-Fi**: the network you're on (or Off); A opens the Wi-Fi setup to scan, connect, or switch it off
 - **Updates**: after Wi-Fi connects, MinUI+ quietly checks its latest GitLab release. When a newer one exists,
@@ -590,13 +595,13 @@ included. **PICO-8 isn't part of MinUI+ and isn't included**: its license is for
 3. Put carts (`.p8` or `.p8.png`) in `Roms/Pico-8 Native (PICO8)`. Its **Splore** entry opens PICO-8's cart browser,
    which needs Wi-Fi.
 
-To play one `Pico-8 (P8)` cart with the official PICO-8 instead, press MENU + Y on it and pick PICO-8 (official).
+To play one `Pico-8 (P8)` cart with the official PICO-8 instead, tap MENU on it and pick PICO-8 (official).
 
 It plays like the other systems:
 
 - **MENU** opens the in-game menu: Continue, Options and Quit, with your play time. **Options > Frontend** has Screen
   Scaling (Fullscreen or Integer), Screen Effect (Grid, Line or None) and Screen Bezel (`Bezels/P8.png`, or one named
-  after the cart); **Options > Controls** has the Button Layout. The same settings are in MENU + Y on any of its carts
+  after the cart); **Options > Controls** has the Button Layout. The same settings are in the game menu (tap MENU) on any of its carts
   or on Splore, and they apply to every cart.
 - **START** opens PICO-8's own pause menu. A and X are PICO-8's O, B and Y are its X, and the d-pad and stick both move.
 - **Hold MENU** for the Game Switcher. PICO-8 has no save states, so the switcher keeps a picture of where you were,
@@ -672,7 +677,7 @@ gives the battery back everywhere it can.
 
 ### CPU speed
 
-Set in the pause menu (Options > Frontend > CPU Speed), per system or per game, or from the game menu (MENU + Y)
+Set in the pause menu (Options > Frontend > CPU Speed), per system or per game, or from the game menu (tap MENU on a game)
 without starting the game.
 
 | Setting | Speed | What it's for |
@@ -706,12 +711,12 @@ Everything on screen has a button hint. These are the ones you won't see:
 | SELECT | List or carousel |
 | Hold SELECT | Pin to the game switcher |
 | START | Random game (in the system list: from any system) |
-| MENU + Y | Game menu: core, box art, rename, delete |
+| MENU | Game menu: core, box art, rename, delete |
 | MENU + X | Delete the game (in Play Time: clear all play time) |
 
 | Everywhere | |
 | --- | --- |
-| MENU | Settings, or the pause menu in a game |
+| MENU | Settings (outside game lists), or the pause menu in a game |
 | MENU (with an achievement popup up) | Hide the popup |
 | Hold MENU | Game switcher (quicksaves first in a game) |
 | MENU + VOL | Brightness |

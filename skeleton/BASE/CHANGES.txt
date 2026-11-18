@@ -1,4 +1,4 @@
-# MinUI+ v1.3.1 — changes since launch
+# MinUI+ v1.3.2 — changes since launch
 
 For the Miyoo A30. This ZIP is a complete release, suitable for manual download from a mirror.
 
@@ -9,7 +9,48 @@ or bezels from your backup. The updater's Shut Down prompt requires you to turn 
 
 From v1.1 the built-in updater checks GitLab. Devices on v1.07 or older look for updates on GitHub, where every release is published too.
 
-This is a consolidated comparison with v1.0.0, rather than a list of every intermediate hotfix. This v1.3.1 package includes all changes below. The newest changes come first, then v1.0.1–v1.0.5, then v1.06.
+This is a consolidated comparison with v1.0.0, rather than a list of every intermediate hotfix. This v1.3.2 package includes all changes below. The newest changes come first, then v1.0.1–v1.0.5, then v1.06.
+
+## New in v1.3.2
+
+### Sleep and power
+
+- Waking is faster: under a tenth of a second, in the menu or in a game.
+- After a minute asleep, the A30 goes into a real low-power suspend, and wakes from it with the Power button as usual.
+- Wi-Fi switches off on a long sleep and comes back on waking. While Wi-Fi is off, the Wi-Fi chip is now fully powered down; while it's on, it dozes between packets.
+- Wi-Fi joins whichever saved network is in range by itself, and starts again on its own if it couldn't after a sleep.
+- The clock isn't re-synced on every reconnect, only when its last sync is more than 6 hours old.
+- The menu, the pause menu and paused games now rest between button presses instead of drawing 60 empty frames a second.
+- The background music, the thumbstick and the volume buttons now wake the CPU far less often.
+- The A30's unused USB file transfer (MTP) and USB debugging (adb) services are stopped at boot. Charging over USB works as before.
+- Games start sooner: the A30's two spare CPU cores are switched off in the background instead of while you wait.
+
+### Play Time
+
+- A new list: the top 20 games, four at a time, each with its rank, box art, total time, average session and number of sessions. The selection boxes the whole game, and long names scroll.
+- Your total time across everything, in hours and minutes, is in the bottom bar.
+- It moves a line at a time like every other list. The carousel view is gone from Play Time.
+
+### The home button
+
+- In a list of games (or the carousel), a tap of MENU, the button with the house, opens that game's options: core, CPU speed, box art, rename and delete. This replaces MENU + Y.
+- Everywhere else a tap still opens Settings, and the system list shows a house button hint for it.
+- The Controls page shows the house button.
+
+### Polish
+
+- Settings, Tools, Play Time, the core picker and the game options all have a grey heading on the clock's line, with full-width rows below. A line about the highlighted row is shown at the bottom.
+- Scrolling text moves smoothly at 60 frames a second everywhere, achievements included.
+- Lists of games show X RESUME (or X OPEN with A and X swapped) instead of the power and sleep hint.
+- In the game switcher, a DS game whose save state is missing says so under its picture, the same way PICO-8 games do.
+
+### Fixes
+
+- DS saves and save states left in DraStic's old folder in .system are copied once to the new one. Nothing is overwritten, and a save state is skipped if the game has a newer in-game save.
+- The clock no longer sits over the heading of the game options opened from the carousel.
+- The thumbstick's calibration is only written to the card when it changes, not on every app quit.
+- Holding a direction no longer skips ahead on its first repeat.
+- Play time and the game switcher list are written on their own, without flushing the whole card mid-game.
 
 ## New in v1.3.1
 

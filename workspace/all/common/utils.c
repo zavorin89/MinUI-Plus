@@ -256,10 +256,13 @@ void setPlayTime(char* path, PlayTime* time) {
 		fclose(in);
 	}
 	if (time) writePlayTimeLine(out, path, time);
+	// just this file onto the card, not a sync() of everything pending: minarch saves play time every minute while a
+	// game runs, and waiting on the whole card from the game's own thread could cost frames
+	fflush(out);
+	fsync(fileno(out));
 	fclose(out);
 	
 	rename(tmp_path, PLAYTIME_PATH);
-	sync();
 }
 void removePlayTime(char* path) {
 	setPlayTime(path, NULL);
@@ -319,8 +322,9 @@ static void Switcher_save(char paths[SWITCHER_MAX][MAX_PATH], int count) {
 	FILE* file = fopen(SWITCHER_PATH, "w");
 	if (!file) return;
 	for (int i=0; i<count; i++) fprintf(file, "%s\n", paths[i]);
+	fflush(file);
+	fsync(fileno(file)); // (just this file)
 	fclose(file);
-	sync();
 }
 int Switcher_has(char* path) {
 	char paths[SWITCHER_MAX][MAX_PATH];

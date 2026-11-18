@@ -1,5 +1,6 @@
 #!/bin/sh
-# wifi.sh up [first]|down|status|ssid|online|time
+# wifi.sh up [first]|down|attach|status|ssid|online|time
+# attach: the chip's driver attached (wlan0 there), for scanning before a network is saved
 # online: runs the quiet tasks that need a newly working connection (clock sync and update check)
 # Connects wlan0 to whichever saved network in /mnt/SDCARD/.userdata/shared/wifi.txt is in range, and moves between
 # them by itself (the first listed, the latest joined, is preferred when several are):
@@ -19,11 +20,95 @@ RUNTIME_PATH="${MINUI_RUNTIME_PATH:-/tmp}"
 ONLINE_LOCK="$RUNTIME_PATH/minui_wifi_online.lock"
 TIME_LOCK="$RUNTIME_PATH/minui_wifi_time.lock"
 CLOCK_SET=/tmp/minui_clock_set
+SYNCED_AT=/tmp/minui_clock_synced_at # uptime seconds at the last sync this boot
+
+# The chip (a Realtek RTL8188FU on USB) is detached from its driver while Wi-Fi is off: then USB suspends it. Miyoo built
+# the driver with all its power saving off, so attached it stays fully powered even with wlan0 down. When it's attached
+# again the driver's power saving is turned on first (it reads it as it attaches): dozing between packets while joined
+# (LPS), and off while not joined (IPS)
+DRIVER=/sys/bus/usb/drivers/rtl8188fu
+PARAMS=/sys/module/8188fu/parameters
+USB_IF=/tmp/minui_wifi_usb # the chip's USB interface (eg. 1-1:1.0), kept for attaching it again
+POWER_LOG="${LOGS_PATH:-/mnt/SDCARD/.userdata/my282/logs}/wifi-power.txt"
+power_log() {
+	echo "$(date +'%F %T') $*" >> "$POWER_LOG"
+}
+unbind_all() {
+	for I in "$DRIVER"/*:*; do
+		[ -e "$I" ] || continue
+		echo "${I##*/}" > "$USB_IF"
+		echo "${I##*/}" > "$DRIVER/unbind"
+	done
+}
+detach() {
+	[ -d "$DRIVER" ] || return 0
+	unbind_all
+	power_log "detached ($(cat "$USB_IF" 2>/dev/null))"
+}
+# the chip's USB interface (eg. 1-1:1.0) by its maker, Realtek, in case it was found again at another address
+find_chip() {
+	for D in /sys/bus/usb/devices/*:*; do
+		[ "$(cat "${D%:*}/idVendor" 2>/dev/null)" = 0bda ] && { echo "${D##*/}"; return; }
+	done
+}
+# the USB host the chip hangs off, started again: after a long suspend the chip can be gone from it until then
+reset_usb_host() {
+	for DRV in /sys/bus/platform/drivers/*hci*; do
+		for DEV in "$DRV"/*; do
+			[ -L "$DEV" ] || continue
+			case "${DEV##*/}" in module|bind|unbind|uevent|new_id|remove_id) continue ;; esac
+			echo "${DEV##*/}" > "$DRV/unbind"
+			echo "${DEV##*/}" > "$DRV/bind"
+			power_log "started the usb host ${DEV##*/} ($DRV) again"
+		done
+	done
+}
+# what USB looks like when attaching fails, for working out why (no addresses: lines naming one are left out)
+usb_report() {
+	for D in /sys/bus/usb/devices/*; do
+		[ -f "$D/idVendor" ] && power_log "  usb ${D##*/}: $(cat $D/idVendor):$(cat $D/idProduct) $(cat $D/power/runtime_status 2>/dev/null)"
+	done
+	dmesg | grep -i -E "usb|hci|rtw|8188" | grep -v -i "mac" | tail -25 >> "$POWER_LOG"
+}
+attach() {
+	[ -d "$DRIVER" ] || return 0
+	if [ -f "$PARAMS/rtw_power_mgnt" ] && [ "$(cat "$PARAMS/rtw_power_mgnt")" != 1 ]; then
+		echo 1 > "$PARAMS/rtw_power_mgnt"
+		echo 1 > "$PARAMS/rtw_ips_mode"
+		unbind_all # (still attached from boot, with Miyoo's settings: again, with these)
+	fi
+	[ -e /sys/class/net/wlan0 ] && return 0
+	for TRY in 1 2; do
+		if [ $TRY = 2 ]; then
+			reset_usb_host
+			n=0; until [ -n "$(find_chip)" ]; do n=$((n+1)); [ $n -ge 50 ] && break; usleep 100000 2>/dev/null || sleep 1; done
+		fi
+		IF=$(find_chip)
+		if [ -z "$IF" ]; then power_log "try $TRY: the chip isn't on USB"; continue; fi
+		[ -e /sys/class/net/wlan0 ] || [ -e "$DRIVER/$IF" ] || echo "$IF" > "$DRIVER/bind" 2>>"$POWER_LOG"
+		echo "$IF" > "$USB_IF"
+		n=0
+		until [ -e /sys/class/net/wlan0 ]; do
+			n=$((n+1)); [ $n -ge 50 ] && break
+			usleep 100000 2>/dev/null || sleep 1
+		done
+		if [ -e /sys/class/net/wlan0 ]; then
+			power_log "attached in $((n * 100)) ms, try $TRY (power_mgnt=$(cat "$PARAMS/rtw_power_mgnt") ips=$(cat "$PARAMS/rtw_ips_mode"))"
+			return 0
+		fi
+		power_log "try $TRY: bound $IF, but no wlan0"
+	done
+	power_log "attach failed"
+	usb_report
+	return 1
+}
 
 # the address, only while joined to a network: an address stays on wlan0 after it drops (or is taken down), and that
 # must not count as connected (minui goes by the same operstate)
 ip_address() {
-	[ "$(cat /sys/class/net/wlan0/operstate 2>/dev/null)" = up ] || return
+	LINK=
+	read -r LINK < /sys/class/net/wlan0/operstate 2>/dev/null
+	[ "$LINK" = up ] || return
 	ip -4 addr show wlan0 2>/dev/null | sed -n 's/.*inet \([0-9.]*\).*/\1/p' | head -1
 }
 
@@ -140,6 +225,7 @@ SCRIPT
 	chmod +x "$DHCP_SCRIPT"
 
 	killall -9 wpa_supplicant udhcpc 2>/dev/null
+	attach || exit 1
 	ip addr flush dev wlan0 2>/dev/null # the last network's address isn't this one's
 	ifconfig wlan0 up
 	wpa_supplicant -B -i wlan0 -c "$CONF" >/dev/null 2>&1
@@ -167,9 +253,14 @@ online)
 	n=0
 	while [ $n -lt 30 ] && [ -z "$(ip_address)" ]; do sleep 1; n=$((n+1)); done
 	[ -n "$(ip_address)" ] || exit 1
-	# Let the clock settle first: TLS certificate validation depends on a plausible date. Clock-off and an already
-	# synced clock both return quickly; the update still runs if time sync fails.
-	wifi.sh time >/dev/null 2>&1
+	# Let the clock settle first: TLS certificate validation depends on a plausible date. The update still runs if time
+	# sync fails. Synced and shown within the last 6 hours (eg. reconnecting after a sleep): the clock is still right
+	read -r UP _ < /proc/uptime
+	LAST=
+	read -r LAST < "$SYNCED_AT" 2>/dev/null
+	if [ ! -f "$CLOCK_SET" ] || [ -z "$LAST" ] || [ $(( ${UP%.*} - LAST )) -ge 21600 ]; then
+		wifi.sh time >/dev/null 2>&1
+	fi
 	update.sh check >/dev/null 2>&1
 	;;
 time)
@@ -221,12 +312,18 @@ time)
 	rm -f "$MINUI/clock-manual" # (and it's in UTC now, not as it was typed)
 	sync
 	[ -f "$MINUI/time-zone.txt" ] && touch "$CLOCK_SET" # the clock shows from now until the A30 is off
+	read -r UP _ < /proc/uptime
+	echo "${UP%.*}" > "$SYNCED_AT"
 	echo "synced: $(date +'%F %T %Z'), it was off by $(( $(date +%s) - BEFORE - ( $(cut -d. -f1 /proc/uptime) - UP_BEFORE ) )) s" >> "$LOG"
 	;;
 down)
 	killall -9 wpa_supplicant udhcpc ntpd 2>/dev/null
 	ip addr flush dev wlan0 2>/dev/null
 	ifconfig wlan0 down 2>/dev/null
+	detach
+	;;
+attach)
+	attach
 	;;
 status)
 	ip_address

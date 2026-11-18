@@ -213,6 +213,7 @@ void GFX_blitAsset(int asset, SDL_Rect* src_rect, SDL_Surface* dst, SDL_Rect* ds
 void GFX_blitPill(int asset, SDL_Surface* dst, SDL_Rect* dst_rect);
 void GFX_blitRect(int asset, SDL_Surface* dst, SDL_Rect* dst_rect);
 void GFX_blitBattery(SDL_Surface* dst, SDL_Rect* dst_rect);
+SDL_Surface* GFX_renderCached(TTF_Font* font, char* text, SDL_Color color); // kept by a small cache: don't free it (and draw it before the next call)
 int GFX_getButtonWidth(char* hint, char* button);
 void GFX_blitButton(char* hint, char*button, SDL_Surface* dst, SDL_Rect* dst_rect);
 void GFX_blitMessage(TTF_Font* font, char* msg, SDL_Surface* dst, SDL_Rect* dst_rect);
@@ -220,6 +221,7 @@ void GFX_blitMessage(TTF_Font* font, char* msg, SDL_Surface* dst, SDL_Rect* dst_
 int GFX_blitHardwareGroup(SDL_Surface* dst, int show_setting);
 int GFX_blitHeader(SDL_Surface* dst, char* title, int ow); // a screen's title, grey, on the top row beside the hardware group (ow: its width); 1 while it scrolls (too long), so draw it again each frame
 int GFX_blitHeaderText(SDL_Surface* dst, TTF_Font* font, SDL_Color color, const char* title, int ow); // the same in another font or color
+int GFX_scrollPixels(int elapsed_ms, int speed); // how far scrolling text has moved: whole pixels each 60 fps frame, the same every frame
 int GFX_scrollOffset(int overflow, uint32_t started); // how far text overflow pixels too wide has scrolled (there and back, the headers' pace)
 int GFX_blitHintPill(SDL_Surface* dst, const char* text, int right_w); // a bottom-left tooltip that scrolls when too long; 1 while it scrolls
 void GFX_showList(SDL_Surface* dst, const char* title, char** names, char** notes, int count); // a list to read through, names with a note each (notes may be NULL); A or B closes it
@@ -238,6 +240,7 @@ int GFX_getTimeZone(void);
 void GFX_setTimeZone(int zone); // saved, used right away, and the clock syncs if Wi-Fi is on
 void GFX_setClockLeft(int left); // the clock in its own pill at the top left instead (eg. the carousel)
 void GFX_blitHardwareHints(SDL_Surface* dst, int show_setting);
+void GFX_blitHouse(SDL_Surface* dst, int x, int y); // the house on the A30's MENU button, inside a button at x,y
 int GFX_blitButtonGroup(char** hints, int primary, SDL_Surface* dst, int align_right);
 
 void GFX_sizeText(TTF_Font* font, char* str, int leading, int* w, int* h);
@@ -347,6 +350,7 @@ void VIB_pulse(int strength, int milliseconds); // asynchronous, for short UI fe
 ///////////////////////////////
 
 #define BRIGHTNESS_BUTTON_LABEL "+ -" // ew
+#define HOME_BUTTON_LABEL "HOME" // drawn as the little house on the A30's MENU button, in a round button like A or B
 
 typedef void (*PWR_callback_t)(void);
 void PWR_init(void);
@@ -403,6 +407,7 @@ static inline void PAD_pollWithSounds(void) {
 }
 int PLAT_shouldWake(void);
 void PLAT_waitForInput(int ms); // asleep: returns when a button might have been pressed, or after ms at the latest
+int PLAT_suspend(int alarm_s); // asleep a long while: the kernel's suspend, 1 when power woke it, 0 something else (eg. the alarm, alarm_s on when it's above 0), -1 where it can't
 
 SDL_Surface* PLAT_initVideo(void);
 void PLAT_quitVideo(void);

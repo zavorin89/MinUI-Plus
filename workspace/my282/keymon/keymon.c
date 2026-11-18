@@ -8,6 +8,7 @@
 #include <linux/input.h>
 #include <poll.h>
 #include <sys/time.h>
+#include <signal.h>
 
 #include <msettings.h>
 
@@ -36,6 +37,11 @@
 static int inputs[INPUT_COUNT];
 static struct input_event ev;
 
+// the menu and games stop keymon while asleep (SIGSTOP) and let it go on waking (SIGCONT): what was pressed meanwhile
+// (eg. power, to wake) is then still waiting to be read, and mustn't change the volume or brightness
+static volatile sig_atomic_t resumed = 0;
+static void onContinue(int sig) { resumed = 1; }
+
 int main (int argc, char *argv[]) {
 	InitSettings();
 	
@@ -61,6 +67,10 @@ int main (int argc, char *argv[]) {
 	uint32_t now;
 	struct timeval tod;
 	
+	struct sigaction cont = {0};
+	cont.sa_handler = onContinue; // (no SA_RESTART: a poll it interrupts returns, and the loop goes round)
+	sigaction(SIGCONT, &cont, NULL);
+	
 	gettimeofday(&tod, NULL);
 	then = tod.tv_sec * 1000 + tod.tv_usec / 1000; // essential SDL_GetTicks()
 	ignore = 0;
@@ -68,7 +78,10 @@ int main (int argc, char *argv[]) {
 	while (1) {
 		gettimeofday(&tod, NULL);
 		now = tod.tv_sec * 1000 + tod.tv_usec / 1000;
-		if (now-then>1500) ignore = 1; // ignore input that arrived during sleep (the loop is never idle longer than IDLE_MS)
+		if (resumed) { // ignore input that arrived during sleep
+			resumed = 0;
+			ignore = 1;
+		}
 		
 		for (int i=0; i<INPUT_COUNT; i++) {
 			int input_fd = inputs[i];
@@ -141,8 +154,8 @@ int main (int argc, char *argv[]) {
 		ignore = 0;
 		
 		// waits for a button instead of waking 60 times a second for nothing: at 60fps only while volume or
-		// brightness is held (for its repeat), otherwise until a button or IDLE_MS
-		#define IDLE_MS 500
+		// brightness is held (for its repeat), otherwise until a button (or the wake from sleep, SIGCONT)
+		#define IDLE_MS -1
 		struct pollfd fds[INPUT_COUNT];
 		int watched = 0;
 		for (int i=0; i<INPUT_COUNT; i++) {

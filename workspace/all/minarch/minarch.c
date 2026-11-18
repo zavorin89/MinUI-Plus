@@ -39,6 +39,7 @@ static int core_idle = 0; // threaded video: the core thread has seen should_run
 static pthread_t		core_pt;
 static pthread_mutex_t	core_mx;
 static pthread_cond_t	core_rq; // not sure this is required
+static pthread_cond_t	core_go; // threaded video: should_run_core is 1 again (or it's quitting), for a paused core thread
 static SDL_Surface*	backbuffer = NULL;
 static void* coreThread(void *arg);
 
@@ -520,7 +521,7 @@ static void RTC_write(void) {
 
 	fclose(rtc_file);
 
-	sync();
+	syncLater(); // (as the save does: the card catches up on its own thread)
 }
 
 ///////////////////////////////////////
@@ -1707,7 +1708,7 @@ static void Special_render(void) {
 	if (special.palette_updated) Special_refreshDMGPalette();
 }
 static void Special_quit(void) {
-	system("rm -f /tmp/dmg_grid_color");
+	unlink("/tmp/dmg_grid_color"); // (not a shell and rm on every game's way out)
 }
 ///////////////////////////////
 
@@ -2081,7 +2082,7 @@ static void Rewind_capture(void) {
 	if (++rw.frame<rw.interval && rw.have_cur) return;
 	rw.frame = 0;
 	if (core.serialize_size()!=rw.state_size && !Rewind_setup()) return;
-	memset(rw.tmp, 0, rw.size);
+	memset((uint8_t*)rw.tmp + rw.state_size, 0, rw.size - rw.state_size); // (only the rounding past the state: the core fills the rest)
 	if (!core.serialize(rw.tmp, rw.state_size)) return;
 	if (rw.have_cur) Rewind_push(Rewind_pack(rw.tmp, rw.cur, rw.packed, rw.size / 4));
 	uint32_t* t = rw.cur; rw.cur = rw.tmp; rw.tmp = t;
@@ -3517,11 +3518,14 @@ static void video_refresh_callback(const void *data, unsigned width, unsigned he
 		if (!backbuffer) {
 			uint16_t* pixels = malloc(height*pitch);
 			// backbuffer = SDL_CreateRGBSurface(0,width,height,FIXED_DEPTH,RGBA_MASK_565);
-			backbuffer = SDL_CreateRGBSurfaceFrom(pixels, width, height, FIXED_DEPTH, pitch, RGBA_MASK_565);
+			if (pixels) backbuffer = SDL_CreateRGBSurfaceFrom(pixels, width, height, FIXED_DEPTH, pitch, RGBA_MASK_565);
+			if (!backbuffer) free(pixels); // out of memory: this frame is skipped, the next tries again
 		}
 		
-		memcpy(backbuffer->pixels, data, backbuffer->h*backbuffer->pitch);
-		frame_ready = 1;
+		if (backbuffer) {
+			memcpy(backbuffer->pixels, data, backbuffer->h*backbuffer->pitch);
+			frame_ready = 1;
+		}
 		
 		pthread_cond_signal(&core_rq);
 		pthread_mutex_unlock(&core_mx);
@@ -3554,7 +3558,7 @@ static size_t audio_sample_batch_callback(const int16_t *data, size_t frames) {
 void Core_getName(char* in_name, char* out_name) {
 	strcpy(out_name, basename(in_name));
 	char* tmp = strrchr(out_name, '_');
-	tmp[0] = '\0';
+	if (tmp) tmp[0] = '\0'; // (a core named without "_libretro" keeps its whole name)
 }
 void Core_open(const char* core_path, const char* tag_name) {
 	LOG_info("Core_open\n");
@@ -3610,9 +3614,9 @@ void Core_open(const char* core_path, const char* tag_name) {
 	sprintf((char*)core.saves_dir, SDCARD_PATH "/Saves/%s", core.tag);
 	sprintf((char*)core.bios_dir, SDCARD_PATH "/Bios/%s", core.tag);
 	
-	char cmd[512];
-	sprintf(cmd, "mkdir -p \"%s\"; mkdir -p \"%s\"", core.config_dir, core.states_dir);
-	system(cmd);
+	// (their parents are made by launch.sh: no shell and mkdir -p before every game)
+	mkdir((char*)core.config_dir, 0755);
+	mkdir((char*)core.states_dir, 0755);
 
 	set_environment_callback(environment_callback);
 	set_video_refresh_callback(video_refresh_callback);
@@ -5553,12 +5557,11 @@ static void Menu_loop(void) {
 							screen->w - SCALE1(PADDING * 2),
 							SCALE1(MENU_ROW_SIZE)
 						});
-						text = TTF_RenderUTF8_Blended(font.medium, disc_name, COLOR_WHITE);
-						SDL_BlitSurface(text, NULL, screen, &(SDL_Rect){
+						text = GFX_renderCached(font.medium, disc_name, COLOR_WHITE); // (cached: a scrolling title redraws every frame)
+						if (text) SDL_BlitSurface(text, NULL, screen, &(SDL_Rect){
 							screen->w - SCALE1(PADDING + BUTTON_PADDING) - text->w,
 							SCALE1(oy + PADDING) + text_oy
 						});
-						SDL_FreeSurface(text);
 					}
 					
 					TTF_SizeUTF8(font.medium, item, &ow, NULL);
@@ -5575,21 +5578,19 @@ static void Menu_loop(void) {
 				}
 				else {
 					// shadow
-					text = TTF_RenderUTF8_Blended(font.medium, item, COLOR_BLACK);
-					SDL_BlitSurface(text, NULL, screen, &(SDL_Rect){
+					text = GFX_renderCached(font.medium, item, COLOR_BLACK);
+					if (text) SDL_BlitSurface(text, NULL, screen, &(SDL_Rect){
 						SCALE1(2 + PADDING + BUTTON_PADDING),
 						SCALE1(1 + PADDING + oy + (r * MENU_ROW_SIZE)) + text_oy
 					});
-					SDL_FreeSurface(text);
 				}
 				
 				// text
-				text = TTF_RenderUTF8_Blended(font.medium, item, text_color);
-				SDL_BlitSurface(text, NULL, screen, &(SDL_Rect){
+				text = GFX_renderCached(font.medium, item, text_color);
+				if (text) SDL_BlitSurface(text, NULL, screen, &(SDL_Rect){
 					SCALE1(PADDING + BUTTON_PADDING),
 					SCALE1(oy + PADDING + (r * MENU_ROW_SIZE)) + text_oy
 				});
-				SDL_FreeSurface(text);
 				r += 1;
 			}
 			
@@ -5682,12 +5683,10 @@ static void Menu_loop(void) {
 				int stats_oy = (SCALE1(STATS_ROW_SIZE) - TTF_FontHeight(font.small)) / 2;
 				for (int i=0; i<STATS_ROWS; i++) {
 					int ty = oy + SCALE1(BUTTON_PADDING + i * STATS_ROW_SIZE) + stats_oy;
-					text = TTF_RenderUTF8_Blended(font.small, labels[i], COLOR_DARK_TEXT);
-					SDL_BlitSurface(text, NULL, screen, &(SDL_Rect){ox + SCALE1(BUTTON_PADDING), ty});
-					SDL_FreeSurface(text);
-					text = TTF_RenderUTF8_Blended(font.small, values[i], COLOR_WHITE);
-					SDL_BlitSurface(text, NULL, screen, &(SDL_Rect){ox + pw - SCALE1(BUTTON_PADDING) - text->w, ty});
-					SDL_FreeSurface(text);
+					text = GFX_renderCached(font.small, labels[i], COLOR_DARK_TEXT);
+					if (text) SDL_BlitSurface(text, NULL, screen, &(SDL_Rect){ox + SCALE1(BUTTON_PADDING), ty});
+					text = GFX_renderCached(font.small, values[i], COLOR_WHITE);
+					if (text) SDL_BlitSurface(text, NULL, screen, &(SDL_Rect){ox + pw - SCALE1(BUTTON_PADDING) - text->w, ty});
 				}
 			}
 	
@@ -5721,6 +5720,7 @@ static void Menu_loop(void) {
 			GFX_blitTitle(screen, rom_name, title_width);
 			GFX_flip(screen);
 		}
+		else if (!menu_message_until && !show_setting && !GFX_settingFading() && !PAD_anyPressed()) PLAT_waitForInput(250); // still: asleep until a button (a quarter second at most, for the clock and battery)
 		else GFX_sync();
 		hdmimon();
 	}
@@ -5751,6 +5751,7 @@ static void Menu_loop(void) {
 		if (thread_video) {
 			pthread_mutex_lock(&core_mx);
 			should_run_core = 1;
+			pthread_cond_signal(&core_go);
 			pthread_mutex_unlock(&core_mx);
 		}
 	}
@@ -5863,7 +5864,19 @@ static void* coreThread(void *arg) {
 			limitFF();
 			trackFPS();
 		}
-		else SDL_Delay(1); // paused for the menu or a save: not spinning a core at full speed
+		else { // paused for the menu or a save: asleep until it's let go, instead of looking 1000 times a second
+			pthread_mutex_lock(&core_mx);
+			if (!should_run_core && !quit) {
+				// (a backstop only: every resume, and quitting, signals it. Asleep in a game this is all that would run)
+				struct timespec until;
+				clock_gettime(CLOCK_REALTIME, &until);
+				until.tv_sec += 1;
+				pthread_cleanup_push((void (*)(void*))pthread_mutex_unlock, &core_mx); // (cancelled here, eg. by fast forward: not left locked)
+				pthread_cond_timedwait(&core_go, &core_mx, &until);
+				pthread_cleanup_pop(0);
+			}
+			pthread_mutex_unlock(&core_mx);
+		}
 	}
 	pthread_exit(NULL);
 }
@@ -5871,6 +5884,10 @@ static void* coreThread(void *arg) {
 int main(int argc , char* argv[]) {
 	uint32_t quit_at = 0, ra_done = 0; // how long quitting takes, logged (up here since a failed start jumps past)
 	LOG_info("MinArch\n");
+	// a boot that resumes a game goes from launch.sh straight here: its steps join the boot's timings, until the
+	// first frame (the menu touches minui_menu_up once it's been up, after which no game's start is a boot's)
+	boot_stamps = !exists("/tmp/minui_menu_up");
+	BOOT_stamp("minarch started");
 
 	setOverclock(overclock); // default to normal
 	// force a stack overflow to ensure asan is linked and actually working
@@ -5888,6 +5905,7 @@ int main(int argc , char* argv[]) {
 	LOG_info("rom_path: %s\n", rom_path);
 
 	screen = GFX_init(MODE_MENU);
+	BOOT_stamp("  graphics up");
 	PAD_init();
 	DEVICE_WIDTH = screen->w;
 	DEVICE_HEIGHT = screen->h;
@@ -5903,7 +5921,9 @@ int main(int argc , char* argv[]) {
 	
 	HW_preload(); // a GPU core's GL library, for it to find (MINARCH_GLES=1 only)
 	Core_open(core_path, tag_name);
+	BOOT_stamp("  core opened");
 	Game_open(rom_path); // nes tries to load gamegenie setting before this returns ffs
+	BOOT_stamp("  game read (and unzipped)");
 	if (!game.is_open) goto finish;
 	Play_init();
 
@@ -5926,6 +5946,7 @@ int main(int argc , char* argv[]) {
 	options_menu.items[1].desc = (char*)core.version;
 	
 	Core_load();
+	BOOT_stamp("  core started and game loaded");
 	RA_init((char*)core.tag, game.tmp_path[0] ? game.tmp_path : game.path, game.data, game.size, memory_map.num_descriptors ? &memory_map : NULL, getCoreMemory);
 	Input_init(NULL);
 	Config_readOptions(); // but others load and report options later (eg. nes)
@@ -5937,12 +5958,15 @@ int main(int argc , char* argv[]) {
 	Menu_init();
 	if (HW_active()) SND_setBufferFrames(HW_SOUND_FRAMES);
 	HW_start(); // before a state's loaded: parallel-n64 only has a machine to load it into after this
+	BOOT_stamp("  sound and menu ready");
 	State_resume();
+	BOOT_stamp("  state resumed");
 	Menu_initState(); // make ready for state shortcuts
 	
 	if (thread_video) {
 		core_mx = (pthread_mutex_t)PTHREAD_MUTEX_INITIALIZER;
 		core_rq = (pthread_cond_t)PTHREAD_COND_INITIALIZER;
+		core_go = (pthread_cond_t)PTHREAD_COND_INITIALIZER;
 		pthread_create(&core_pt, NULL, &coreThread, NULL);
 	}
 	
@@ -6020,6 +6044,7 @@ int main(int argc , char* argv[]) {
 				// enable
 				core_mx = (pthread_mutex_t)PTHREAD_MUTEX_INITIALIZER;
 				core_rq = (pthread_cond_t)PTHREAD_COND_INITIALIZER;
+				core_go = (pthread_cond_t)PTHREAD_COND_INITIALIZER;
 				pthread_create(&core_pt, NULL, &coreThread, NULL);
 			}
 			else {
@@ -6036,9 +6061,18 @@ int main(int argc , char* argv[]) {
 		// LOG_info("frame duration: %ims\n", SDL_GetTicks()-frame_start);
 		
 		hdmimon();
+		if (boot_stamps) {
+			BOOT_stamp("game running (first frame)");
+			boot_stamps = 0;
+		}
 	}
 
-	if (thread_video) pthread_join(core_pt, NULL); // it stops at quit: done with the core before the core is unloaded
+	if (thread_video) { // it stops at quit: done with the core before the core is unloaded
+		pthread_mutex_lock(&core_mx);
+		pthread_cond_signal(&core_go); // (paused for the menu it quit from: no waiting out its backstop)
+		pthread_mutex_unlock(&core_mx);
+		pthread_join(core_pt, NULL);
+	}
 	Play_save();
 	quit_at = SDL_GetTicks();
 	RA_quit();

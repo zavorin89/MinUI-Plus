@@ -75,21 +75,59 @@ afterMenu() {
 	return 0
 }
 
-reclock()
-{
-	overclock.elf userspace 2 1344 384 1080 0
+# the A30 boots with four cores and MinUI+ runs on two. Switching one off takes ~0.15-0.2 s of waiting, so it's done in
+# the background, beside whatever is starting, and only for a core that's still on (shell builtins only: no process)
+coresOff() {
+	for CORE in 2 3; do
+		read -r ON < /sys/devices/system/cpu/cpu$CORE/online 2>/dev/null
+		[ "$ON" = 1 ] && echo 0 > /sys/devices/system/cpu/cpu$CORE/online
+	done
 }
 
 # The boot does only what the menu needs before it can start: everything else runs beside it, in the background.
 echo 0 > /sys/class/leds/led1/brightness
-# the governor, GPU and RAM clocks, once the menu is up: switching two cores off takes ~0.4 s and holds up everything
-# running at the time, and the menu sets the CPU's own speed itself as it starts
-(sleep 3; reclock) &
+# the governor, GPU and RAM clocks and the cores, a moment after the menu starts. The CPU's speed is left as it is: the
+# menu sets its own, and when the boot resumes a game, this lands while it's running (and reset its speed before)
+(sleep 3; overclock.elf userspace 0 0 384 1080 0; coresOff) &
 
 # stock firmware services a handheld has no use for, which compete with MinUI for the CPU right after boot:
-# a router's DHCP/DNS server, a clock sync (it would replace the time that was set with UTC: there's no time zone) and an empty cron
-# (stopped through the service manager, since it restarts dnsmasq and ntpd when they're just killed)
-(afterMenu; for SERVICE in dnsmasq sysntpd cron; do /etc/init.d/$SERVICE stop; done) >/dev/null 2>&1 &
+# a router's DHCP/DNS server, a clock sync (it would replace the time that was set with UTC: there's no time zone), an
+# empty cron, MTP (file transfer over USB, unused) and adbd (USB debugging: a root shell for anyone with a cable, and
+# memory held for nothing). Stopped through the service manager, since it restarts dnsmasq and ntpd when they're just
+# killed, and once more a little later in case the firmware was still starting one (it starts MTP last). The USB port
+# itself is left as it is, so charging from a computer is unchanged
+(
+	afterMenu
+	for SERVICE in dnsmasq sysntpd cron mtp adbd; do /etc/init.d/$SERVICE stop; done
+	sleep 20
+	killall -9 MtpDaemon adbd
+	# once (until the file is deleted): what the kernel offers for saving power asleep, only read, nothing changed.
+	# Suspend states, the radio switches, the USB devices (the Wi-Fi chip is one), the Wi-Fi driver's power settings,
+	# the CPU's speeds and the power rails
+	PROBE="$LOGS_PATH/power-probe.txt"
+	[ -f "$PROBE" ] || {
+		echo "== /sys/power"; ls /sys/power
+		for F in /sys/power/state /sys/power/mem_sleep /sys/power/autosleep /sys/power/wake_lock /sys/power/scene_lock; do
+			[ -e $F ] && echo "$F: $(cat $F)"
+		done
+		echo "== rfkill"
+		for D in /sys/class/rfkill/*; do [ -d "$D" ] && echo "$D: name=$(cat $D/name) type=$(cat $D/type) state=$(cat $D/state) soft=$(cat $D/soft)"; done
+		echo "== usb"
+		for D in /sys/bus/usb/devices/*; do
+			[ -f "$D/idVendor" ] || continue
+			echo "$D: $(cat $D/idVendor):$(cat $D/idProduct) $(cat $D/product) control=$(cat $D/power/control) autosuspend=$(cat $D/power/autosuspend_delay_ms)"
+			for I in "$D"/*:*; do [ -e "$I/driver" ] && echo "  $(basename $I) driver=$(basename $(readlink $I/driver))"; done
+		done
+		echo "== wifi driver"
+		for D in /sys/module/*/parameters; do
+			case "$D" in *rtl*|*rtw*|*8188*|*8189*|*8723*|*wlan*) echo "$D:"; for F in "$D"/*power* "$D"/*ips* "$D"/*lps* "$D"/*usb*; do [ -f "$F" ] && echo "  $(ls -l $F | cut -c1-10) $(basename $F)=$(cat $F)"; done ;; esac
+		done
+		echo "== cpufreq"
+		for F in /sys/devices/system/cpu/cpu0/cpufreq/*; do [ -f "$F" ] && echo "$(basename $F): $(cat $F)"; done
+		echo "== regulators"
+		for R in /sys/class/regulator/*; do echo "$(basename $R): $(cat $R/name) $(cat $R/microvolts) $(cat $R/state)"; done
+	} > "$PROBE" 2>&1
+) >/dev/null 2>&1 &
 
 # the time zone picked in the settings, for everything started from here (the clock syncs over wifi with it)
 TIME_ZONE_PATH="$SHARED_USERDATA_PATH/.minui/time-zone.txt"
@@ -188,37 +226,64 @@ if [ -f "$WIFI_FLAG" ] && [ -f "$WIFI_AUTOSTART_OFF" ]; then
 fi
 WIFI_WAS_ON=1 # (so a first pass with wifi off takes it down)
 WIFI_WAS_ONLINE=0
+WIFI_KILLS=0 # passes left that make sure wpa_supplicant stays gone after wifi goes off (the firmware may still be starting it)
 CLOCK_TRIES=0
 CLOCK_RETRY_AT=0
 LOOP_STARTED=0
+PASS=0
+# Every pass costs as few processes as it can (each one wakes the CPU for a while): the link state is read with a
+# builtin, and wifi.sh (a shell with ip, sed and head under it) only runs to see whether a link that just came up has
+# its address, and every half minute after to see it still does. It used to run, or two killalls did, every 2 s.
 while :; do
 	[ $LOOP_STARTED = 0 ] && afterMenu && LOOP_STARTED=1 # (the first pass once the menu is up; this whole loop runs in the background)
+	if [ -f /tmp/minui_asleep ]; then sleep 30; continue; fi # asleep: nothing to look after, and as few wakeups as can be
 	if [ ! -f "$WIFI_FLAG" ]; then
-		[ "$WIFI_WAS_ON" -eq 1 ] && wifi.sh down
-		killall -9 wpa_supplicant 2>/dev/null
+		if [ "$WIFI_WAS_ON" -eq 1 ]; then
+			wifi.sh down
+			WIFI_KILLS=6
+		fi
+		if [ $WIFI_KILLS -gt 0 ]; then
+			killall -9 wpa_supplicant 2>/dev/null
+			WIFI_KILLS=$((WIFI_KILLS - 1))
+		fi
 		WIFI_WAS_ON=0
 		WIFI_WAS_ONLINE=0
-	elif [ -n "$(wifi.sh status)" ]; then
-		# clock and updater on each new connection (including saved networks and hotspots that appear later), and
-		# again while the clock hasn't synced: every minute at first, then every 10
-		NOW=$(cut -d. -f1 /proc/uptime)
-		if [ "$WIFI_WAS_ONLINE" -eq 0 ]; then
-			CLOCK_TRIES=0
-			CLOCK_RETRY_AT=0
-		fi
-		if [ "$WIFI_WAS_ONLINE" -eq 0 ] || { [ ! -f /tmp/minui_clock_set ] && [ "$NOW" -ge "$CLOCK_RETRY_AT" ]; }; then
-			wifi.sh online >/dev/null 2>&1 &
-			CLOCK_TRIES=$((CLOCK_TRIES + 1))
-			if [ "$CLOCK_TRIES" -lt 5 ]; then CLOCK_RETRY_AT=$((NOW + 60)); else CLOCK_RETRY_AT=$((NOW + 600)); fi
-		fi
-		WIFI_WAS_ON=1
-		WIFI_WAS_ONLINE=1
 	else
+		LINK=""
+		read -r LINK < /sys/class/net/wlan0/operstate 2>/dev/null
+		# on but not running (eg. it couldn't start after a sleep): started again every two minutes. Once it runs it
+		# joins whichever saved network is in range by itself, and moves to another when that one goes
+		if [ "$LINK" != up ] && [ $((PASS % 24)) = 12 ] && ! pidof wpa_supplicant >/dev/null; then
+			wifi.sh up >/dev/null 2>&1 &
+		fi
+		ONLINE=0
+		if [ "$LINK" = up ]; then
+			if [ "$WIFI_WAS_ONLINE" -eq 1 ] && [ $((PASS % 6)) != 0 ]; then ONLINE=1 # (still up: still online)
+			elif [ -n "$(wifi.sh status)" ]; then ONLINE=1
+			fi
+		fi
+		if [ $ONLINE = 1 ]; then
+			# clock and updater on each new connection (including saved networks and hotspots that appear later), and
+			# again while the clock hasn't synced: every minute at first, then every 10
+			read -r NOW _ < /proc/uptime
+			NOW=${NOW%.*}
+			if [ "$WIFI_WAS_ONLINE" -eq 0 ]; then
+				CLOCK_TRIES=0
+				CLOCK_RETRY_AT=0
+			fi
+			if [ "$WIFI_WAS_ONLINE" -eq 0 ] || { [ ! -f /tmp/minui_clock_set ] && [ "$NOW" -ge "$CLOCK_RETRY_AT" ]; }; then
+				wifi.sh online >/dev/null 2>&1 &
+				CLOCK_TRIES=$((CLOCK_TRIES + 1))
+				if [ "$CLOCK_TRIES" -lt 5 ]; then CLOCK_RETRY_AT=$((NOW + 60)); else CLOCK_RETRY_AT=$((NOW + 600)); fi
+			fi
+			WIFI_WAS_ONLINE=1
+		else
+			WIFI_WAS_ONLINE=0
+		fi
 		WIFI_WAS_ON=1
-		WIFI_WAS_ONLINE=0
 	fi
-	killall -9 MtpDaemon
-	if [ -f /tmp/minui_asleep ]; then sleep 30; else sleep 2; fi # asleep: fewer wakeups
+	PASS=$((PASS + 1))
+	sleep 5
 done &
 if [ -f "$WIFI_FLAG" ]; then
 	(afterMenu; wifi.sh up) &
@@ -251,7 +316,7 @@ fi
 # the boot's timings (each step, in seconds since power-on) are saved in logs/boot.txt once the menu is up
 if [ ! -f /tmp/minui_boot_saved ]; then
 	: > /tmp/minui_boot_saved
-	(sleep 6; cp /tmp/minui_boot.txt "$LOGS_PATH/boot.txt") &
+	(sleep 15; cp /tmp/minui_boot.txt "$LOGS_PATH/boot.txt") & # (late enough to include a resumed game's start)
 fi
 stamp "starting minui"
 
@@ -259,7 +324,7 @@ EXEC_PATH="/tmp/minui_exec"
 NEXT_PATH="/tmp/next"
 : > "$EXEC_PATH" # (/tmp is in memory: nothing to sync)
 while [ -f "$EXEC_PATH" ]; do
-	{ echo "uptime: `cut -d' ' -f1 /proc/uptime`"; ls -a /tmp; df /tmp; } > $LOGS_PATH/tmp.txt 2>&1 & # what minui finds in /tmp (its place in the menus lives there)
+	[ -f /tmp/minui_tmp_logged ] || { : > /tmp/minui_tmp_logged; { echo "uptime: `cut -d' ' -f1 /proc/uptime`"; ls -a /tmp; df /tmp; } > $LOGS_PATH/tmp.txt 2>&1 & } # what minui finds in /tmp at boot (its place in the menus lives there): not again on every return from a game
 	stamp "minui run"
 	minui.elf > $LOGS_PATH/minui.txt 2>&1
 	STATUS=$?
@@ -269,17 +334,16 @@ while [ -f "$EXEC_PATH" ]; do
 		# the newest crashes only, so a run of them can't fill the card
 		[ "$(wc -c < $LOGS_PATH/minui-crash.txt)" -gt 65536 ] && tail -n 600 $LOGS_PATH/minui-crash.txt > /tmp/minui-crash.txt && mv /tmp/minui-crash.txt $LOGS_PATH/minui-crash.txt
 	fi
-	reclock
-	echo `TZ=UTC0 date +'%F %T'` > "$DATETIME_PATH"
-	sync
-	
+	# (no overclock.elf here: every launch follows a button press, which already has the CPU at 1344 MHz, minarch and
+	# the paks set their own as they start, and nothing changes the GPU or RAM clocks set at boot)
+	coresOff & # (at boot, a resumed game starts while the two spare cores go off, instead of after)
+	{ TZ=UTC0 date +'%F %T' > "$DATETIME_PATH"; sync; } & # the time, and minui's few writes, reach the card while the game starts
+
 	if [ -f $NEXT_PATH ]; then
-		CMD=`cat $NEXT_PATH`
+		read -r CMD < $NEXT_PATH # (a builtin, where cat started a process before every game: minui writes one line)
 		eval $CMD
 		rm -f $NEXT_PATH
-		reclock
-		echo `TZ=UTC0 date +'%F %T'` > "$DATETIME_PATH"
-		sync & # the game's saves reach the card while minui starts, instead of minui waiting on them
+		{ TZ=UTC0 date +'%F %T' > "$DATETIME_PATH"; sync; } & # the game's saves reach the card while minui starts, instead of minui waiting on them
 	fi
 done
 
